@@ -1,0 +1,1602 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OKX API v5 Methods Reference</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0052ff 0%, #00a6ff 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #0052ff 0%, #00a6ff 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .stat-box {
+            text-align: center;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            min-width: 150px;
+        }
+
+        .stat-box .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #0052ff;
+            display: block;
+        }
+
+        .stat-box .label {
+            color: #6c757d;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .search-box {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 15px 20px;
+            font-size: 1.1em;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            border-color: #0052ff;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #e9ecef;
+        }
+
+        .section-header h2 {
+            font-size: 2em;
+            color: #2d3748;
+        }
+
+        .badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+
+        .badge-public {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .badge-private {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .badge-websocket {
+            background: #e7f3ff;
+            color: #004085;
+        }
+
+        .method-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+            gap: 20px;
+        }
+
+        .method-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .method-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+            border-color: #0052ff;
+        }
+
+        .method-card.public {
+            border-left: 5px solid #28a745;
+        }
+
+        .method-card.private {
+            border-left: 5px solid #ffc107;
+        }
+
+        .method-card.websocket {
+            border-left: 5px solid #17a2b8;
+        }
+
+        .method-name {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #0052ff;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .method-icon {
+            font-size: 1.2em;
+        }
+
+        .method-desc {
+            color: #6c757d;
+            line-height: 1.6;
+            font-size: 0.95em;
+            margin-bottom: 10px;
+        }
+
+        .doc-link {
+            color: #0052ff;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .method-card:hover .doc-link {
+            color: #0041cc;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 OKX API v5 Methods Reference</h1>
+            <p>Complete API Documentation for OKX Trading Platform</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-box">
+                <span class="number">31</span>
+                <span class="label">Public REST</span>
+            </div>
+            <div class="stat-box">
+                <span class="number">84</span>
+                <span class="label">Private REST</span>
+            </div>
+            <div class="stat-box">
+                <span class="number">16</span>
+                <span class="label">Public WS</span>
+            </div>
+            <div class="stat-box">
+                <span class="number">9</span>
+                <span class="label">Private WS</span>
+            </div>
+            <div class="stat-box">
+                <span class="number">140</span>
+                <span class="label">Total</span>
+            </div>
+        </div>
+
+        <div class="search-box">
+            <input type="text" class="search-input" id="searchInput" placeholder="🔍 Search methods...">
+        </div>
+
+        <div class="content">
+            <!-- PUBLIC REST ENDPOINTS -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>🌐 Public REST Endpoints</h2>
+                    <span class="badge badge-public">No Auth Required</span>
+                </div>
+                <div class="method-grid">
+
+                    <div class="method-card public" data-method="get_block_tickers" data-desc="retrieve block trading ticker information" data-url="https://www.okx.com/docs-v5/en/#block-trading-market-data-get-block-tickers">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_block_tickers</span>
+                        </div>
+                        <div class="method-desc">Retrieve block trading ticker information</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_block_trades" data-desc="retrieve block trades" data-url="https://www.okx.com/docs-v5/en/#block-trading-market-data-get-block-trades">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_block_trades</span>
+                        </div>
+                        <div class="method-desc">Retrieve block trades</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_candlesticks" data-desc="retrieve candlesticks data" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_candlesticks</span>
+                        </div>
+                        <div class="method-desc">Retrieve candlesticks data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_candlesticks_history" data-desc="retrieve candlesticks history data" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-candlesticks-history">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_candlesticks_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve candlesticks history data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_delivery_exercise_history" data-desc="retrieve delivery records of futures and exercise records of options" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-delivery-exercise-history">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_delivery_exercise_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve delivery records of futures and exercise records of options</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_discount_rate_interest_free_quota" data-desc="retrieve discount rate and interest-free quota" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-discount-rate-and-interest-free-quota">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_discount_rate_interest_free_quota</span>
+                        </div>
+                        <div class="method-desc">Retrieve discount rate and interest-free quota</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_estimated_delivery_exercise_price" data-desc="retrieve estimated delivery/exercise price" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-estimated-delivery-exercise-price">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_estimated_delivery_exercise_price</span>
+                        </div>
+                        <div class="method-desc">Retrieve estimated delivery/exercise price</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_exchange_rate" data-desc="retrieve exchange rate" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-exchange-rate">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_exchange_rate</span>
+                        </div>
+                        <div class="method-desc">Retrieve exchange rate</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_funding_rate" data-desc="retrieve current funding rate" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-funding-rate">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_funding_rate</span>
+                        </div>
+                        <div class="method-desc">Retrieve current funding rate</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_funding_rate_history" data-desc="retrieve funding rate history" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-funding-rate-history">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_funding_rate_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve funding rate history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_index_candlesticks" data-desc="retrieve index candlesticks" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-index-candlesticks">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_index_candlesticks</span>
+                        </div>
+                        <div class="method-desc">Retrieve index candlesticks</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_index_components" data-desc="retrieve index component data" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-index-components">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_index_components</span>
+                        </div>
+                        <div class="method-desc">Retrieve index component data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_index_tickers" data-desc="retrieve index tickers" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-index-tickers">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_index_tickers</span>
+                        </div>
+                        <div class="method-desc">Retrieve index tickers</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_instruments" data-desc="retrieve a list of instruments with open contracts" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_instruments</span>
+                        </div>
+                        <div class="method-desc">Retrieve a list of instruments with open contracts</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_insurance_fund" data-desc="retrieve insurance fund balance information" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-insurance-fund">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_insurance_fund</span>
+                        </div>
+                        <div class="method-desc">Retrieve insurance fund balance information</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_interest_rate_loan_quota" data-desc="retrieve interest rate and loan quota" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-interest-rate-and-loan-quota">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_interest_rate_loan_quota</span>
+                        </div>
+                        <div class="method-desc">Retrieve interest rate and loan quota</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_mark_price" data-desc="retrieve mark price" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-mark-price">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_mark_price</span>
+                        </div>
+                        <div class="method-desc">Retrieve mark price</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_mark_price_candlesticks" data-desc="retrieve mark price candlesticks" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-mark-price-candlesticks">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_mark_price_candlesticks</span>
+                        </div>
+                        <div class="method-desc">Retrieve mark price candlesticks</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_open_interest" data-desc="retrieve the total open interest for contracts" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-open-interest">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_open_interest</span>
+                        </div>
+                        <div class="method-desc">Retrieve the total open interest for contracts</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_option_market_data" data-desc="retrieve option market data" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-option-market-data">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_option_market_data</span>
+                        </div>
+                        <div class="method-desc">Retrieve option market data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_oracle" data-desc="retrieve oracle price" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-oracle">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_oracle</span>
+                        </div>
+                        <div class="method-desc">Retrieve oracle price</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_order_book" data-desc="retrieve order book of the instrument" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-order-book">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_order_book</span>
+                        </div>
+                        <div class="method-desc">Retrieve order book of the instrument</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_position_tiers" data-desc="retrieve position tier information" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-position-tiers">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_position_tiers</span>
+                        </div>
+                        <div class="method-desc">Retrieve position tier information</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_price_limit" data-desc="retrieve the highest buy limit and lowest sell limit of the instrument" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-limit-price">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_price_limit</span>
+                        </div>
+                        <div class="method-desc">Retrieve the highest buy limit and lowest sell limit of the instrument</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_system_time" data-desc="retrieve api server time" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-system-time">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_system_time</span>
+                        </div>
+                        <div class="method-desc">Retrieve API server time</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_tickers" data-desc="retrieve ticker information for all instruments" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-tickers">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_tickers</span>
+                        </div>
+                        <div class="method-desc">Retrieve ticker information for all instruments</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_trades" data-desc="retrieve recent trades" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-trades">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_trades</span>
+                        </div>
+                        <div class="method-desc">Retrieve recent trades</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_underlying" data-desc="retrieve the list of underlying" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-underlying">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_underlying</span>
+                        </div>
+                        <div class="method-desc">Retrieve the list of underlying</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_unit_convert" data-desc="convert currency to contracts or contracts to currency" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-unit-convert">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_unit_convert</span>
+                        </div>
+                        <div class="method-desc">Convert currency to contracts or contracts to currency</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_vip_interest_rate_loan_quota" data-desc="retrieve vip interest rate and loan quota" data-url="https://www.okx.com/docs-v5/en/#public-data-rest-api-get-vip-interest-rate-and-loan-quota">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_vip_interest_rate_loan_quota</span>
+                        </div>
+                        <div class="method-desc">Retrieve VIP interest rate and loan quota</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card public" data-method="get_volume" data-desc="retrieve 24-hour trading volume" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-24h-total-volume">
+                        <div class="method-name">
+                            <span class="method-icon">✓</span>
+                            <span>get_volume</span>
+                        </div>
+                        <div class="method-desc">Retrieve 24-hour trading volume</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- PRIVATE REST ENDPOINTS -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>🔐 Private REST Endpoints</h2>
+                    <span class="badge badge-private">Auth Required</span>
+                </div>
+                <div class="method-grid">
+
+                    <div class="method-card private" data-method="adjust_grid_margin_balance" data-desc="adjust margin balance for grid" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-adjust-margin-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>adjust_grid_margin_balance</span>
+                        </div>
+                        <div class="method-desc">Adjust margin balance for grid</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="amend_grid_algo_order" data-desc="amend grid algo order" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-amend-grid-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>amend_grid_algo_order</span>
+                        </div>
+                        <div class="method-desc">Amend grid algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="amend_multiple_orders" data-desc="modify multiple orders in a batch" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-amend-multiple-orders">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>amend_multiple_orders</span>
+                        </div>
+                        <div class="method-desc">Modify multiple orders in a batch</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="amend_order" data-desc="modify an existing order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-amend-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>amend_order</span>
+                        </div>
+                        <div class="method-desc">Modify an existing order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="asset_bills_details" data-desc="get asset bills details" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-asset-bills-details">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>asset_bills_details</span>
+                        </div>
+                        <div class="method-desc">Get asset bills details</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="cancel_advance_algo_order" data-desc="cancel advance algo order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-algo-trading-post-cancel-advance-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>cancel_advance_algo_order</span>
+                        </div>
+                        <div class="method-desc">Cancel advance algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="cancel_algo_order" data-desc="cancel an algo order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-algo-trading-post-cancel-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>cancel_algo_order</span>
+                        </div>
+                        <div class="method-desc">Cancel an algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="cancel_multiple_orders" data-desc="cancel multiple orders in a batch" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-cancel-multiple-orders">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>cancel_multiple_orders</span>
+                        </div>
+                        <div class="method-desc">Cancel multiple orders in a batch</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="cancel_order" data-desc="cancel an existing order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-cancel-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>cancel_order</span>
+                        </div>
+                        <div class="method-desc">Cancel an existing order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="cancel_withdrawal" data-desc="cancel withdrawal" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-cancel-withdrawal">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>cancel_withdrawal</span>
+                        </div>
+                        <div class="method-desc">Cancel withdrawal</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="close_positions" data-desc="close all positions of an instrument" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-close-positions">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>close_positions</span>
+                        </div>
+                        <div class="method-desc">Close all positions of an instrument</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="compute_grid_margin_balance" data-desc="compute margin balance for grid" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-compute-margin-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>compute_grid_margin_balance</span>
+                        </div>
+                        <div class="method-desc">Compute margin balance for grid</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="funds_transfer" data-desc="transfer funds between accounts" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-funds-transfer">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>funds_transfer</span>
+                        </div>
+                        <div class="method-desc">Transfer funds between accounts</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_account_asset_valuation" data-desc="get account asset valuation" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-account-asset-valuation">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_account_asset_valuation</span>
+                        </div>
+                        <div class="method-desc">Get account asset valuation</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_account_balance" data-desc="retrieve account balance information" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_account_balance</span>
+                        </div>
+                        <div class="method-desc">Retrieve account balance information</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_account_config" data-desc="retrieve account configuration" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-account-configuration">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_account_config</span>
+                        </div>
+                        <div class="method-desc">Retrieve account configuration</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_account_position_risk" data-desc="retrieve account and position risk" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-account-and-position-risk">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_account_position_risk</span>
+                        </div>
+                        <div class="method-desc">Retrieve account and position risk</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_account_risk_state" data-desc="get account risk state" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-account-risk-state">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_account_risk_state</span>
+                        </div>
+                        <div class="method-desc">Get account risk state</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_algo_order_history" data-desc="retrieve algo order history" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-algo-trading-get-algo-order-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_algo_order_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve algo order history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_algo_order_list" data-desc="retrieve list of algo orders" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-algo-trading-get-algo-order-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_algo_order_list</span>
+                        </div>
+                        <div class="method-desc">Retrieve list of algo orders</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_balance" data-desc="retrieve funding account balance" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_balance</span>
+                        </div>
+                        <div class="method-desc">Retrieve funding account balance</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_bills_archive" data-desc="retrieve bills details (last 3 months)" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-bills-details-last-3-months">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_bills_archive</span>
+                        </div>
+                        <div class="method-desc">Retrieve bills details (last 3 months)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_bills_details" data-desc="retrieve bills details (last 7 days)" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-bills-details-last-7-days">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_bills_details</span>
+                        </div>
+                        <div class="method-desc">Retrieve bills details (last 7 days)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_borrow_repay_history" data-desc="get borrow and repay history" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-borrow-and-repay-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_borrow_repay_history</span>
+                        </div>
+                        <div class="method-desc">Get borrow and repay history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_currencies" data-desc="retrieve list of currencies" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-currencies">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_currencies</span>
+                        </div>
+                        <div class="method-desc">Retrieve list of currencies</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_custody_trading_subaccount_list" data-desc="get custody trading sub-account list" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-get-custody-trading-sub-account-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_custody_trading_subaccount_list</span>
+                        </div>
+                        <div class="method-desc">Get custody trading sub-account list</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_deposit_address" data-desc="get deposit address" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-deposit-address">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_deposit_address</span>
+                        </div>
+                        <div class="method-desc">Get deposit address</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_deposit_history" data-desc="get deposit history" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-deposit-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_deposit_history</span>
+                        </div>
+                        <div class="method-desc">Get deposit history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_fee_rates" data-desc="get trading fee rates" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-fee-rates">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_fee_rates</span>
+                        </div>
+                        <div class="method-desc">Get trading fee rates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_funds_transfer_state" data-desc="get funds transfer state" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-funds-transfer-state">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_funds_transfer_state</span>
+                        </div>
+                        <div class="method-desc">Get funds transfer state</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_ai_parameter" data-desc="get grid ai parameter" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-ai-parameter-public">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_ai_parameter</span>
+                        </div>
+                        <div class="method-desc">Get grid AI parameter</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_algo_order_details" data-desc="get grid algo order details" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-algo-order-details">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_algo_order_details</span>
+                        </div>
+                        <div class="method-desc">Get grid algo order details</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_algo_order_history" data-desc="get grid algo order history" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-algo-order-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_algo_order_history</span>
+                        </div>
+                        <div class="method-desc">Get grid algo order history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_algo_order_list" data-desc="get grid algo order list" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-algo-order-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_algo_order_list</span>
+                        </div>
+                        <div class="method-desc">Get grid algo order list</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_algo_order_positions" data-desc="get grid algo order positions" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-algo-order-positions">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_algo_order_positions</span>
+                        </div>
+                        <div class="method-desc">Get grid algo order positions</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_grid_algo_sub_orders" data-desc="get grid algo sub orders" data-url="https://www.okx.com/docs-v5/en/#grid-trading-get-grid-algo-sub-orders">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_grid_algo_sub_orders</span>
+                        </div>
+                        <div class="method-desc">Get grid algo sub orders</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_interest_accrued" data-desc="get interest accrued data" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-interest-accrued-data">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_interest_accrued</span>
+                        </div>
+                        <div class="method-desc">Get interest accrued data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_interest_rate" data-desc="get interest rate" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-interest-rate">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_interest_rate</span>
+                        </div>
+                        <div class="method-desc">Get interest rate</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_lending_history" data-desc="get lending history" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-lending-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_lending_history</span>
+                        </div>
+                        <div class="method-desc">Get lending history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_lending_rate_history" data-desc="get public borrow history" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-public-borrow-history-public">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_lending_rate_history</span>
+                        </div>
+                        <div class="method-desc">Get public borrow history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_lending_rate_summary" data-desc="get public borrow info" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-public-borrow-info-public">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_lending_rate_summary</span>
+                        </div>
+                        <div class="method-desc">Get public borrow info</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_leverage" data-desc="get leverage information" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-leverage">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_leverage</span>
+                        </div>
+                        <div class="method-desc">Get leverage information</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_max_available_size" data-desc="get maximum available tradable amount" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-maximum-available-tradable-amount">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_max_available_size</span>
+                        </div>
+                        <div class="method-desc">Get maximum available tradable amount</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_max_loan" data-desc="get maximum loan of instrument" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-the-maximum-loan-of-instrument">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_max_loan</span>
+                        </div>
+                        <div class="method-desc">Get maximum loan of instrument</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_max_size" data-desc="get maximum buy/sell amount or open amount" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-maximum-buy-sell-amount-or-open-amount">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_max_size</span>
+                        </div>
+                        <div class="method-desc">Get maximum buy/sell amount or open amount</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_max_withdrawals" data-desc="get maximum withdrawals" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-maximum-withdrawals">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_max_withdrawals</span>
+                        </div>
+                        <div class="method-desc">Get maximum withdrawals</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_order_details" data-desc="retrieve order details" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-order-details">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_order_details</span>
+                        </div>
+                        <div class="method-desc">Retrieve order details</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_order_history" data-desc="retrieve order history (last 7 days)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-order-history-last-7-days">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_order_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve order history (last 7 days)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_order_history_archive" data-desc="retrieve order history (last 3 months)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-order-history-last-3-months">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_order_history_archive</span>
+                        </div>
+                        <div class="method-desc">Retrieve order history (last 3 months)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_order_list" data-desc="retrieve incomplete order list" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-order-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_order_list</span>
+                        </div>
+                        <div class="method-desc">Retrieve incomplete order list</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_positions" data-desc="retrieve current positions" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-positions">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_positions</span>
+                        </div>
+                        <div class="method-desc">Retrieve current positions</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_positions_history" data-desc="retrieve positions history" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-positions-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_positions_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve positions history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_saving_balance" data-desc="get saving balance" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-saving-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_saving_balance</span>
+                        </div>
+                        <div class="method-desc">Get saving balance</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_subaccount_funding_balance" data-desc="get sub-account funding balance" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-get-sub-account-funding-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_subaccount_funding_balance</span>
+                        </div>
+                        <div class="method-desc">Get sub-account funding balance</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_subaccount_list" data-desc="get list of sub-accounts" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-get-sub-account-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_subaccount_list</span>
+                        </div>
+                        <div class="method-desc">Get list of sub-accounts</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_subaccount_trading_balance" data-desc="get sub-account trading balance" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-get-sub-account-trading-balance">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_subaccount_trading_balance</span>
+                        </div>
+                        <div class="method-desc">Get sub-account trading balance</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_transaction_details" data-desc="retrieve transaction details (last 3 days)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-days">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_transaction_details</span>
+                        </div>
+                        <div class="method-desc">Retrieve transaction details (last 3 days)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_transaction_history" data-desc="retrieve transaction history (last 3 months)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-months">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_transaction_history</span>
+                        </div>
+                        <div class="method-desc">Retrieve transaction history (last 3 months)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_vip_interest_accrued" data-desc="get vip interest accrued data" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-vip-interest-accrued-data">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_vip_interest_accrued</span>
+                        </div>
+                        <div class="method-desc">Get VIP interest accrued data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_vip_interest_deducted" data-desc="get vip interest deducted data" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-vip-interest-deducted-data">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_vip_interest_deducted</span>
+                        </div>
+                        <div class="method-desc">Get VIP interest deducted data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_vip_loan_order_detail" data-desc="get vip loan order detail" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-vip-loan-order-detail">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_vip_loan_order_detail</span>
+                        </div>
+                        <div class="method-desc">Get VIP loan order detail</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_vip_loan_order_list" data-desc="get vip loan order list" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-vip-loan-order-list">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_vip_loan_order_list</span>
+                        </div>
+                        <div class="method-desc">Get VIP loan order list</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="get_withdrawal_history" data-desc="get withdrawal history" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-get-withdrawal-history">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>get_withdrawal_history</span>
+                        </div>
+                        <div class="method-desc">Get withdrawal history</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="increase_decrease_margin" data-desc="increase or decrease margin" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-increase-decrease-margin">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>increase_decrease_margin</span>
+                        </div>
+                        <div class="method-desc">Increase or decrease margin</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="lightning_deposits" data-desc="make lightning deposits" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-lightning-deposits">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>lightning_deposits</span>
+                        </div>
+                        <div class="method-desc">Make lightning deposits</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="lightning_withdrawals" data-desc="make lightning withdrawals" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-lightning-withdrawals">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>lightning_withdrawals</span>
+                        </div>
+                        <div class="method-desc">Make lightning withdrawals</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="place_algo_order" data-desc="place an algo order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-algo-trading-post-place-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>place_algo_order</span>
+                        </div>
+                        <div class="method-desc">Place an algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="place_grid_algo_order" data-desc="place grid algo order" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-place-grid-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>place_grid_algo_order</span>
+                        </div>
+                        <div class="method-desc">Place grid algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="place_multiple_orders" data-desc="place multiple orders in a batch" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-place-multiple-orders">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>place_multiple_orders</span>
+                        </div>
+                        <div class="method-desc">Place multiple orders in a batch</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="place_order" data-desc="place a new order" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-trade-post-place-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>place_order</span>
+                        </div>
+                        <div class="method-desc">Place a new order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="reset_subaccount_apikey" data-desc="reset api key of a sub-account" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-post-reset-the-api-key-of-a-sub-account">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>reset_subaccount_apikey</span>
+                        </div>
+                        <div class="method-desc">Reset API key of a sub-account</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="savings_purchase_redemption" data-desc="purchase or redeem savings" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-savings-purchase-redemption">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>savings_purchase_redemption</span>
+                        </div>
+                        <div class="method-desc">Purchase or redeem savings</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_greeks" data-desc="set greeks display type (pa/bs)" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-set-greeks-pa-bs">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_greeks</span>
+                        </div>
+                        <div class="method-desc">Set Greeks display type (PA/BS)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_isolated_mode" data-desc="set isolated mode" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-set-isolated-mode">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_isolated_mode</span>
+                        </div>
+                        <div class="method-desc">Set isolated mode</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_lending_rate" data-desc="set lending rate" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-set-lending-rate">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_lending_rate</span>
+                        </div>
+                        <div class="method-desc">Set lending rate</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_leverage" data-desc="set leverage for instrument" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-set-leverage">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_leverage</span>
+                        </div>
+                        <div class="method-desc">Set leverage for instrument</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_permission_transfer_out" data-desc="set permission of transfer out" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-post-set-permission-of-transfer-out">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_permission_transfer_out</span>
+                        </div>
+                        <div class="method-desc">Set permission of transfer out</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="set_position_mode" data-desc="set position mode (long/short or net mode)" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-set-position-mode">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>set_position_mode</span>
+                        </div>
+                        <div class="method-desc">Set position mode (long/short or net mode)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="small_assets_convert" data-desc="convert small assets" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-small-assets-convert">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>small_assets_convert</span>
+                        </div>
+                        <div class="method-desc">Convert small assets</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="spot_moon_grid_withdraw_income" data-desc="withdraw income from spot moon grid" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-spot-moon-grid-withdraw-income">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>spot_moon_grid_withdraw_income</span>
+                        </div>
+                        <div class="method-desc">Withdraw income from spot moon grid</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="stop_grid_algo_order" data-desc="stop grid algo order" data-url="https://www.okx.com/docs-v5/en/#grid-trading-post-stop-grid-algo-order">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>stop_grid_algo_order</span>
+                        </div>
+                        <div class="method-desc">Stop grid algo order</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="subaccount_transfer" data-desc="transfer between sub-accounts" data-url="https://www.okx.com/docs-v5/en/#sub-account-rest-api-post-master-accounts-manage-the-transfers-between-sub-accounts">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>subaccount_transfer</span>
+                        </div>
+                        <div class="method-desc">Transfer between sub-accounts</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="vip_loans_borrow_repay" data-desc="manual borrow and repay (vip loans)" data-url="https://www.okx.com/docs-v5/en/#trading-account-rest-api-post-manual-borrow-and-repay">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>vip_loans_borrow_repay</span>
+                        </div>
+                        <div class="method-desc">Manual borrow and repay (VIP loans)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card private" data-method="withdrawal" data-desc="withdraw funds" data-url="https://www.okx.com/docs-v5/en/#funding-account-rest-api-post-withdrawal">
+                        <div class="method-name">
+                            <span class="method-icon">🔒</span>
+                            <span>withdrawal</span>
+                        </div>
+                        <div class="method-desc">Withdraw funds</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- PUBLIC WEBSOCKET CHANNELS -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>📡 Public WebSocket Channels</h2>
+                    <span class="badge badge-websocket">Real-time | No Auth</span>
+                </div>
+                <div class="method-grid">
+
+                    <div class="method-card websocket" data-method="ws_adl_warning" data-desc="real-time adl (auto-deleveraging) warnings" data-url="https://www.okx.com/docs-v5/en/#public-channel-adl-warning-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_adl_warning</span>
+                        </div>
+                        <div class="method-desc">Real-time ADL (Auto-Deleveraging) warnings</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_call_auction" data-desc="real-time call auction details" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-call-auction-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_call_auction</span>
+                        </div>
+                        <div class="method-desc">Real-time call auction details</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_candlesticks" data-desc="real-time candlestick/kline data updates" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-candlesticks-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_candlesticks</span>
+                        </div>
+                        <div class="method-desc">Real-time candlestick/kline data updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_economic_calendar" data-desc="real-time economic calendar updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-economic-calendar-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_economic_calendar</span>
+                        </div>
+                        <div class="method-desc">Real-time economic calendar updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_funding_rate" data-desc="real-time funding rate updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-funding-rate-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_funding_rate</span>
+                        </div>
+                        <div class="method-desc">Real-time funding rate updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_index_tickers" data-desc="real-time index ticker updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-index-tickers-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_index_tickers</span>
+                        </div>
+                        <div class="method-desc">Real-time index ticker updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_instruments" data-desc="real-time instrument information updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-instruments-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_instruments</span>
+                        </div>
+                        <div class="method-desc">Real-time instrument information updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_liquidation_orders" data-desc="real-time liquidation order notifications" data-url="https://www.okx.com/docs-v5/en/#public-channel-liquidation-orders-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_liquidation_orders</span>
+                        </div>
+                        <div class="method-desc">Real-time liquidation order notifications</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_mark_price" data-desc="real-time mark price updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-mark-price-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_mark_price</span>
+                        </div>
+                        <div class="method-desc">Real-time mark price updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_open_interest" data-desc="real-time open interest data" data-url="https://www.okx.com/docs-v5/en/#public-channel-open-interest-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_open_interest</span>
+                        </div>
+                        <div class="method-desc">Real-time open interest data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_option_summary" data-desc="real-time option summary data" data-url="https://www.okx.com/docs-v5/en/#public-channel-option-summary-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_option_summary</span>
+                        </div>
+                        <div class="method-desc">Real-time option summary data</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_option_trades" data-desc="real-time option trades feed" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-option-trades-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_option_trades</span>
+                        </div>
+                        <div class="method-desc">Real-time option trades feed</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_order_book" data-desc="real-time order book depth updates" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-order-book-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_order_book</span>
+                        </div>
+                        <div class="method-desc">Real-time order book depth updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_price_limit" data-desc="real-time price limit updates" data-url="https://www.okx.com/docs-v5/en/#public-channel-price-limit-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_price_limit</span>
+                        </div>
+                        <div class="method-desc">Real-time price limit updates</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_tickers" data-desc="real-time ticker updates for all instruments" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-tickers-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_tickers</span>
+                        </div>
+                        <div class="method-desc">Real-time ticker updates for all instruments</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_trades" data-desc="real-time public trades feed" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-trades-channel">
+                        <div class="method-name">
+                            <span class="method-icon">📡</span>
+                            <span>ws_trades</span>
+                        </div>
+                        <div class="method-desc">Real-time public trades feed</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- PRIVATE WEBSOCKET CHANNELS -->
+            <div class="section">
+                <div class="section-header">
+                    <h2>🔐 Private WebSocket Channels</h2>
+                    <span class="badge badge-websocket">Real-time | Auth Required</span>
+                </div>
+                <div class="method-grid">
+
+                    <div class="method-card websocket" data-method="ws_account" data-desc="real-time account balance updates (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#trading-account-ws-account-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_account</span>
+                        </div>
+                        <div class="method-desc">Real-time account balance updates (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_account_greeks" data-desc="real-time account greeks updates (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#trading-account-ws-account-greeks-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_account_greeks</span>
+                        </div>
+                        <div class="method-desc">Real-time account Greeks updates (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_balance_positions" data-desc="real-time balance and position updates (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#trading-account-ws-balance-and-position-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_balance_positions</span>
+                        </div>
+                        <div class="method-desc">Real-time balance and position updates (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_deposit_info" data-desc="real-time deposit information (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#funding-account-ws-deposit-info">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_deposit_info</span>
+                        </div>
+                        <div class="method-desc">Real-time deposit information (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_fills" data-desc="real-time trade fill notifications (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-fills-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_fills</span>
+                        </div>
+                        <div class="method-desc">Real-time trade fill notifications (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_orders" data-desc="real-time order updates (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#order-book-trading-ws-order-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_orders</span>
+                        </div>
+                        <div class="method-desc">Real-time order updates (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_position_risk" data-desc="real-time position risk warnings (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#trading-account-ws-position-risk-warning">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_position_risk</span>
+                        </div>
+                        <div class="method-desc">Real-time position risk warnings (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_positions" data-desc="real-time position updates (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#trading-account-ws-positions-channel">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_positions</span>
+                        </div>
+                        <div class="method-desc">Real-time position updates (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                    <div class="method-card websocket" data-method="ws_withdrawal_info" data-desc="real-time withdrawal information (requires authentication)" data-url="https://www.okx.com/docs-v5/en/#funding-account-ws-withdrawal-info">
+                        <div class="method-name">
+                            <span class="method-icon">🔒📡</span>
+                            <span>ws_withdrawal_info</span>
+                        </div>
+                        <div class="method-desc">Real-time withdrawal information (requires authentication)</div>
+                        <div class="doc-link">📖 Click to view documentation</div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        const methodCards = document.querySelectorAll('.method-card');
+
+        searchInput.addEventListener('input', function() {
+            const searchTerm = this.value.toLowerCase();
+
+            methodCards.forEach(card => {
+                const methodName = card.getAttribute('data-method');
+                const methodDesc = card.getAttribute('data-desc');
+
+                if (methodName.includes(searchTerm) || methodDesc.includes(searchTerm)) {
+                    card.classList.remove('hidden');
+                } else {
+                    card.classList.add('hidden');
+                }
+            });
+        });
+
+        // Handle clicks - open documentation
+        methodCards.forEach(card => {
+            card.addEventListener('click', function(e) {
+                const docUrl = this.getAttribute('data-url');
+
+                if (docUrl) {
+                    window.open(docUrl, '_blank');
+                } else {
+                    // Copy method name to clipboard
+                    const methodName = this.querySelector('.method-name span:last-child').textContent;
+                    navigator.clipboard.writeText(methodName).then(() => {
+                        const originalBorder = this.style.borderColor;
+                        this.style.borderColor = '#28a745';
+                        setTimeout(() => {
+                            this.style.borderColor = originalBorder;
+                        }, 500);
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -42,6 +42,7 @@ wheels/
 1_price_list.json
 2_cointegrated_pairs.csv
 3_backtest_file.csv
+4_summary_report_*
 *.pdf
 status.json
 

@@ -308,8 +308,6 @@ def set_leverage(inst_id, leverage, mgn_mode=None, pos_side="", session=None, dr
     if response.get("code") != "0":
         print(f"ERROR: OKX set_leverage failed: {response.get('msg')}")
         return response
-
-    print(f"OK: Leverage set for {inst_id} to {leverage}x ({mgn_mode})")
     return response
 
 

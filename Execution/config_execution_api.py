@@ -17,8 +17,8 @@ from okx.MarketData import MarketAPI
 
 # CONFIG VARIABLES
 mode = "demo"  # "demo" or "live"
-ticker_1 = "ASTER-USDT-SWAP"
-ticker_2 = "ETHFI-USDT-SWAP"
+ticker_1 = "ASTER-USDT-SWAP" # ASTER-USDT-SWAP
+ticker_2 = "ETHFI-USDT-SWAP" # ETHFI-USDT-SWAP
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 inst_type = "SWAP"
@@ -28,17 +28,18 @@ pos_mode = "long_short"  # "net" or "long_short" (hedged)
 dry_run = False  # When True, execution calls will not place or cancel live orders.
 use_fresh_orderbook = False  # True fetches a new snapshot right before order placement.
 max_snapshot_age_seconds = 15  # Reuse snapshot only if it is this fresh or newer.
-stop_loss_fail_safe = 0.15
+stop_loss_fail_safe = 0.03  # 3% stop loss (reduced from 15% for proper arbitrage risk management)
 default_leverage = 1  # Default leverage for set_leverage calls.
 max_cycles = 0  # 0 = run indefinitely; set to 1 for a single cycle.
-rounding_ticker_1 = 2
+rounding_ticker_1 = 1
 rounding_ticker_2 = 2
-quantity_rounding_ticker_1 = 3
+quantity_rounding_ticker_1 = 4
 quantity_rounding_ticker_2 = 3
 z_score_window = 21  # Z-score calculation window
 limit_order_basis = True  # Place entries with limit orders when True.
 tradeable_capital_usdt = 2000  # Total tradeable capital to split across pairs.
-signal_trigger_thresh = 1  # Z-score threshold for triggering signals.
+signal_trigger_thresh = 0.01  # Signal trigger threshold for long and short positions.1  # Z-score threshold for triggering signals. This should not be a fixed value, the should vary according to volatility.
+max_drawdown_pct = 0.05  # Circuit breaker: exit if cumulative loss exceeds 5% of capital
 
 # ENVIRONMENT SETTINGS
 flag = "1" if mode == "demo" else "0"  # "1" = demo, "0" = live

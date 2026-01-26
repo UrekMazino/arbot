@@ -4,6 +4,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
+from statsmodels.tsa.stattools import coint
 
 from config_execution_api import depth, market_session, ticker_1, ticker_2, z_score_window
 from func_price_calls import get_latest_klines
@@ -94,12 +95,14 @@ def get_latest_zscore(
     session=None,
 ):
     """
-    Return (zscore_list, signal_sign_positive) for the configured instrument pair.
+    Return (zscore_list, signal_sign_positive, coint_flag) for the configured instrument pair.
+    
+    coint_flag: 1 if p_value < 0.05 (cointegrated), 0 otherwise
     """
     inst_1 = inst_id_1 or ticker_1
     inst_2 = inst_id_2 or ticker_2
     if not inst_1 or not inst_2:
-        return [], False
+        return [], False, 0
 
     window_val = z_score_window if window is None else window
     try:
@@ -107,7 +110,7 @@ def get_latest_zscore(
     except (TypeError, ValueError):
         window_val = z_score_window
     if window_val <= 1:
-        return [], False
+        return [], False, 0
 
     series_1, series_2 = get_latest_klines(
         inst_id_1=inst_1,
@@ -118,7 +121,7 @@ def get_latest_zscore(
         ascending=True,
     )
     if not series_1 or not series_2:
-        return [], False
+        return [], False, 0
 
     if use_orderbook:
         mid_1 = _fetch_mid_price(inst_1, depth_levels=depth_levels, session=session)
@@ -129,27 +132,31 @@ def get_latest_zscore(
 
     min_len = min(len(series_1), len(series_2))
     if min_len < 2:
-        return [], False
+        return [], False, 0
 
     series_1 = np.array(series_1[-min_len:], dtype=float)
     series_2 = np.array(series_2[-min_len:], dtype=float)
     if not np.all(np.isfinite(series_1)) or not np.all(np.isfinite(series_2)):
-        return [], False
+        return [], False, 0
     if np.any(series_1 <= 0) or np.any(series_2 <= 0):
-        return [], False
+        return [], False, 0
 
     series_1_log = np.log(series_1)
     series_2_log = np.log(series_2)
     if np.std(series_1_log) == 0 or np.std(series_2_log) == 0:
-        return [], False
+        return [], False, 0
 
     try:
         series_2_const = sm.add_constant(series_2_log)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             model = sm.OLS(series_1_log, series_2_const).fit()
+            
+            # Perform cointegration test
+            adf_statistic, p_value, critical_values = sm.tsa.stattools.coint(series_1_log, series_2_log)
+            coint_flag = 1 if (p_value < 0.05 and adf_statistic < critical_values[1]) else 0
     except (ValueError, np.linalg.LinAlgError):
-        return [], False
+        return [], False, 0
 
     hedge_ratio = float(model.params[1] if len(model.params) > 1 else model.params[0])
     spread = series_1_log - (hedge_ratio * series_2_log)
@@ -157,5 +164,5 @@ def get_latest_zscore(
     zscore_list = zscore_values.tolist()
     latest = _latest_finite(zscore_list)
     if latest is None:
-        return [], False
-    return zscore_list, latest > 0
+        return [], False, 0
+    return zscore_list, latest > 0, coint_flag

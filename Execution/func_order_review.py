@@ -39,11 +39,11 @@ def check_order(ticker, order_id, remaining_capital, direction="Long", remaining
     remaining_unit_norm = _normalize_status(remaining_unit)
     if remaining_val is not None and position_qty_val is not None:
         if remaining_unit_norm in ("base", "qty", "quantity"):
-            if position_qty_val >= remaining_val:
+            if position_qty_val >= remaining_val and position_qty_val > 0:
                 return "Trade Complete"
         elif remaining_unit_norm in ("quote", "notional", "usdt", "usd"):
             if position_price_val is not None:
-                if position_qty_val * position_price_val >= remaining_val:
+                if position_qty_val * position_price_val >= remaining_val and position_qty_val > 0:
                     return "Trade Complete"
 
     # Normalize status for OKX values

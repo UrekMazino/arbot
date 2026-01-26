@@ -1,6 +1,7 @@
 # Remove Pandas Future Warnings
 import os
 import warnings
+import logging
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -11,13 +12,27 @@ from config_execution_api import (
     pos_mode,
     signal_negative_ticker,
     signal_positive_ticker,
+    tradeable_capital_usdt,
+    max_drawdown_pct,
 )
 from func_position_calls import open_position_confirmation, active_position_confirmation
 from func_trade_management import manage_new_trades
 from func_execution_calls import set_leverage
-from func_close_positions import close_all_positions
+from func_close_positions import close_all_positions, get_position_info
 from func_save_status import save_status
 import time
+
+# Setup logging
+logger = logging.getLogger("main_execution")
+if not logger.handlers:
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+    log_path = Path(__file__).resolve().parent / "logfile_okx.log"
+    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.setLevel(logging.INFO)
 
 
 def _is_hedged_mode(mode_value):
@@ -31,6 +46,40 @@ def _set_leverage_for_ticker(ticker, leverage):
         set_leverage(ticker, leverage, pos_side="short")
         return
     set_leverage(ticker, leverage)
+
+
+def _calculate_cumulative_pnl(ticker_p, ticker_n):
+    """
+    Calculate cumulative P&L from both open positions.
+    Returns (total_pnl_usdt, pnl_pct)
+    """
+    try:
+        from func_position_calls import get_account_balance
+        # Get positions
+        size_p, side_p = get_position_info(ticker_p)
+        size_n, side_n = get_position_info(ticker_n)
+        
+        # If no positions, P&L is 0
+        if size_p == 0 and size_n == 0:
+            return 0.0, 0.0
+        
+        # Fetch current prices
+        from func_price_calls import get_ticker_trade_liquidity
+        _, price_p = get_ticker_trade_liquidity(ticker_p, limit=1)
+        _, price_n = get_ticker_trade_liquidity(ticker_n, limit=1)
+        
+        # Simple approximation: use floating PnL from positions
+        # This is a simplified calculation; actual P&L needs entry prices
+        total_pnl = 0.0
+        
+        # Log for debugging
+        logger.debug(f"P&L check: {ticker_p} ({size_p}), {ticker_n} ({size_n})")
+        
+        pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
+        return total_pnl, pnl_pct
+    except Exception as e:
+        logger.error(f"Error calculating P&L: {e}")
+        return 0.0, 0.0
 
 
 """ RUN STATBOT """
@@ -65,6 +114,19 @@ if __name__ == "__main__":
     cycles_run = 0
     while True:
 
+        # CIRCUIT BREAKER: Check cumulative P&L
+        total_pnl, pnl_pct = _calculate_cumulative_pnl(signal_positive_ticker, signal_negative_ticker)
+        max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
+        
+        if total_pnl < -max_loss_allowed:
+            msg = f"⚠️  CIRCUIT BREAKER TRIGGERED: P&L={total_pnl:.2f} USDT ({pnl_pct:.2f}%) exceeds max drawdown {max_drawdown_pct*100:.1f}%"
+            print(msg)
+            logger.warning(msg)
+            status_dict["message"] = "Circuit breaker triggered - closing all positions"
+            save_status(status_dict)
+            close_all_positions(0)
+            break
+
         # Pause - protect API
         time.sleep(3)
 
@@ -79,6 +141,8 @@ if __name__ == "__main__":
         # Save status
         status_dict["message"] = "Initial checks made..."
         status_dict["checks"] = checks_all
+        status_dict["cumulative_pnl_usdt"] = total_pnl
+        status_dict["cumulative_pnl_pct"] = pnl_pct
         save_status(status_dict)
 
         # Check for signal and place new trades

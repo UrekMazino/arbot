@@ -1,7 +1,7 @@
 # Execution Code Review - OKXStatBot
 
 **Date:** January 26, 2026  
-**Status:** 9 Issues Fixed ✅ | 5 Issues Remaining  
+**Status:** 10 Issues Fixed ✅ | 4 Issues Remaining  
 **Severity Levels:** 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low
 
 ---
@@ -51,25 +51,15 @@ All critical issues have been resolved. ✅
 **Status:** FIXED 🟡→✅  
 **Fix Applied:** Reordered main loop in main_execution.py. Position confirmation (open_position_confirmation, active_position_confirmation) now runs FIRST, then P&L calculation happens AFTER. Ensures loss tracking is accurate only when positions are confirmed to exist.
 
+### ✅ Issue #10: Hard-Coded Z-Score Window is Too Short
+**Status:** FIXED 🟡→✅  
+**Fix Applied:** Increased z_score_window from 21 to 100 in config_execution_api.py. Since bot uses 1m candles, 100 bars = ~100 minutes (~1.67 hours). Provides statistical validity for ADF test (requires 40+ observations) while maintaining responsiveness for high-frequency trading.
+
 ---
 
 ## 2. 🟠 HIGH PRIORITY ISSUES - 0 REMAINING ✅
 
-## 3. 🟡 MEDIUM PRIORITY ISSUES - 3 REMAINING
-
-### Issue #10: Hard-Coded Z-Score Window is Too Short
-**File:** [config_execution_api.py](config_execution_api.py#L39)  
-**Severity:** 🟡 MEDIUM  
-**Impact:** Z-score may be statistically unreliable
-
-**Problem:**
-```python
-z_score_window = 21  # ← Industry standard is 100-252 (quarterly-annual data)
-```
-
-**Recommendation:** Increase window to 100+ for better statistical validity.
-
----
+## 3. 🟡 MEDIUM PRIORITY ISSUES - 2 REMAINING
 
 ### Issue #11: Signal Trigger Threshold Too Permissive
 **File:** [config_execution_api.py](config_execution_api.py#L41)  
@@ -149,7 +139,7 @@ response = active_session.get_orderbook(instId=inst_id, sz=str(level_count))
 | #7: Unvalidated ticker logic | 🟠 HIGH | func_trade_management.py | ✅ FIXED | Direction validated at startup |
 | #8: No null checks on order IDs | 🟡 MEDIUM | func_trade_management.py | ✅ FIXED | Order IDs validated before check |
 | #9: Race condition in P&L | 🟡 MEDIUM | main_execution.py | ✅ FIXED | Position checks now first |
-| #10: Z-window too short (21) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | False signals likely |
+| #10: Z-window too short (21) | 🟡 MEDIUM | config_execution_api.py | ✅ FIXED | Now 100 bars (~100 min) |
 | #11: Signal threshold too low (0.01) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | Weak entries |
 | #12: Incomplete error messages | 🟡 MEDIUM | func_calculation.py | ⏳ TODO | Hard to debug |
 | #13: No kill-switch logging | 🟢 LOW | func_trade_management.py | ⏳ TODO | Hard to trace |
@@ -194,14 +184,14 @@ After remaining fixes, verify:
 
 ## Notes
 
-- **9 out of 14 issues now fixed** ✅
+- **10 out of 14 issues now fixed** ✅
 - **Circuit breaker is now functional** - bot will exit on 5% loss
 - **P&L calculation uses OKX position data** (avgPx field for entry prices)
 - **Price validation prevents invalid orders** - skips trade if price/liquidity are None or ≤ 0
 - **Ticker configuration validated at startup** - prevents reversed long/short assignments
 - **All HIGH priority issues are now resolved** ✅
-- **Main loop reordered for cleaner logic** - position confirmation now happens before P&L check
-- **Next priority:** Issues #10-11 (Z-score window and signal threshold) or Issue #12 (error messages)
+- **Z-score window improved for robustness** - increased from 21 to 100 bars (~1.67h on 1m candles) for better ADF statistical validity
+- **Next priority:** Issue #11 (Signal threshold 0.01 -> 1.0+) or Issue #12 (error messages)
 
 
 ---
@@ -494,30 +484,6 @@ order_status_long = check_order(long_ticker, order_long_id, ...)  # ← Passes e
 - Could cause API errors or invalid order checks
 
 **Fix Required:** Validate order_long_id and order_short_id are non-empty before checking status.
-
----
-
-### Issue #10: Hard-Coded Z-Score Window is Too Short
-**File:** [config_execution_api.py](config_execution_api.py#L39)  
-**Severity:** 🟡 MEDIUM  
-**Impact:** Z-score may be statistically unreliable
-
-**Problem:**
-```python
-z_score_window = 21  # ← Industry standard is 100-252 (quarterly-annual data)
-```
-
-**Statistical Issue:**
-- 21-bar window (e.g., ~5 trading days) has very high variance
-- ADF test validity requires 40+ observations minimum
-- Short windows create false positives
-
-**Impact:**
-- High false-signal rate
-- Cointegration test results unreliable
-- Higher than necessary losses from bad pairs
-
-**Fix Required:** Increase window to 100+ (or make configurable).
 
 ---
 

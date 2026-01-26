@@ -3300,3 +3300,191 @@ task: <Task pending name='Task-4' coro=<OKXOrderbookStream._send_heartbeat() don
 2026-01-26 14:56:35,025 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
 2026-01-26 14:56:39,463 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
 2026-01-26 14:56:43,868 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:21,821 INFO ✓ Ticker configuration validated: ticker_1=ASTER-USDT-SWAP, ticker_2=ETHFI-USDT-SWAP, signal_positive=ETHFI-USDT-SWAP, signal_negative=ASTER-USDT-SWAP
+2026-01-26 15:07:27,064 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:31,557 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:36,016 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:40,413 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:44,811 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:49,262 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:53,675 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:07:58,111 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:02,564 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:07,021 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:15,905 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:20,323 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:24,811 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:29,219 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 15:08:38,115 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:48:08,655 INFO ✓ Ticker configuration validated: ticker_1=ASTER-USDT-SWAP, ticker_2=ETHFI-USDT-SWAP, signal_positive=ETHFI-USDT-SWAP, signal_negative=ASTER-USDT-SWAP
+2026-01-26 20:49:05,979 INFO ✓ Ticker configuration validated: ticker_1=ASTER-USDT-SWAP, ticker_2=ETHFI-USDT-SWAP, signal_positive=ETHFI-USDT-SWAP, signal_negative=ASTER-USDT-SWAP
+2026-01-26 20:49:11,703 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:16,567 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:21,360 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:26,115 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:30,696 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:35,349 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:39,842 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:49:44,340 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:50:40,200 INFO ✓ Ticker configuration validated: ticker_1=ASTER-USDT-SWAP, ticker_2=H-USDT-SWAP, signal_positive=H-USDT-SWAP, signal_negative=ASTER-USDT-SWAP
+2026-01-26 20:50:45,548 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:50:49,998 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:50:54,739 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:50:59,196 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:03,688 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:08,291 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:12,793 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:17,333 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:21,948 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:26,556 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:31,040 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:46,117 INFO ✓ Ticker configuration validated: ticker_1=ASTER-USDT-SWAP, ticker_2=LDO-USDT-SWAP, signal_positive=LDO-USDT-SWAP, signal_negative=ASTER-USDT-SWAP
+2026-01-26 20:51:52,333 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:51:56,790 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:01,589 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:06,076 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:10,591 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:15,137 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:19,692 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:24,130 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:28,590 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:33,040 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:37,539 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:42,088 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:46,592 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:51,042 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:52:55,540 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:00,039 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:04,490 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:08,987 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:13,539 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:18,039 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:22,539 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:26,988 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:31,486 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:35,992 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:40,438 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:45,187 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:49,793 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:54,241 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:53:59,039 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:03,541 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:08,037 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:12,589 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:17,390 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:21,887 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:27,505 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:54:34,504 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:11,100 INFO ✓ Ticker configuration validated: ticker_1=BOME-USDT-SWAP, ticker_2=CAT-USDT-SWAP, signal_positive=CAT-USDT-SWAP, signal_negative=BOME-USDT-SWAP
+2026-01-26 20:55:17,343 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:22,527 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:28,244 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:33,730 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:39,150 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:44,190 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:50,001 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 20:55:56,642 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:25,863 INFO ✓ Ticker configuration validated: ticker_1=2Z-USDT-SWAP, ticker_2=CELO-USDT-SWAP, signal_positive=CELO-USDT-SWAP, signal_negative=2Z-USDT-SWAP
+2026-01-26 21:01:31,547 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:37,054 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:41,989 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:46,831 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:51,437 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:01:56,588 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:04:44,176 INFO ✓ Ticker configuration validated: ticker_1=SKY-USDT-SWAP, ticker_2=XAU-USDT-SWAP, signal_positive=XAU-USDT-SWAP, signal_negative=SKY-USDT-SWAP
+2026-01-26 21:04:49,823 INFO Hot trigger activated: SELL_SPREAD @ Z=4.0154 - Entry signal: Z=4.0154 persistent at +ENTRY_Z (overbought, bars=3)
+2026-01-26 21:04:49,823 INFO Placing and monitoring existing orders...
+2026-01-26 21:04:50,103 WARNING Position size (1333.33 per side) would exceed total capital. Reducing to 50/50 split.
+2026-01-26 21:04:50,103 INFO Position sizing (2% RISK RULE): total_capital=2000.00 risk_usdt=40.00 stop_loss_pct=3.00% position_per_side=1000.00 long=1000.00 short=1000.00
+2026-01-26 21:04:50,103 INFO Liquidity check: long_target=30880014.44 short_target=6189.86 liquidity_long=6121.4000 liquidity_short=102041.9000
+2026-01-26 21:04:50,878 INFO Placed short entry: id= capital=1000.00 remaining=0.00
+2026-01-26 21:04:54,713 ERROR 🔴 KILL-SWITCH TRIGGERED: Regime break detected - Z-score=4.0178 exceeded hard stop 2.5
+2026-01-26 21:06:48,808 INFO ✓ Ticker configuration validated: ticker_1=2Z-USDT-SWAP, ticker_2=CELO-USDT-SWAP, signal_positive=CELO-USDT-SWAP, signal_negative=2Z-USDT-SWAP
+2026-01-26 21:06:54,279 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:06:58,799 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:07:03,540 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:07:08,394 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:07:13,410 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:08:00,685 INFO ✓ Ticker configuration validated: ticker_1=GMT-USDT-SWAP, ticker_2=ZIL-USDT-SWAP, signal_positive=ZIL-USDT-SWAP, signal_negative=GMT-USDT-SWAP
+2026-01-26 21:10:01,828 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:06,379 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:10,988 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:15,589 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:20,235 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:24,676 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:29,185 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:33,678 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:38,272 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:42,730 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:47,233 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:51,831 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:10:56,434 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:00,927 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:05,431 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:09,932 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:14,462 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:18,937 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:23,391 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:28,612 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:33,467 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:38,361 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:43,759 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:48,813 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:53,715 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:11:58,609 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:12:56,650 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:01,350 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:05,834 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:10,417 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:14,933 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:19,544 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:13:55,882 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:14:00,361 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:16:10,270 INFO ✓ Ticker configuration validated: ticker_1=GMT-USDT-SWAP, ticker_2=ZIL-USDT-SWAP, signal_positive=ZIL-USDT-SWAP, signal_negative=GMT-USDT-SWAP
+2026-01-26 21:18:58,990 INFO ✓ Ticker configuration validated: ticker_1=ETH-USD_UM-SWAP, ticker_2=2Z-USDT-SWAP, signal_positive=2Z-USDT-SWAP, signal_negative=ETH-USD_UM-SWAP
+2026-01-26 21:19:04,332 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:08,926 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:13,423 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:17,880 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:22,380 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:26,875 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:31,376 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:35,777 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:40,277 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:44,737 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:49,236 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:54,005 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:19:58,595 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:03,357 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:07,980 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:12,813 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:17,326 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:21,828 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:26,388 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:20:31,032 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:21:22,251 INFO ✓ Ticker configuration validated: ticker_1=ETH-USD-SWAP, ticker_2=ZETA-USDT-SWAP, signal_positive=ZETA-USDT-SWAP, signal_negative=ETH-USD-SWAP
+2026-01-26 21:31:13,330 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:18,093 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:22,905 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:27,580 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:32,385 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:37,148 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:41,891 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:46,705 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:31:51,944 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:32:29,722 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:32:34,328 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:32:38,925 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:32:53,137 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:02,214 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:11,885 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:16,441 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:20,870 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:25,324 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:29,987 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:34,579 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:39,224 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:43,669 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:48,165 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:52,620 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading
+2026-01-26 21:33:57,116 WARNING Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading

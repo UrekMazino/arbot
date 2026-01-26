@@ -17,8 +17,8 @@ from okx.MarketData import MarketAPI
 
 # CONFIG VARIABLES
 mode = "demo"  # "demo" or "live"
-ticker_1 = "ASTER-USDT-SWAP" # ASTER-USDT-SWAP
-ticker_2 = "ETHFI-USDT-SWAP" # ETHFI-USDT-SWAP
+ticker_1 = "ETH-USD-SWAP" # ASTER-USDT-SWAP
+ticker_2 = "ZETA-USDT-SWAP" # ETHFI-USDT-SWAP
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 inst_type = "SWAP"

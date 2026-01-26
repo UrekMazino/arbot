@@ -42,10 +42,9 @@ wheels/
 1_price_list.json
 2_cointegrated_pairs.csv
 3_backtest_file.csv
-4_summary_report_*
+
 *.pdf
 status.json
-./Execution/logfile_okx.log
 
 # Testing
 .pytest_cache/
@@ -64,3 +63,10 @@ logs/
 *.tmp
 *.temp
 nul
+Execution/logfile_okx.log
+Strategy/1_price_list.json
+Strategy/2_cointegrated_pairs.csv
+Strategy/3_backtest_file.csv
+Strategy/4_summary_report_*
+Execution/logfile_okx.log
+

@@ -374,10 +374,29 @@ def manage_new_trades(kill_switch):
 
                     # Check long order status
                     if count_long == 1:
-                        order_status_long = check_order(long_ticker, order_long_id, remaining_capital_long, "buy")
+                        # VALIDATION: Ensure order_long_id is non-empty before checking
+                        if not order_long_id or not isinstance(order_long_id, str):
+                            logger.error(
+                                "❌ Invalid long order ID: %s (type: %s). Skipping order check.",
+                                repr(order_long_id),
+                                type(order_long_id).__name__
+                            )
+                            order_status_long = "failed"
+                        else:
+                            order_status_long = check_order(long_ticker, order_long_id, remaining_capital_long, "buy")
+                    
                     # Check short order status
                     if count_short == 1:
-                        order_status_short = check_order(short_ticker, order_short_id, remaining_capital_short, "sell")
+                        # VALIDATION: Ensure order_short_id is non-empty before checking
+                        if not order_short_id or not isinstance(order_short_id, str):
+                            logger.error(
+                                "❌ Invalid short order ID: %s (type: %s). Skipping order check.",
+                                repr(order_short_id),
+                                type(order_short_id).__name__
+                            )
+                            order_status_short = "failed"
+                        else:
+                            order_status_short = check_order(short_ticker, order_short_id, remaining_capital_short, "sell")
                     # If orders still active, do nothing
                     if order_status_long == "Order Active" or order_status_short == "Order Active":
                         continue

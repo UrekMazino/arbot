@@ -1,7 +1,7 @@
 # Execution Code Review - OKXStatBot
 
 **Date:** January 26, 2026  
-**Status:** 7 Issues Fixed ✅ | 7 Issues Remaining  
+**Status:** 8 Issues Fixed ✅ | 6 Issues Remaining  
 **Severity Levels:** 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low
 
 ---
@@ -43,26 +43,15 @@ All critical issues have been resolved. ✅
 **Status:** FIXED 🟠→✅  
 **Fix Applied:** Added `_validate_ticker_configuration()` function at bot startup in main_execution.py. Validates all ticker configurations and exits with clear error if invalid. Prevents reversed long/short assignments.
 
+### ✅ Issue #8: Missing Null Checks in Position Monitoring
+**Status:** FIXED 🟡→✅  
+**Fix Applied:** Added validation for order_long_id and order_short_id before calling check_order(). Validates each ID is non-empty string, logs error and sets status to "failed" if invalid. Prevents KeyError from empty order IDs.
+
 ---
 
 ## 2. 🟠 HIGH PRIORITY ISSUES - 0 REMAINING ✅
 
-## 3. 🟡 MEDIUM PRIORITY ISSUES - 5 REMAINING
-
-### Issue #8: Missing Null Checks in Position Monitoring
-**File:** [func_trade_management.py](func_trade_management.py#L310-320)  
-**Severity:** 🟡 MEDIUM  
-**Impact:** KeyError if order IDs are missing
-
-**Problem:**
-```python
-order_status_long = check_order(long_ticker, order_long_id, remaining_capital_long, "buy")
-# If order_long_id = "" (from failed placement), check_order() may fail
-```
-
-**Fix Required:** Validate order_long_id and order_short_id are non-empty before checking status.
-
----
+## 3. 🟡 MEDIUM PRIORITY ISSUES - 4 REMAINING
 
 ### Issue #9: Race Condition in P&L Check
 **File:** [main_execution.py](main_execution.py#L160-169)  
@@ -175,7 +164,7 @@ response = active_session.get_orderbook(instId=inst_id, sz=str(level_count))
 | #5: Weak error handling in zscore | 🟠 HIGH | func_get_zscore.py | ✅ FIXED | Errors now logged |
 | #6: No price validation | 🟠 HIGH | func_trade_management.py | ✅ FIXED | Orders validated before placement |
 | #7: Unvalidated ticker logic | 🟠 HIGH | func_trade_management.py | ✅ FIXED | Direction validated at startup |
-| #8: No null checks on order IDs | 🟡 MEDIUM | func_trade_management.py | ⏳ TODO | KeyError possible |
+| #8: No null checks on order IDs | 🟡 MEDIUM | func_trade_management.py | ✅ FIXED | Order IDs validated before check |
 | #9: Race condition in P&L | 🟡 MEDIUM | main_execution.py | ⏳ TODO | Suboptimal sequencing |
 | #10: Z-window too short (21) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | False signals likely |
 | #11: Signal threshold too low (0.01) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | Weak entries |
@@ -222,12 +211,13 @@ After remaining fixes, verify:
 
 ## Notes
 
-- **7 out of 14 issues now fixed** ✅
+- **8 out of 14 issues now fixed** ✅
 - **Circuit breaker is now functional** - bot will exit on 5% loss
 - **P&L calculation uses OKX position data** (avgPx field for entry prices)
 - **Price validation prevents invalid orders** - skips trade if price/liquidity are None or ≤ 0
 - **Ticker configuration validated at startup** - prevents reversed long/short assignments
 - **All HIGH priority issues are now resolved** ✅
+- **Order ID validation prevents KeyError** - empty IDs now caught with detailed logging
 - **Next priority:** Issue #9 (Race condition in P&L check) or Issue #10-11 (Z-score settings)
 
 

@@ -155,7 +155,15 @@ def get_latest_zscore(
             # Perform cointegration test
             adf_statistic, p_value, critical_values = sm.tsa.stattools.coint(series_1_log, series_2_log)
             coint_flag = 1 if (p_value < 0.05 and adf_statistic < critical_values[1]) else 0
-    except (ValueError, np.linalg.LinAlgError):
+    except (ValueError, np.linalg.LinAlgError) as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"OLS/cointegration calculation failed ({inst_1} vs {inst_2}): {e}")
+        return [], False, 0
+    except (AttributeError, IndexError, TypeError) as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Cointegration test error ({inst_1} vs {inst_2}): {e}")
         return [], False, 0
 
     hedge_ratio = float(model.params[1] if len(model.params) > 1 else model.params[0])

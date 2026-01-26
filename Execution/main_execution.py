@@ -92,33 +92,62 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n):
     """
     Calculate cumulative P&L from both open positions.
     Returns (total_pnl_usdt, pnl_pct)
+    
+    Simple approach: Gets position details + current prices and calculates mark-to-market P&L
+    from OKX position data (avgPx field contains entry price).
     """
     try:
-        from func_position_calls import get_account_balance
-        # Get positions
-        size_p, side_p = get_position_info(ticker_p)
-        size_n, side_n = get_position_info(ticker_n)
-        
-        # If no positions, P&L is 0
-        if size_p == 0 and size_n == 0:
-            return 0.0, 0.0
-        
-        # Fetch current prices
+        from func_position_calls import get_open_positions
         from func_price_calls import get_ticker_trade_liquidity
-        _, price_p = get_ticker_trade_liquidity(ticker_p, limit=1)
-        _, price_n = get_ticker_trade_liquidity(ticker_n, limit=1)
         
-        # Simple approximation: use floating PnL from positions
-        # This is a simplified calculation; actual P&L needs entry prices
         total_pnl = 0.0
         
-        # Log for debugging
-        logger.debug(f"P&L check: {ticker_p} ({size_p}), {ticker_n} ({size_n})")
+        # Get long position for positive ticker
+        entry_price_p_long, size_p_long = get_open_positions(ticker_p, direction="Long")
+        if entry_price_p_long and size_p_long and size_p_long > 0:
+            _, current_price_p = get_ticker_trade_liquidity(ticker_p, limit=1)
+            if current_price_p and current_price_p > 0:
+                pnl_p_long = (current_price_p - entry_price_p_long) * size_p_long
+                total_pnl += pnl_p_long
+                logger.debug(f"P&L {ticker_p} LONG: entry={entry_price_p_long:.4f} current={current_price_p:.4f} size={size_p_long} pnl={pnl_p_long:.2f}")
+        
+        # Get short position for positive ticker
+        entry_price_p_short, size_p_short = get_open_positions(ticker_p, direction="Short")
+        if entry_price_p_short and size_p_short and size_p_short > 0:
+            _, current_price_p = get_ticker_trade_liquidity(ticker_p, limit=1)
+            if current_price_p and current_price_p > 0:
+                pnl_p_short = (entry_price_p_short - current_price_p) * size_p_short
+                total_pnl += pnl_p_short
+                logger.debug(f"P&L {ticker_p} SHORT: entry={entry_price_p_short:.4f} current={current_price_p:.4f} size={size_p_short} pnl={pnl_p_short:.2f}")
+        
+        # Get long position for negative ticker
+        entry_price_n_long, size_n_long = get_open_positions(ticker_n, direction="Long")
+        if entry_price_n_long and size_n_long and size_n_long > 0:
+            _, current_price_n = get_ticker_trade_liquidity(ticker_n, limit=1)
+            if current_price_n and current_price_n > 0:
+                pnl_n_long = (current_price_n - entry_price_n_long) * size_n_long
+                total_pnl += pnl_n_long
+                logger.debug(f"P&L {ticker_n} LONG: entry={entry_price_n_long:.4f} current={current_price_n:.4f} size={size_n_long} pnl={pnl_n_long:.2f}")
+        
+        # Get short position for negative ticker
+        entry_price_n_short, size_n_short = get_open_positions(ticker_n, direction="Short")
+        if entry_price_n_short and size_n_short and size_n_short > 0:
+            _, current_price_n = get_ticker_trade_liquidity(ticker_n, limit=1)
+            if current_price_n and current_price_n > 0:
+                pnl_n_short = (entry_price_n_short - current_price_n) * size_n_short
+                total_pnl += pnl_n_short
+                logger.debug(f"P&L {ticker_n} SHORT: entry={entry_price_n_short:.4f} current={current_price_n:.4f} size={size_n_short} pnl={pnl_n_short:.2f}")
         
         pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
+        
+        # Log summary
+        if total_pnl != 0.0:
+            logger.info(f"Cumulative P&L: {total_pnl:.2f} USDT ({pnl_pct:.2f}%) | Threshold: {-tradeable_capital_usdt * max_drawdown_pct:.2f} USDT")
+        
         return total_pnl, pnl_pct
     except Exception as e:
         logger.error(f"Error calculating P&L: {e}")
+        # Return 0 safely to avoid circuit breaker issues
         return 0.0, 0.0
 
 

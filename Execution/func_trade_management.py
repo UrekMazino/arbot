@@ -171,11 +171,13 @@ def manage_new_trades(kill_switch):
         # Log position sizing with 2% rule
         logger.info(
             "Position sizing (2%% RISK RULE): total_capital=%.2f risk_usdt=%.2f stop_loss_pct=%.2f%% "
-            "position_per_side=%.2f",
+            "position_per_side=%.2f long=%.2f short=%.2f",
             tradeable_capital_usdt,
             risk_usdt,
             stop_loss_pct * 100,
             initial_capital_usdt,
+            capital_long,
+            capital_short,
         )
         
         initial_fill_target_long_usdt = avg_liquidity_long * last_price_long
@@ -391,22 +393,12 @@ def manage_new_trades(kill_switch):
         This captures the full arbitrage profit while accounting for fees (~0.07% round-trip)
         """
         if signal_side == "positive" and latest_zscore < ZSCORE_EXIT_TARGET:
-            print(f"✅ Mean reversion complete (Z={latest_zscore:.4f} < {ZSCORE_EXIT_TARGET}): Taking profit")
-            if kill_switch == 1:
-                """
-                Exit when mean reversion is complete:
-                - Positive signal: Z-score has reverted near zero (exit target)
-                - Negative signal: Z-score has reverted to near zero from below
-        
-                This captures the full arbitrage profit while accounting for fees (~0.07% round-trip)
-                """
-                if signal_side == "positive" and latest_zscore < ZSCORE_EXIT_TARGET:
-                    msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} < {ZSCORE_EXIT_TARGET}): Taking profit"
-                    print(msg)
-                    logger.info(msg)
-                    kill_switch = 2
-                elif signal_side == "negative" and latest_zscore > -ZSCORE_EXIT_TARGET:
-                    msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} > {-ZSCORE_EXIT_TARGET}): Taking profit"
-                    print(msg)
-                    logger.info(msg)
-                    kill_switch = 2
+            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} < {ZSCORE_EXIT_TARGET}): Taking profit"
+            print(msg)
+            logger.info(msg)
+            kill_switch = 2
+        elif signal_side == "negative" and latest_zscore > -ZSCORE_EXIT_TARGET:
+            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} > {-ZSCORE_EXIT_TARGET}): Taking profit"
+            print(msg)
+            logger.info(msg)
+            kill_switch = 2

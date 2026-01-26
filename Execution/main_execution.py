@@ -247,7 +247,18 @@ if __name__ == "__main__":
     cycles_run = 0
     while True:
 
-        # CIRCUIT BREAKER: Check cumulative P&L
+        # Pause - protect API
+        time.sleep(3)
+
+        # CHECK POSITION STATUS FIRST: Determine if we should manage new trades or close existing ones
+        is_p_ticker_open = open_position_confirmation(signal_positive_ticker)
+        is_n_ticker_open = open_position_confirmation(signal_negative_ticker)
+        is_p_ticker_active = active_position_confirmation(signal_positive_ticker)
+        is_n_ticker_active = active_position_confirmation(signal_negative_ticker)
+        checks_all = [is_p_ticker_open, is_n_ticker_open, is_p_ticker_active, is_n_ticker_active]
+        is_manage_new_trades = not any(checks_all)
+
+        # CIRCUIT BREAKER: Check cumulative P&L AFTER position confirmation
         total_pnl, pnl_pct = _calculate_cumulative_pnl(signal_positive_ticker, signal_negative_ticker)
         max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
         
@@ -259,17 +270,6 @@ if __name__ == "__main__":
             save_status(status_dict)
             close_all_positions(0)
             break
-
-        # Pause - protect API
-        time.sleep(3)
-
-        # Check if open trades already exist
-        is_p_ticker_open = open_position_confirmation(signal_positive_ticker)
-        is_n_ticker_open = open_position_confirmation(signal_negative_ticker)
-        is_p_ticker_active = active_position_confirmation(signal_positive_ticker)
-        is_n_ticker_active = active_position_confirmation(signal_negative_ticker)
-        checks_all = [is_p_ticker_open, is_n_ticker_open, is_p_ticker_active, is_n_ticker_active]
-        is_manage_new_trades = not any(checks_all)
 
         # Save status
         status_dict["message"] = "Initial checks made..."

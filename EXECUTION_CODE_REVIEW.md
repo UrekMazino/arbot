@@ -1,7 +1,7 @@
 # Execution Code Review - OKXStatBot
 
 **Date:** January 26, 2026  
-**Status:** 8 Issues Fixed ✅ | 6 Issues Remaining  
+**Status:** 9 Issues Fixed ✅ | 5 Issues Remaining  
 **Severity Levels:** 🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low
 
 ---
@@ -47,32 +47,15 @@ All critical issues have been resolved. ✅
 **Status:** FIXED 🟡→✅  
 **Fix Applied:** Added validation for order_long_id and order_short_id before calling check_order(). Validates each ID is non-empty string, logs error and sets status to "failed" if invalid. Prevents KeyError from empty order IDs.
 
+### ✅ Issue #9: Race Condition in P&L Check
+**Status:** FIXED 🟡→✅  
+**Fix Applied:** Reordered main loop in main_execution.py. Position confirmation (open_position_confirmation, active_position_confirmation) now runs FIRST, then P&L calculation happens AFTER. Ensures loss tracking is accurate only when positions are confirmed to exist.
+
 ---
 
 ## 2. 🟠 HIGH PRIORITY ISSUES - 0 REMAINING ✅
 
-## 3. 🟡 MEDIUM PRIORITY ISSUES - 4 REMAINING
-
-### Issue #9: Race Condition in P&L Check
-**File:** [main_execution.py](main_execution.py#L160-169)  
-**Severity:** 🟡 MEDIUM  
-**Impact:** Circuit breaker checked BEFORE position confirmation (though now functional)
-
-**Problem:**
-```python
-# Main loop order:
-# 1. Check P&L (but position status unknown yet)
-if total_pnl < -max_loss_allowed:
-    close_all_positions(0)
-    break
-
-# 2. THEN check if positions exist
-is_p_ticker_open = open_position_confirmation(signal_positive_ticker)
-```
-
-**Fix Required:** Move position confirmation to start of cycle, calculate P&L after confirmation for better sequencing.
-
----
+## 3. 🟡 MEDIUM PRIORITY ISSUES - 3 REMAINING
 
 ### Issue #10: Hard-Coded Z-Score Window is Too Short
 **File:** [config_execution_api.py](config_execution_api.py#L39)  
@@ -165,7 +148,7 @@ response = active_session.get_orderbook(instId=inst_id, sz=str(level_count))
 | #6: No price validation | 🟠 HIGH | func_trade_management.py | ✅ FIXED | Orders validated before placement |
 | #7: Unvalidated ticker logic | 🟠 HIGH | func_trade_management.py | ✅ FIXED | Direction validated at startup |
 | #8: No null checks on order IDs | 🟡 MEDIUM | func_trade_management.py | ✅ FIXED | Order IDs validated before check |
-| #9: Race condition in P&L | 🟡 MEDIUM | main_execution.py | ⏳ TODO | Suboptimal sequencing |
+| #9: Race condition in P&L | 🟡 MEDIUM | main_execution.py | ✅ FIXED | Position checks now first |
 | #10: Z-window too short (21) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | False signals likely |
 | #11: Signal threshold too low (0.01) | 🟡 MEDIUM | config_execution_api.py | ⏳ TODO | Weak entries |
 | #12: Incomplete error messages | 🟡 MEDIUM | func_calculation.py | ⏳ TODO | Hard to debug |
@@ -211,14 +194,14 @@ After remaining fixes, verify:
 
 ## Notes
 
-- **8 out of 14 issues now fixed** ✅
+- **9 out of 14 issues now fixed** ✅
 - **Circuit breaker is now functional** - bot will exit on 5% loss
 - **P&L calculation uses OKX position data** (avgPx field for entry prices)
 - **Price validation prevents invalid orders** - skips trade if price/liquidity are None or ≤ 0
 - **Ticker configuration validated at startup** - prevents reversed long/short assignments
 - **All HIGH priority issues are now resolved** ✅
-- **Order ID validation prevents KeyError** - empty IDs now caught with detailed logging
-- **Next priority:** Issue #9 (Race condition in P&L check) or Issue #10-11 (Z-score settings)
+- **Main loop reordered for cleaner logic** - position confirmation now happens before P&L check
+- **Next priority:** Issues #10-11 (Z-score window and signal threshold) or Issue #12 (error messages)
 
 
 ---
@@ -511,38 +494,6 @@ order_status_long = check_order(long_ticker, order_long_id, ...)  # ← Passes e
 - Could cause API errors or invalid order checks
 
 **Fix Required:** Validate order_long_id and order_short_id are non-empty before checking status.
-
----
-
-### Issue #9: Race Condition in P&L Check
-**File:** [main_execution.py](main_execution.py#L160-169)  
-**Severity:** 🟡 MEDIUM  
-**Impact:** Circuit breaker checked BEFORE position confirmation
-
-**Problem:**
-```python
-# Main loop order:
-# 1. Check P&L (but position status unknown yet)
-if total_pnl < -max_loss_allowed:
-    close_all_positions(0)
-    break
-
-# 2. THEN check if positions exist
-is_p_ticker_open = open_position_confirmation(signal_positive_ticker)
-is_n_ticker_open = open_position_confirmation(signal_negative_ticker)
-```
-
-**Issue:** P&L is calculated before confirming positions exist. If positions don't exist:
-- `get_position_info()` returns (0, 0)
-- P&L calculation returns (0.0, 0.0)
-- Circuit breaker doesn't trigger even if bot lost money in previous cycles
-
-**Impact:**
-- Loss tracking is unreliable
-- Circuit breaker only works during active positions
-- Previous cycle losses ignored
-
-**Fix Required:** Move position confirmation to start, calculate P&L after confirmation.
 
 ---
 

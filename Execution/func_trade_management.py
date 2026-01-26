@@ -126,6 +126,31 @@ def manage_new_trades(kill_switch):
         avg_liquidity_ticker_p, last_price_p = get_ticker_trade_liquidity(signal_positive_ticker)
         avg_liquidity_ticker_n, last_price_n = get_ticker_trade_liquidity(signal_negative_ticker)
 
+        # VALIDATION: Check prices and liquidity are valid
+        if (last_price_p is None or last_price_p <= 0 or avg_liquidity_ticker_p is None or avg_liquidity_ticker_p <= 0):
+            logger.error(
+                "❌ Invalid price data for %s: price=%.4f liquidity=%.6f - Skipping trade",
+                signal_positive_ticker,
+                last_price_p or 0,
+                avg_liquidity_ticker_p or 0,
+            )
+            return kill_switch
+        
+        if (last_price_n is None or last_price_n <= 0 or avg_liquidity_ticker_n is None or avg_liquidity_ticker_n <= 0):
+            logger.error(
+                "❌ Invalid price data for %s: price=%.4f liquidity=%.6f - Skipping trade",
+                signal_negative_ticker,
+                last_price_n or 0,
+                avg_liquidity_ticker_n or 0,
+            )
+            return kill_switch
+        
+        logger.debug(
+            "✓ Price validation passed: %s price=%.4f liq=%.6f, %s price=%.4f liq=%.6f",
+            signal_positive_ticker, last_price_p, avg_liquidity_ticker_p,
+            signal_negative_ticker, last_price_n, avg_liquidity_ticker_n,
+        )
+
             # Determine long ticker vs short ticker liquidity ratio
         if signal_sign_positive:
             long_ticker = signal_positive_ticker

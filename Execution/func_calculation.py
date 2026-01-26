@@ -11,6 +11,9 @@ from config_execution_api import (
 
 logger = logging.getLogger(__name__)
 
+# Fee/slippage buffer: OKX taker ~0.05% + slippage ~0.02% = 0.07% round-trip
+FEE_SLIPPAGE_BUFFER_PCT = 0.0007
+
 
 def _extract_symbol(orderbook_data):
     """Extract instrument ID from orderbook payload."""
@@ -101,11 +104,16 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
     best_ask = min(ask_prices)
 
     if direction.lower() == "long":
-        entry_price = best_bid
+        # For LONG: add fee buffer to entry price (worse entry, better safety)
+        # This accounts for taker fee (0.05%) + slippage (0.02%) = 0.07%
+        entry_price = best_bid * (1 + FEE_SLIPPAGE_BUFFER_PCT)
         stop_loss = round(entry_price * (1 - stop_loss_fail_safe), price_roundings)
+        logger.info(f"Long entry fee buffer applied: {best_bid:.2f} -> {entry_price:.2f} (+{FEE_SLIPPAGE_BUFFER_PCT*100:.3f}%)")
     else:
-        entry_price = best_ask
+        # For SHORT: subtract fee buffer from entry price (worse entry, better safety)
+        entry_price = best_ask * (1 - FEE_SLIPPAGE_BUFFER_PCT)
         stop_loss = round(entry_price * (1 + stop_loss_fail_safe), price_roundings)
+        logger.info(f"Short entry fee buffer applied: {best_ask:.2f} -> {entry_price:.2f} (-{FEE_SLIPPAGE_BUFFER_PCT*100:.3f}%)")
 
     if entry_price > 0:
         # Note: For OKX SWAP, sz is usually number of contracts. 

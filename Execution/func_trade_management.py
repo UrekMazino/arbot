@@ -12,6 +12,29 @@ from config_execution_api import stop_loss_fail_safe
 ZSCORE_HARD_STOP = 2.5  # Hard stop-loss if Z-score exceeds this (regime break detection)
 ZSCORE_EXIT_TARGET = 0.05  # Exit at mean reversion with small buffer for fees (~0.07% round-trip)
 RISK_PER_TRADE_PCT = 0.02  # 2% of total capital risked per trade
+
+"""
+MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
+==========================================
+
+Entry point: kill_switch = 0 (ACTIVE)
+
+Exit conditions (all set kill_switch = 1 or 2):
+----------------------------------------------
+
+kill_switch = 1: Orders placed, enter monitoring phase
+  → Returned when both entry orders successfully placed
+  → Signals main_execution to call close_all_positions()
+
+kill_switch = 2: Final stop, close everything
+  → Hard stop triggered (Z > ±2.5): regime break detected
+  → Signal flip: Z-score changed sign unexpectedly
+  → Cointegration lost: p_value >= 0.05 during trade
+  → Mean reversion complete: Z < 0.05 (profit taken)
+  → Returns to main_execution which exits loop
+
+All transitions are logged with timestamps and context.
+"""
 from func_price_calls import get_ticker_trade_liquidity
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import initialise_order_execution
@@ -36,6 +59,32 @@ if not logger.handlers:
 
 # Manage new trade assessment and order placing
 def manage_new_trades(kill_switch):
+    """
+    Manage trade entry, monitoring, and exit.
+    
+    INPUT: kill_switch (expected: 0 = ACTIVE)
+    
+    FLOW:
+    -----
+    1. Get latest Z-score and check cointegration (p_value < 0.05)
+    2. If cointegration fails → return 0 (no trade)
+    3. If Z-score extreme AND cointegration valid → place orders
+    4. Monitor orders and Z-score in real-time
+    5. Exit conditions checked continuously:
+       - Hard stop (Z > ±2.5) → kill_switch = 2
+       - Signal flip → kill_switch = 2
+       - Cointegration lost → kill_switch = 2
+       - Mean reversion (Z ≈ 0.05) → kill_switch = 2
+       - Both orders placed → kill_switch = 1
+    
+    RETURN:
+    -------
+    kill_switch: 0 (no trade), 1 (orders placed), or 2 (stop)
+    
+    LOGGING:
+    --------
+    All state changes, entries, exits, and stop triggers are logged with timestamps.
+    """
 
     # Set variables
     order_long_id = ""

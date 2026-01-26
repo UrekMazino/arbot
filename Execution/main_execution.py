@@ -48,6 +48,46 @@ def _set_leverage_for_ticker(ticker, leverage):
     set_leverage(ticker, leverage)
 
 
+"""
+KILL_SWITCH STATE MACHINE DOCUMENTATION
+========================================
+
+kill_switch is a control state variable that manages the bot's execution flow.
+All transitions are deterministic and logged.
+
+States:
+-------
+0 = ACTIVE: Normal operation, seeking trades and monitoring positions
+1 = CLOSING: Orders placed or monitoring complete; waiting for positions to close
+2 = STOP: Final exit signal; close all remaining positions and exit
+
+State Transitions (deterministic):
+----------------------------------
+0 → 0: Normal cycle, no signal or cointegration failed
+        → returns 0 to main_execution
+
+0 → 1: Hot trigger activated + cointegration valid + Z-score extreme
+        → manage_new_trades() returns 1 after placing orders
+        → main_execution sees 1, calls close_all_positions()
+
+1 → 2: Close operation complete
+        → close_all_positions() returns 2
+        → circuit breaker also returns 2
+        → hard stop/regime break also returns 2
+        → main_execution exits loop
+
+Triggers for state changes:
+---------------------------
+0 → 1:  Signal detected (Z-score > threshold, cointegration valid)
+1 → 2:  • Orders fully monitored/closed
+         • Circuit breaker (P&L drawdown > 5%)
+         • Hard stop (Z-score > ±2.5)
+         • Signal flip (Z-score sign changes)
+         • Cointegration lost during trade
+         • Mean reversion complete (Z ≈ 0.05)
+"""
+
+
 def _calculate_cumulative_pnl(ticker_p, ticker_n):
     """
     Calculate cumulative P&L from both open positions.

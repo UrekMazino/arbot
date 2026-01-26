@@ -3,7 +3,9 @@ from scipy.stats import false_discovery_control
 from config_execution_api import account_session
 from config_execution_api import signal_positive_ticker
 from config_execution_api import signal_negative_ticker
-from config_execution_api import signal_trigger_thresh
+from config_execution_api import ENTRY_Z
+from config_execution_api import EXIT_Z
+from config_execution_api import MIN_PERSIST_BARS
 from config_execution_api import tradeable_capital_usdt
 from config_execution_api import limit_order_basis
 from config_execution_api import stop_loss_fail_safe
@@ -57,6 +59,63 @@ if not logger.handlers:
     logger.addHandler(fh)
     logger.setLevel(logging.INFO)
 
+# Issue #11 Fix: Signal generation with persistence requirement and professional thresholds
+def generate_signal(z_history, cointegration_ok, in_position):
+    """
+    Generate trading signals with persistence requirement to prevent flash trades.
+    
+    Implements professional-grade entry/exit logic:
+    - ENTRY_Z = 2.0: Requires Z-score at ±2.0 (2 std deviations from mean)
+    - EXIT_Z = 0.5: Exit when Z-score reverts toward ±0.5
+    - MIN_PERSIST_BARS = 3: Require signal to persist for 3 bars (3 minutes @ 1m candles)
+    
+    Parameters:
+        z_history (list): Full history of Z-score values
+        cointegration_ok (int): 1 if cointegrated, 0 otherwise
+        in_position (bool): Current position status
+    
+    Returns:
+        (signal, reason): Tuple of (signal_str, reason_str)
+            signal: "BUY_SPREAD", "SELL_SPREAD", "EXIT", or None
+            reason: Descriptive string for logging
+    """
+    if not z_history:
+        return None, "No z-score data available"
+    
+    current_z = z_history[-1]
+    
+    # Hard gate: No trade if cointegration is invalid
+    if cointegration_ok != 1:
+        return None, "No trade - cointegration invalid"
+    
+    # ENTRY LOGIC
+    if not in_position:
+        # Check if Z-score has persisted at extreme level for MIN_PERSIST_BARS bars
+        if len(z_history) >= MIN_PERSIST_BARS:
+            recent_zscores = z_history[-MIN_PERSIST_BARS:]
+            all_extreme = all(abs(z) >= ENTRY_Z for z in recent_zscores)
+            
+            if all_extreme:
+                # Determine direction based on current Z-score
+                if current_z <= -ENTRY_Z:
+                    return "BUY_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at -ENTRY_Z (oversold, bars={MIN_PERSIST_BARS})"
+                elif current_z >= ENTRY_Z:
+                    return "SELL_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at +ENTRY_Z (overbought, bars={MIN_PERSIST_BARS})"
+            else:
+                return None, f"No entry - Z-score not persistent (need {MIN_PERSIST_BARS} bars, got recent avg={abs(sum(recent_zscores)/len(recent_zscores)):.4f})"
+        else:
+            return None, f"Insufficient history: {len(z_history)} bars < {MIN_PERSIST_BARS} required"
+    
+    # EXIT LOGIC
+    if in_position:
+        if abs(current_z) <= EXIT_Z:
+            return "EXIT", f"Exit signal: Z={current_z:.4f} reverted to EXIT_Z threshold ({EXIT_Z})"
+        else:
+            return None, f"Hold position - Z={current_z:.4f} still beyond EXIT_Z ({EXIT_Z})"
+    
+    return None, "No signal generated"
+
+
 # Manage new trade assessment and order placing
 def manage_new_trades(kill_switch):
     """
@@ -108,12 +167,13 @@ def manage_new_trades(kill_switch):
         logger.warning("Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading")
         return kill_switch
     
-    # Switch to hot if meets signal threshold AND cointegration is valid
-    if abs(latest_zscore) >= signal_trigger_thresh:
-
+    # Issue #11 Fix: Apply professional signal generation with persistence requirement
+    signal, reason = generate_signal(valid_zscores, coint_flag, in_position=False)
+    
+    if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
         # Activate hot trigger
         hot = True
-        msg = f"Hot trigger activated: {signal_sign_positive} @ {latest_zscore:.4f}"
+        msg = f"Hot trigger activated: {signal} @ Z={latest_zscore:.4f} - {reason}"
         print(msg)
         logger.info(msg)
         print("Placing and monitoring existing orders...")
@@ -370,7 +430,8 @@ def manage_new_trades(kill_switch):
                 # Log zscore update
                 logger.info("Z-score update: %.4f", latest_zscore)
 
-                if abs(latest_zscore) > signal_trigger_thresh * 0.9 and signal_sign_positive_new == signal_sign_positive:
+                # Check if Z-score still supports the position (within 90% of entry threshold)
+                if abs(latest_zscore) > ENTRY_Z * 0.9 and signal_sign_positive_new == signal_sign_positive:
 
                     # Check long order status
                     if count_long == 1:
@@ -431,18 +492,22 @@ def manage_new_trades(kill_switch):
     if kill_switch == 1:
         """
         Exit when mean reversion is complete:
-        - Positive signal: Z-score has reverted near zero (exit target)
-        - Negative signal: Z-score has reverted to near zero from below
+        - Uses EXIT_Z threshold for professional mean reversion exit
+        - Issue #11 Fix: Changed from 0.05 to EXIT_Z=0.5 for better risk/reward
         
-        This captures the full arbitrage profit while accounting for fees (~0.07% round-trip)
+        This captures the arbitrage profit with professional mean reversion target
+        while accounting for fees (~0.07% round-trip)
         """
-        if signal_side == "positive" and latest_zscore < ZSCORE_EXIT_TARGET:
-            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} < {ZSCORE_EXIT_TARGET}): Taking profit"
+        # Issue #11 Fix: Apply professional exit logic with EXIT_Z threshold
+        if latest_zscore < -EXIT_Z or (signal_side == "positive" and latest_zscore < EXIT_Z):
+            # For positive signal (short spread): exit when Z-score reverts from positive
+            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} approaching mean): Taking profit"
             print(msg)
             logger.info(msg)
             kill_switch = 2
-        elif signal_side == "negative" and latest_zscore > -ZSCORE_EXIT_TARGET:
-            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} > {-ZSCORE_EXIT_TARGET}): Taking profit"
+        elif latest_zscore > EXIT_Z or (signal_side == "negative" and latest_zscore > -EXIT_Z):
+            # For negative signal (long spread): exit when Z-score reverts from negative
+            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} approaching mean): Taking profit"
             print(msg)
             logger.info(msg)
             kill_switch = 2

@@ -35,12 +35,20 @@ rounding_ticker_1 = 1
 rounding_ticker_2 = 2
 quantity_rounding_ticker_1 = 4
 quantity_rounding_ticker_2 = 3
-z_score_window = 100  # Z-score calculation window (100 x 1m candles = ~100 minutes / ~1.67 hours)
-                      # This provides better statistical validity for cointegration test (ADF requires 40+ obs)
-                      # While still maintaining responsiveness for 1m high-frequency trading
+z_score_window = 21  # Z-score calculation window (21 x 1m candles = ~21 minutes)
+                     # 21 bars is valid for 1m high-frequency data when:
+                     # - Used only for entry timing (not sole cointegration validation)
+                     # - Cointegration validated separately on sufficient window
+                     # - Regime filter or other validation exists
 limit_order_basis = True  # Place entries with limit orders when True.
 tradeable_capital_usdt = 2000  # Total tradeable capital to split across pairs.
-signal_trigger_thresh = 0.01  # Signal trigger threshold for long and short positions.1  # Z-score threshold for triggering signals. This should not be a fixed value, the should vary according to volatility.
+
+# SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
+ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
+EXIT_Z = 0.5  # Exit when Z-score reverts toward ±0.5 (mean reversion achieved)
+MIN_PERSIST_BARS = 3  # Require signal to persist for 3 bars before entering (3 minutes @ 1m)
+                      # Prevents flash trades and confirms conviction in the spread divergence
+
 max_drawdown_pct = 0.05  # Circuit breaker: exit if cumulative loss exceeds 5% of capital
 
 # ENVIRONMENT SETTINGS

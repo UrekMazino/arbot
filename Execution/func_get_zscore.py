@@ -1,5 +1,7 @@
 import math
 import warnings
+import threading
+import time
 
 import numpy as np
 import pandas as pd
@@ -20,6 +22,39 @@ def _compute_zscore(spread, window):
     return zscore.astype(float).values
 
 
+# Issue #14 Fix: API timeout protection
+def _get_orderbook_with_timeout(session, inst_id, level_count, timeout=5):
+    """
+    Fetch orderbook with timeout protection to prevent indefinite hangs.
+    
+    Args:
+        session: OKX market session
+        inst_id: Instrument ID
+        level_count: Number of orderbook levels
+        timeout: Timeout in seconds (default 5)
+    
+    Returns:
+        dict: Orderbook response or None if timeout/error
+    """
+    result = [None]  # Use list to store result from thread
+    
+    def fetch():
+        try:
+            result[0] = session.get_orderbook(instId=inst_id, sz=str(level_count))
+        except Exception as e:
+            result[0] = None
+    
+    thread = threading.Thread(target=fetch, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    
+    if thread.is_alive():
+        # Timeout occurred
+        return None
+    
+    return result[0]
+
+
 def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
     if not inst_id:
         return None
@@ -32,10 +67,11 @@ def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
     if level_count <= 0:
         level_count = depth
 
-    try:
-        response = active_session.get_orderbook(instId=inst_id, sz=str(level_count))
-    except Exception as exc:
-        print(f"ERROR: Failed to fetch orderbook for {inst_id}: {exc}")
+    # Issue #14 Fix: Use timeout-protected API call (5 second timeout)
+    response = _get_orderbook_with_timeout(active_session, inst_id, level_count, timeout=5)
+    
+    if response is None:
+        print(f"ERROR: Failed to fetch orderbook for {inst_id}: timeout or connection error")
         return None
 
     if response.get("code") != "0":

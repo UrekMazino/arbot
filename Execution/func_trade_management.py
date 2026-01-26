@@ -400,18 +400,21 @@ def manage_new_trades(kill_switch):
                 
                 # Check cointegration validity during monitoring
                 if coint_flag_new != 1:
-                    logger.warning("Cointegration lost during trade (p_value >= 0.05): Closing position")
+                    # Issue #13 Fix: Log kill-switch transition with trigger reason
+                    msg = "🔴 KILL-SWITCH TRIGGERED: Cointegration lost during trade (p_value >= 0.05)"
+                    logger.error(msg)
+                    print(msg)
                     account_session.cancel_orders(inst_id=signal_positive_ticker)
                     account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
                     break
 
                 # HARD STOP-LOSS: Regime break detection (Z-score too extreme = cointegration failed)
-                # HARD STOP-LOSS: Regime break detection (Z-score too extreme = cointegration failed)
                 if abs(latest_zscore) > ZSCORE_HARD_STOP:
-                    msg = f"⚠️  REGIME BREAK DETECTED: Z-score={latest_zscore:.4f} exceeded hard stop {ZSCORE_HARD_STOP}"
+                    # Issue #13 Fix: Log kill-switch transition with specific trigger
+                    msg = f"🔴 KILL-SWITCH TRIGGERED: Regime break detected - Z-score={latest_zscore:.4f} exceeded hard stop {ZSCORE_HARD_STOP}"
+                    logger.error(msg)
                     print(msg)
-                    logger.warning(msg)
                     account_session.cancel_orders(inst_id=signal_positive_ticker)
                     account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
@@ -419,9 +422,10 @@ def manage_new_trades(kill_switch):
 
                 # SIGNAL DIRECTION FLIP: If Z-score flips sign unexpectedly, close immediately
                 elif signal_sign_positive_new != signal_sign_positive:
-                    msg = f"⚠️  SIGNAL FLIPPED: Expected {signal_sign_positive}, got {signal_sign_positive_new}"
+                    # Issue #13 Fix: Log kill-switch transition with signal flip details
+                    msg = f"🔴 KILL-SWITCH TRIGGERED: Signal direction flip - expected sign={signal_sign_positive}, got {signal_sign_positive_new}"
+                    logger.error(msg)
                     print(msg)
-                    logger.warning(msg)
                     account_session.cancel_orders(inst_id=signal_positive_ticker)
                     account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
@@ -501,13 +505,15 @@ def manage_new_trades(kill_switch):
         # Issue #11 Fix: Apply professional exit logic with EXIT_Z threshold
         if latest_zscore < -EXIT_Z or (signal_side == "positive" and latest_zscore < EXIT_Z):
             # For positive signal (short spread): exit when Z-score reverts from positive
-            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} approaching mean): Taking profit"
-            print(msg)
+            # Issue #13 Fix: Log kill-switch transition with exit trigger
+            msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
             logger.info(msg)
+            print(msg)
             kill_switch = 2
         elif latest_zscore > EXIT_Z or (signal_side == "negative" and latest_zscore > -EXIT_Z):
             # For negative signal (long spread): exit when Z-score reverts from negative
-            msg = f"✅ Mean reversion complete (Z={latest_zscore:.4f} approaching mean): Taking profit"
-            print(msg)
+            # Issue #13 Fix: Log kill-switch transition with exit trigger
+            msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
             logger.info(msg)
+            print(msg)
             kill_switch = 2

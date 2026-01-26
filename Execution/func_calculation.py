@@ -74,7 +74,9 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
 
     bids, asks = _extract_sides(orderbook_data)
     if not bids or not asks:
-        logger.warning("No bids or asks found in orderbook data.")
+        # Issue #12 Fix: Add symbol, direction, and capital context for better debugging
+        symbol = _extract_symbol(orderbook_data)
+        logger.warning(f"❌ No bids or asks in orderbook: symbol={symbol}, direction={direction}, capital={capital:.2f} USDT")
         return entry_price, quantity, stop_loss
 
     symbol = _extract_symbol(orderbook_data)
@@ -96,7 +98,8 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
     ask_prices = _extract_prices(asks)
     
     if not bid_prices or not ask_prices:
-        logger.warning(f"Could not extract prices for {symbol}.")
+        # Issue #12 Fix: Add direction and capital context to price extraction error
+        logger.warning(f"❌ Could not extract prices: symbol={symbol}, direction={direction}, capital={capital:.2f} USDT, bid_count={len(bid_prices)}, ask_count={len(ask_prices)}")
         return entry_price, quantity, stop_loss
 
     # Maker strategy: Buy at bid, Sell at ask

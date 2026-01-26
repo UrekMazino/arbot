@@ -2355,3 +2355,112 @@ task: <Task pending name='Task-4' coro=<OKXOrderbookStream._send_heartbeat() don
 2026-01-26 12:06:08,675 ERROR Error calculating P&L: cannot import name 'get_account_balance' from 'func_position_calls' (c:\Users\jcvia\PyCharmMiscProject\OKXStatBot\Execution\func_position_calls.py)
 2026-01-26 12:06:12,080 ERROR Error calculating P&L: cannot import name 'get_account_balance' from 'func_position_calls' (c:\Users\jcvia\PyCharmMiscProject\OKXStatBot\Execution\func_position_calls.py)
 2026-01-26 12:06:15,481 ERROR Error calculating P&L: cannot import name 'get_account_balance' from 'func_position_calls' (c:\Users\jcvia\PyCharmMiscProject\OKXStatBot\Execution\func_position_calls.py)
+2026-01-26 12:15:49,132 INFO Hot trigger activated: True @ 0.3127
+2026-01-26 12:15:49,133 INFO Placing and monitoring existing orders...
+2026-01-26 12:15:49,338 WARNING Position size (1333.33 per side) would exceed total capital. Reducing to 50/50 split.
+2026-01-26 12:15:49,338 INFO Position sizing (2% RISK RULE): total_capital=2000.00 risk_usdt=40.00 stop_loss_pct=3.00% position_per_side=1000.00 long=1000.00 short=1000.00
+2026-01-26 12:15:49,338 INFO Liquidity check: long_target=2083.59 short_target=150.37 liquidity_long=3591.1600 liquidity_short=246.1400
+2026-01-26 12:15:49,874 INFO Placed long entry: id=3251375780425326592 capital=150.37 remaining=849.63
+2026-01-26 12:15:50,314 INFO Placed short entry: id=3251375795424157696 capital=150.37 remaining=849.63
+2026-01-26 12:15:50,314 INFO Both orders placed. Long: placed, Short: placed
+2026-01-26 12:15:50,893 INFO Cumulative P&L: 0.04 USDT (0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:15:54,868 INFO Cumulative P&L: 0.01 USDT (0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:15:58,829 INFO Cumulative P&L: 1.27 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:16:02,802 INFO Cumulative P&L: 1.27 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:16:06,790 INFO Cumulative P&L: 0.63 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:16:10,787 INFO Cumulative P&L: 0.04 USDT (0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:16:14,759 INFO Cumulative P&L: 1.27 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:16:18,744 INFO Cumulative P&L: 1.29 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:16:22,730 INFO Cumulative P&L: 0.65 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:16:26,718 INFO Cumulative P&L: -0.19 USDT (-0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:16:30,701 INFO Cumulative P&L: 1.06 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:16:34,687 INFO Cumulative P&L: 0.42 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:16:38,682 INFO Cumulative P&L: 0.42 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:16:42,664 INFO Cumulative P&L: 0.37 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:16:46,649 INFO Cumulative P&L: -0.19 USDT (-0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:16:50,634 INFO Cumulative P&L: 0.45 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:16:54,605 INFO Cumulative P&L: 1.01 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:16:58,583 INFO Cumulative P&L: 1.11 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:17:02,557 INFO Cumulative P&L: -0.12 USDT (-0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:17:06,524 INFO Cumulative P&L: 0.50 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:17:10,508 INFO Cumulative P&L: 0.50 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:17:14,485 INFO Cumulative P&L: 0.62 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:17:18,453 INFO Cumulative P&L: 0.67 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:17:22,432 INFO Cumulative P&L: 0.64 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:17:26,398 INFO Cumulative P&L: 1.19 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:17:30,370 INFO Cumulative P&L: 0.03 USDT (0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:17:34,325 INFO Cumulative P&L: 0.77 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:17:38,302 INFO Cumulative P&L: 2.03 USDT (0.10%) | Threshold: -100.00 USDT
+2026-01-26 12:17:42,295 INFO Cumulative P&L: -0.59 USDT (-0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:17:46,263 INFO Cumulative P&L: 0.15 USDT (0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:17:50,232 INFO Cumulative P&L: 1.28 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:17:54,219 INFO Cumulative P&L: 1.28 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:17:58,204 INFO Cumulative P&L: 0.66 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:18:02,166 INFO Cumulative P&L: 0.57 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:18:06,150 INFO Cumulative P&L: -0.02 USDT (-0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:18:10,140 INFO Cumulative P&L: 1.25 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:18:14,097 INFO Cumulative P&L: 0.61 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:18:18,077 INFO Cumulative P&L: 1.18 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:18:22,049 INFO Cumulative P&L: 0.93 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:18:26,041 INFO Cumulative P&L: 0.95 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:18:29,999 INFO Cumulative P&L: 2.48 USDT (0.12%) | Threshold: -100.00 USDT
+2026-01-26 12:18:33,961 INFO Cumulative P&L: 0.76 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:18:37,950 INFO Cumulative P&L: 0.23 USDT (0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:18:41,913 INFO Cumulative P&L: 0.68 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:18:45,893 INFO Cumulative P&L: 0.78 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:18:49,861 INFO Cumulative P&L: 1.29 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:18:53,847 INFO Cumulative P&L: 1.17 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:18:57,828 INFO Cumulative P&L: 1.29 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:19:01,812 INFO Cumulative P&L: 0.56 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:19:05,797 INFO Cumulative P&L: 1.76 USDT (0.09%) | Threshold: -100.00 USDT
+2026-01-26 12:19:09,765 INFO Cumulative P&L: 1.37 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:19:13,754 INFO Cumulative P&L: 0.63 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:19:17,742 INFO Cumulative P&L: 1.22 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:19:21,717 INFO Cumulative P&L: 1.22 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:19:25,675 INFO Cumulative P&L: 0.60 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:19:29,640 INFO Cumulative P&L: 0.65 USDT (0.03%) | Threshold: -100.00 USDT
+2026-01-26 12:19:33,615 INFO Cumulative P&L: 0.86 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:19:37,600 INFO Cumulative P&L: 1.17 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:19:41,564 INFO Cumulative P&L: 0.91 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:19:45,533 INFO Cumulative P&L: 1.52 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:19:49,536 INFO Cumulative P&L: 1.55 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:19:53,488 INFO Cumulative P&L: -0.29 USDT (-0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:19:57,471 INFO Cumulative P&L: 0.93 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:20:01,454 INFO Cumulative P&L: 0.76 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:20:05,432 INFO Cumulative P&L: 0.24 USDT (0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:20:09,423 INFO Cumulative P&L: 0.79 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:20:13,407 INFO Cumulative P&L: 1.38 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:20:17,386 INFO Cumulative P&L: 1.94 USDT (0.10%) | Threshold: -100.00 USDT
+2026-01-26 12:20:21,368 INFO Cumulative P&L: 1.18 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:20:25,339 INFO Cumulative P&L: 0.84 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:20:29,318 INFO Cumulative P&L: 1.33 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:20:33,286 INFO Cumulative P&L: 0.12 USDT (0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:20:37,245 INFO Cumulative P&L: 1.71 USDT (0.09%) | Threshold: -100.00 USDT
+2026-01-26 12:20:41,216 INFO Cumulative P&L: 1.59 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:20:45,210 INFO Cumulative P&L: 0.41 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:20:49,188 INFO Cumulative P&L: 0.72 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:20:53,148 INFO Cumulative P&L: 0.97 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:20:57,145 INFO Cumulative P&L: 0.31 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:21:01,122 INFO Cumulative P&L: 1.51 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:21:05,071 INFO Cumulative P&L: 1.69 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:21:09,062 INFO Cumulative P&L: 0.41 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:21:13,056 INFO Cumulative P&L: 1.02 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:21:17,024 INFO Cumulative P&L: 1.61 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:21:20,987 INFO Cumulative P&L: 2.58 USDT (0.13%) | Threshold: -100.00 USDT
+2026-01-26 12:21:24,992 INFO Cumulative P&L: 1.02 USDT (0.05%) | Threshold: -100.00 USDT
+2026-01-26 12:21:28,977 INFO Cumulative P&L: 0.84 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:21:32,952 INFO Cumulative P&L: 1.61 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:21:36,926 INFO Cumulative P&L: 1.71 USDT (0.09%) | Threshold: -100.00 USDT
+2026-01-26 12:21:40,909 INFO Cumulative P&L: 1.38 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:21:44,888 INFO Cumulative P&L: 0.43 USDT (0.02%) | Threshold: -100.00 USDT
+2026-01-26 12:21:48,856 INFO Cumulative P&L: 1.15 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:21:52,849 INFO Cumulative P&L: -0.21 USDT (-0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:21:56,819 INFO Cumulative P&L: 1.54 USDT (0.08%) | Threshold: -100.00 USDT
+2026-01-26 12:22:00,815 INFO Cumulative P&L: 1.42 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:22:04,796 INFO Cumulative P&L: 0.80 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:22:08,765 INFO Cumulative P&L: 0.78 USDT (0.04%) | Threshold: -100.00 USDT
+2026-01-26 12:22:12,713 INFO Cumulative P&L: 0.19 USDT (0.01%) | Threshold: -100.00 USDT
+2026-01-26 12:22:16,703 INFO Cumulative P&L: 1.25 USDT (0.06%) | Threshold: -100.00 USDT
+2026-01-26 12:22:20,671 INFO Cumulative P&L: 1.42 USDT (0.07%) | Threshold: -100.00 USDT
+2026-01-26 12:22:24,674 INFO Cumulative P&L: -0.04 USDT (-0.00%) | Threshold: -100.00 USDT
+2026-01-26 12:22:28,632 INFO Cumulative P&L: 2.59 USDT (0.13%) | Threshold: -100.00 USDT

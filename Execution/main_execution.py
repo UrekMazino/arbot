@@ -14,6 +14,8 @@ from config_execution_api import (
     signal_positive_ticker,
     tradeable_capital_usdt,
     max_drawdown_pct,
+    ticker_1,
+    ticker_2,
 )
 from func_position_calls import open_position_confirmation, active_position_confirmation
 from func_trade_management import manage_new_trades
@@ -33,6 +35,60 @@ if not logger.handlers:
     fh.setFormatter(fmt)
     logger.addHandler(fh)
     logger.setLevel(logging.INFO)
+
+
+def _validate_ticker_configuration():
+    """
+    Validate ticker configuration at bot startup.
+    Ensures signal_positive_ticker and signal_negative_ticker are properly configured
+    and distinct to prevent reversed long/short assignments.
+    
+    Raises:
+        AssertionError: If configuration is invalid
+    """
+    # Check tickers are configured
+    assert ticker_1 and isinstance(ticker_1, str), (
+        f"❌ STARTUP ERROR: ticker_1 must be non-empty string. Got: {ticker_1}"
+    )
+    assert ticker_2 and isinstance(ticker_2, str), (
+        f"❌ STARTUP ERROR: ticker_2 must be non-empty string. Got: {ticker_2}"
+    )
+    
+    # Check tickers are different
+    assert ticker_1 != ticker_2, (
+        f"❌ STARTUP ERROR: ticker_1 and ticker_2 must be different. Both are: {ticker_1}"
+    )
+    
+    # Check signal tickers are configured
+    assert signal_positive_ticker and isinstance(signal_positive_ticker, str), (
+        f"❌ STARTUP ERROR: signal_positive_ticker must be non-empty string. Got: {signal_positive_ticker}"
+    )
+    assert signal_negative_ticker and isinstance(signal_negative_ticker, str), (
+        f"❌ STARTUP ERROR: signal_negative_ticker must be non-empty string. Got: {signal_negative_ticker}"
+    )
+    
+    # Check signal tickers are different
+    assert signal_positive_ticker != signal_negative_ticker, (
+        f"❌ STARTUP ERROR: signal_positive_ticker and signal_negative_ticker must be different. "
+        f"Both are: {signal_positive_ticker}"
+    )
+    
+    # Check signal tickers match configured tickers
+    valid_tickers = {ticker_1, ticker_2}
+    assert signal_positive_ticker in valid_tickers, (
+        f"❌ STARTUP ERROR: signal_positive_ticker '{signal_positive_ticker}' must be one of "
+        f"['{ticker_1}', '{ticker_2}']"
+    )
+    assert signal_negative_ticker in valid_tickers, (
+        f"❌ STARTUP ERROR: signal_negative_ticker '{signal_negative_ticker}' must be one of "
+        f"['{ticker_1}', '{ticker_2}']"
+    )
+    
+    logger.info(
+        "✓ Ticker configuration validated: ticker_1=%s, ticker_2=%s, "
+        "signal_positive=%s, signal_negative=%s",
+        ticker_1, ticker_2, signal_positive_ticker, signal_negative_ticker
+    )
 
 
 def _is_hedged_mode(mode_value):
@@ -153,6 +209,14 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n):
 
 """ RUN STATBOT """
 if __name__ == "__main__":
+    # Validate ticker configuration at startup
+    try:
+        _validate_ticker_configuration()
+    except AssertionError as e:
+        logger.critical(str(e))
+        print(str(e))
+        exit(1)
+    
     # Run the bot
     print("StatBot initialised...")
 

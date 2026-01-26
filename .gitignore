@@ -45,6 +45,7 @@ wheels/
 4_summary_report_*
 *.pdf
 status.json
+logfile_okx.log
 
 # Testing
 .pytest_cache/

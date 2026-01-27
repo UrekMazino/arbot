@@ -1,14 +1,23 @@
 from scipy.stats import false_discovery_control
 
-from config_execution_api import account_session
-from config_execution_api import signal_positive_ticker
-from config_execution_api import signal_negative_ticker
-from config_execution_api import ENTRY_Z
-from config_execution_api import EXIT_Z
-from config_execution_api import MIN_PERSIST_BARS
-from config_execution_api import tradeable_capital_usdt
-from config_execution_api import limit_order_basis
-from config_execution_api import stop_loss_fail_safe
+from config_execution_api import (
+    account_session,
+    signal_positive_ticker,
+    signal_negative_ticker,
+    ENTRY_Z,
+    EXIT_Z,
+    MIN_PERSIST_BARS,
+    tradeable_capital_usdt,
+    limit_order_basis,
+    stop_loss_fail_safe,
+    P_VALUE_CRITICAL,
+    ZERO_CROSSINGS_MIN,
+    CORRELATION_MIN,
+    TREND_CRITICAL,
+    Z_SCORE_CRITICAL
+)
+
+from func_pair_state import get_consecutive_losses
 
 # Risk management thresholds
 ZSCORE_HARD_STOP = 2.5  # Hard stop-loss if Z-score exceeds this (regime break detection)
@@ -116,33 +125,119 @@ def generate_signal(z_history, cointegration_ok, in_position):
     return None, "No signal generated"
 
 
+def check_pair_health(metrics, latest_zscore, silent=False):
+    """
+    Evaluate pair health based on statistical metrics.
+    Returns (should_switch, health_score, recommendation)
+    """
+    health_score = 100
+    critical_issues = []
+    warnings_list = []
+    
+    p_val = metrics.get("p_value", 1.0)
+    adf_stat = metrics.get("adf_stat", 0.0)
+    crit_val = metrics.get("critical_value", -3.4)
+    z_cross = metrics.get("zero_crossings", 0)
+    correlation = metrics.get("correlation", 0.0)
+    spread_trend = metrics.get("spread_trend", 0.0)
+    coint_flag = metrics.get("coint_flag", 0)
+    
+    # 1. Statistical Strength (P-value)
+    if p_val >= P_VALUE_CRITICAL:
+        critical_issues.append(f"P-value ({p_val:.4f}) >= {P_VALUE_CRITICAL}")
+        health_score -= 50
+    elif p_val > 0.05:
+        # We still keep a minor penalty for p-values between 0.05 and 0.15
+        warnings_list.append(f"P-value ({p_val:.4f}) elevated")
+        health_score -= 15
+
+    # 2. ADF Ratio
+    adf_ratio = abs(adf_stat / crit_val) if crit_val != 0 else 0
+    if adf_ratio < 0.8:
+        warnings_list.append(f"ADF ratio ({adf_ratio:.2f}) < 0.8")
+        health_score -= 15
+        
+    # 3. Zero Crossings
+    if z_cross < ZERO_CROSSINGS_MIN:
+        warnings_list.append(f"Low Zero Crossings ({z_cross} < {ZERO_CROSSINGS_MIN})")
+        health_score -= 15
+        
+    # 4. Spread Stationarity
+    if abs(spread_trend) > TREND_CRITICAL:
+        critical_issues.append(f"Spread Trending ({spread_trend:.4f} > {TREND_CRITICAL})")
+        health_score -= 30
+        
+    # 5. Relationship Integrity
+    if abs(latest_zscore) > Z_SCORE_CRITICAL:
+        critical_issues.append(f"Extreme Z-score ({abs(latest_zscore):.2f} > {Z_SCORE_CRITICAL})")
+        health_score -= 25
+        
+    # 6. Price Correlation
+    if correlation < CORRELATION_MIN:
+        warnings_list.append(f"Low Correlation ({correlation:.2f} < {CORRELATION_MIN})")
+        health_score -= 15
+
+    # 7. Recent Trading Performance
+    losses = get_consecutive_losses()
+    if losses >= 3:
+        warnings_list.append(f"Consecutive Losses ({losses})")
+        health_score -= 20
+    elif losses > 0:
+        warnings_list.append(f"Recent Loss detected ({losses})")
+        health_score -= 5 * losses
+
+    # Action determination
+    should_switch = health_score < 40 or coint_flag == 0
+    recommendation = "STOP_AND_SWITCH" if should_switch else ("MONITOR_CLOSELY" if health_score < 70 else "PAIR_IS_HEALTHY")
+
+    if not silent:
+        logger.info("━━━ PERIODIC HEALTH CHECK ━━━")
+        logger.info(f"P-value: {p_val:.4f} {'✅' if p_val < P_VALUE_CRITICAL else '❌'}")
+        logger.info(f"Zero crossings: {z_cross} {'✅' if z_cross >= ZERO_CROSSINGS_MIN else '❌'}")
+        logger.info(f"Correlation: {correlation:.2f} {'✅' if correlation >= CORRELATION_MIN else '❌'}")
+        logger.info(f"Spread Trend: {spread_trend:.4f} {'✅' if abs(spread_trend) <= TREND_CRITICAL else '❌'}")
+        logger.info(f"Health score: {health_score}/100 {'✅' if health_score >= 40 else '❌'}")
+        
+        if critical_issues:
+            logger.warning(f"CRITICAL ISSUES: {', '.join(critical_issues)}")
+        if warnings_list:
+            logger.info(f"Warnings: {', '.join(warnings_list)}")
+            
+        if should_switch:
+            logger.warning(f"❌ Pair health CRITICAL: {recommendation}")
+        else:
+            logger.info(f"✅ Pair is healthy, continuing... ({recommendation})")
+
+    return should_switch, health_score, recommendation
+
+
+def _log_zscore_status(zscore):
+    """
+    Log Z-score status with descriptive labels and emojis.
+    """
+    if abs(zscore) < 1.0:
+        status = "😴 Very quiet (|Z| < 1.0)"
+    elif abs(zscore) < 2.0:
+        status = "⏳ Waiting (1.0 < |Z| < 2.0)"
+    elif abs(zscore) < 3.0:
+        status = "🎯 TRADEABLE (|Z| > 2.0)"
+    else:
+        status = "🚨 Extreme (|Z| > 3.0)"
+    
+    msg = f"Current Z-Score: {zscore:+.2f} - {status}"
+    logger.info(msg)
+
+
 # Manage new trade assessment and order placing
-def manage_new_trades(kill_switch):
+def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
     """
     Manage trade entry, monitoring, and exit.
     
     INPUT: kill_switch (expected: 0 = ACTIVE)
     
-    FLOW:
-    -----
-    1. Get latest Z-score and check cointegration (p_value < 0.05)
-    2. If cointegration fails → return 0 (no trade)
-    3. If Z-score extreme AND cointegration valid → place orders
-    4. Monitor orders and Z-score in real-time
-    5. Exit conditions checked continuously:
-       - Hard stop (Z > ±2.5) → kill_switch = 2
-       - Signal flip → kill_switch = 2
-       - Cointegration lost → kill_switch = 2
-       - Mean reversion (Z ≈ 0.05) → kill_switch = 2
-       - Both orders placed → kill_switch = 1
-    
     RETURN:
     -------
-    kill_switch: 0 (no trade), 1 (orders placed), or 2 (stop)
-    
-    LOGGING:
-    --------
-    All state changes, entries, exits, and stop triggers are logged with timestamps.
+    (kill_switch, signal_detected, trade_placed)
     """
 
     # Set variables
@@ -150,34 +245,52 @@ def manage_new_trades(kill_switch):
     order_short_id = ""
     signal_side = ""
     hot = False
+    signal_detected = False
+    trade_placed = False
 
     # Get and save the latest z-score
-    zscore, signal_sign_positive, coint_flag = get_latest_zscore()
+    if zscore_results:
+        zscore, signal_sign_positive, metrics = zscore_results
+    else:
+        zscore, signal_sign_positive, metrics = get_latest_zscore()
+        
+    coint_flag = metrics.get("coint_flag", 0)
 
     # Filter out NaN values and get the latest valid z-score
     valid_zscores = [z for z in zscore if not math.isnan(z)]
     if not valid_zscores:
         logger.info("No valid z-scores yet (insufficient data for rolling window calculation)")
-        return kill_switch
+        return kill_switch, False, False
     
     latest_zscore = valid_zscores[-1]
     
-    # Enforce cointegration check before trading (p_value < 0.05)
-    if coint_flag != 1:
-        logger.warning("Cointegration test failed (p_value >= 0.05): Pair not statistically valid for trading")
-        return kill_switch
+    # 1. Log Current Z-score status every cycle
+    _log_zscore_status(latest_zscore)
+
+    # 2. Run Health Check if due or if cointegration is lost
+    if health_check_due or coint_flag == 0:
+        should_switch, score, rec = check_pair_health(metrics, latest_zscore)
+        if should_switch:
+            return 3, False, False
     
-    # Issue #11 Fix: Apply professional signal generation with persistence requirement
+    # 3. Signal Generation
     signal, reason = generate_signal(valid_zscores, coint_flag, in_position=False)
     
     if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
         # Activate hot trigger
         hot = True
-        msg = f"Hot trigger activated: {signal} @ Z={latest_zscore:.4f} - {reason}"
+        signal_detected = True
+        msg = f"🎯 ENTRY SIGNAL DETECTED!"
         print(msg)
         logger.info(msg)
-        print("Placing and monitoring existing orders...")
-        logger.info("Placing and monitoring existing orders...")
+        logger.info(f"Reason: {reason}")
+    else:
+        # Log waiting status
+        if abs(latest_zscore) < ENTRY_Z:
+            logger.info("⏳ WAITING: Not at entry threshold yet")
+        else:
+            # It's beyond threshold but not persistent yet
+            logger.info(f"⏳ WAITING: Z-score extreme ({latest_zscore:+.2f}) but not persistent yet")
 
     # Place and manage trades
     if hot and kill_switch == 0:
@@ -393,19 +506,17 @@ def manage_new_trades(kill_switch):
             time.sleep(3)
 
             # Check limit orders and ensure z-score still valid
-            zscore_new, signal_sign_positive_new, coint_flag_new = get_latest_zscore() 
+            zscore_new, signal_sign_positive_new, metrics_new = get_latest_zscore() 
             if  kill_switch == 0:
                 valid_zscores = [z for z in zscore_new if not math.isnan(z)]
                 latest_zscore = valid_zscores[-1]
                 
                 # Check cointegration validity during monitoring
-                if coint_flag_new != 1:
+                if metrics_new.get("coint_flag", 0) != 1:
                     # Issue #13 Fix: Log kill-switch transition with trigger reason
-                    msg = "🔴 KILL-SWITCH TRIGGERED: Cointegration lost during trade (p_value >= 0.05)"
+                    msg = f"🔴 KILL-SWITCH TRIGGERED: Cointegration lost during trade (p_value >= {P_VALUE_CRITICAL})"
                     logger.error(msg)
                     print(msg)
-                    account_session.cancel_orders(inst_id=signal_positive_ticker)
-                    account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
                     break
 
@@ -415,8 +526,6 @@ def manage_new_trades(kill_switch):
                     msg = f"🔴 KILL-SWITCH TRIGGERED: Regime break detected - Z-score={latest_zscore:.4f} exceeded hard stop {ZSCORE_HARD_STOP}"
                     logger.error(msg)
                     print(msg)
-                    account_session.cancel_orders(inst_id=signal_positive_ticker)
-                    account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
                     break
 
@@ -426,8 +535,6 @@ def manage_new_trades(kill_switch):
                     msg = f"🔴 KILL-SWITCH TRIGGERED: Signal direction flip - expected sign={signal_sign_positive}, got {signal_sign_positive_new}"
                     logger.error(msg)
                     print(msg)
-                    account_session.cancel_orders(inst_id=signal_positive_ticker)
-                    account_session.cancel_orders(inst_id=signal_negative_ticker)
                     kill_switch = 2
                     break
 
@@ -470,9 +577,17 @@ def manage_new_trades(kill_switch):
                         continue
                     # If orders trade complete, stop opening new trades
                     if order_status_long == "Trade Complete" and order_status_short == "Trade Complete":
+                        msg = "✅ Trade executed successfully"
+                        print(msg)
+                        logger.info(msg)
+                        trade_placed = True
                         kill_switch = 1                        
                     # If position filled, place another trade if capital remains
                     if order_status_long == "Position Filled" and order_status_short == "Position Filled":
+                        msg = "✅ Trade executed successfully"
+                        print(msg)
+                        logger.info(msg)
+                        trade_placed = True
                         if remaining_capital_long > 0 and remaining_capital_short > 0:
                             count_long = 0
                             count_short = 0
@@ -487,33 +602,60 @@ def manage_new_trades(kill_switch):
                         count_short = 0
                 else:
                     # Cancel all active orders
-                    account_session.cancel_orders(inst_id=signal_positive_ticker)
-                    account_session.cancel_orders(inst_id=signal_negative_ticker)
-                    logger.info("Cancelled active orders due to z-score moving out of tolerance")
+                    logger.info("Z-score moved out of tolerance. Triggering exit mode (kill_switch=1).")
                     kill_switch = 1
 
-    # Check for signal to be false and exit at mean reversion
-    if kill_switch == 1:
-        """
-        Exit when mean reversion is complete:
-        - Uses EXIT_Z threshold for professional mean reversion exit
-        - Issue #11 Fix: Changed from 0.05 to EXIT_Z=0.5 for better risk/reward
+    return kill_switch, signal_detected, trade_placed
+
+
+def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
+    """
+    Monitor open positions for mean reversion or stop-loss.
+    """
+    # Get latest data
+    if zscore_results:
+        zscore, signal_sign_positive_new, metrics = zscore_results
+    else:
+        zscore, signal_sign_positive_new, metrics = get_latest_zscore()
         
-        This captures the arbitrage profit with professional mean reversion target
-        while accounting for fees (~0.07% round-trip)
-        """
-        # Issue #11 Fix: Apply professional exit logic with EXIT_Z threshold
-        if latest_zscore < -EXIT_Z or (signal_side == "positive" and latest_zscore < EXIT_Z):
-            # For positive signal (short spread): exit when Z-score reverts from positive
-            # Issue #13 Fix: Log kill-switch transition with exit trigger
-            msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
-            logger.info(msg)
-            print(msg)
-            kill_switch = 2
-        elif latest_zscore > EXIT_Z or (signal_side == "negative" and latest_zscore > -EXIT_Z):
-            # For negative signal (long spread): exit when Z-score reverts from negative
-            # Issue #13 Fix: Log kill-switch transition with exit trigger
-            msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
-            logger.info(msg)
-            print(msg)
-            kill_switch = 2
+    coint_flag = metrics.get("coint_flag", 0)
+    
+    valid_zscores = [z for z in zscore if not math.isnan(z)]
+    if not valid_zscores:
+        return kill_switch
+        
+    latest_zscore = valid_zscores[-1]
+    _log_zscore_status(latest_zscore)
+
+    # 1. Periodic Health Check
+    if health_check_due or coint_flag == 0:
+        # Note: we might not want to switch immediately if in position, 
+        # but the previous logic did. I'll stick to previous logic for now.
+        should_switch, score, rec = check_pair_health(metrics, latest_zscore)
+        if should_switch:
+            # If in position, maybe we should close first?
+            # Current bot logic for kill_switch=3 in main_execution calls _switch_to_next_pair
+            # which doesn't close positions. 
+            # I'll let main handle closing if kill_switch becomes 2.
+            # But if it's 3, it restarts.
+            # Usually, we should exit if health is bad.
+            logger.warning("Pair health failed while in position. Triggering exit.")
+            return 2 # Trigger close all
+            
+    # 2. EXIT LOGIC: Mean Reversion
+    if abs(latest_zscore) <= EXIT_Z:
+        msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
+        logger.info(msg)
+        print(msg)
+        return 2
+
+    # 3. HARD STOP-LOSS: Regime break
+    if abs(latest_zscore) > ZSCORE_HARD_STOP:
+        msg = f"🔴 KILL-SWITCH TRIGGERED: Regime break detected - Z={latest_zscore:.4f} exceeded hard stop {ZSCORE_HARD_STOP}"
+        logger.error(msg)
+        print(msg)
+        return 2
+        
+    # 4. MONITORING: Hold position
+    logger.info(f"Hold position - Z={latest_zscore:.4f} still beyond EXIT_Z ({EXIT_Z})")
+    return kill_switch

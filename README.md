@@ -41,6 +41,12 @@ cd Strategy
 python func_get_symbols.py
 ```
 
+## Documentation
+
+For a detailed explanation of the bot's architecture, trading logic, risk management, and computations, please see:
+- **[BOT_DOCUMENTATION.md](BOT_DOCUMENTATION.md)**: Comprehensive guide to the Execution system.
+- **[KILL_SWITCH_STATE_MACHINE.md](KILL_SWITCH_STATE_MACHINE.md)**: Detailed state machine transitions.
+
 ## Features
 
 ### Step 1: Get Tradeable Symbols by Maker Fees

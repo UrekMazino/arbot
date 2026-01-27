@@ -2,6 +2,90 @@ import math
 
 from config_execution_api import account_session, inst_type, trade_session
 
+def get_account_state(inst_type_value=None, session_acc=None, session_trade=None):
+    """
+    Fetch all open positions and open orders for the account.
+    Returns:
+        dict: {
+            "positions": [list of position dicts],
+            "orders": [list of order dicts]
+        }
+    """
+    acc_session = session_acc or account_session
+    tr_session = session_trade or trade_session
+    it_value = inst_type_value or inst_type
+
+    state = {"positions": [], "orders": []}
+
+    try:
+        # Fetch all positions for the instrument type
+        pos_res = acc_session.get_positions(instType=it_value)
+        if pos_res.get("code") == "0":
+            state["positions"] = pos_res.get("data", [])
+    except Exception as e:
+        print(f"ERROR: Failed to fetch all positions: {e}")
+
+    try:
+        # Fetch all open orders for the instrument type
+        ord_res = tr_session.get_order_list(instType=it_value)
+        if ord_res.get("code") == "0":
+            state["orders"] = ord_res.get("data", [])
+    except Exception as e:
+        print(f"ERROR: Failed to fetch all open orders: {e}")
+
+    return state
+
+
+def check_inst_status(state, inst_id):
+    """
+    Check if an instrument has open positions or active orders from the account state.
+    Returns: (has_position, has_orders)
+    """
+    has_pos = False
+    has_ords = False
+
+    for pos in state.get("positions", []):
+        if pos.get("instId") == inst_id:
+            pos_raw = pos.get("pos") or pos.get("position") or pos.get("size")
+            try:
+                if abs(float(pos_raw)) > 0:
+                    has_pos = True
+                    break
+            except (TypeError, ValueError):
+                continue
+
+    for ord_item in state.get("orders", []):
+        if ord_item.get("instId") == inst_id:
+            has_ords = True
+            break
+
+    return has_pos, has_ords
+
+
+def get_pos_data_from_state(state, inst_id, direction="Long"):
+    """
+    Extract (entry_price, size) for a matching position from the account state.
+    """
+    for item in state.get("positions", []):
+        if not isinstance(item, dict) or item.get("instId") != inst_id:
+            continue
+
+        pos_val = _safe_float(item.get("pos") or item.get("position") or item.get("size"))
+        if pos_val is None or pos_val == 0:
+            continue
+
+        if not _matches_direction(item.get("posSide"), pos_val, direction):
+            continue
+
+        price_val = _safe_float(item.get("avgPx") or item.get("entryPx"))
+        if price_val is None or price_val <= 0:
+            continue
+
+        return price_val, abs(pos_val)
+
+    return None, None
+
+
 # Check for open positions
 def open_position_confirmation(inst_id="", inst_type_override=None, session=None):
     """

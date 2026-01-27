@@ -61,11 +61,11 @@ manage_new_trades(1) → monitor_zscore → signal_change → cancel_all → ret
 ```
 
 #### Transition: 1 → 2 (Cointegration Lost)
-**Condition:** p_value ≥ 0.05 during monitoring
+**Condition:** p_value ≥ 0.15 during monitoring
 **Trigger:** Pair no longer statistically related
 **Action:** Close positions to avoid further losses
 **Return:** kill_switch = 2
-**Logged:** "Cointegration lost during trade (p_value >= 0.05): Closing position"
+**Logged:** "Cointegration lost during trade (p_value >= 0.15): Closing position"
 
 ```
 manage_new_trades(1) → check_cointegration → coint_flag != 1 → cancel_all → return 2
@@ -143,7 +143,7 @@ while True:
 | **Normal Trade** | Z reverts to mean | 0 → 1 → 2 | "Mean reversion complete" |
 | **Regime Break** | Z spikes to ±2.6 | 0 → 1 → 2 | "REGIME BREAK DETECTED" |
 | **Signal Invalid** | Z sign flips | 0 → 1 → 2 | "SIGNAL FLIPPED" |
-| **Lost Cointegration** | p_value ≥ 0.05 | 0 → 1 → 2 | "Cointegration lost" |
+| **Lost Cointegration** | p_value ≥ 0.15 | 0 → 1 → 2 | "Cointegration lost" |
 | **Circuit Breaker** | Loss > 5% | [any] → exit | "CIRCUIT BREAKER TRIGGERED" |
 | **No Signal** | Z < threshold | 0 → 0 (loop) | No exit |
 

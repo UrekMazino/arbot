@@ -15,10 +15,41 @@ from okx.Account import AccountAPI
 from okx.Trade import TradeAPI
 from okx.MarketData import MarketAPI
 
+def save_active_pair(t1, t2):
+    """Save the current active pair to active_pair.json."""
+    data = {"ticker_1": t1, "ticker_2": t2}
+    try:
+        with open(active_pair_file, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        print(f"Error saving active pair: {e}")
+        return False
+
+
 # CONFIG VARIABLES
 mode = "demo"  # "demo" or "live"
-ticker_1 = "ETH-USD-SWAP" # ASTER-USDT-SWAP
-ticker_2 = "ZETA-USDT-SWAP" # ETHFI-USDT-SWAP
+
+# Default tickers
+default_ticker_1 = "ETH-USD-SWAP"
+default_ticker_2 = "ZETA-USDT-SWAP"
+
+# Try to load active pair from JSON if it exists
+import json
+active_pair_file = os.path.join(os.path.dirname(__file__), "active_pair.json")
+if os.path.exists(active_pair_file):
+    try:
+        with open(active_pair_file, "r") as f:
+            active_data = json.load(f)
+            ticker_1 = active_data.get("ticker_1", default_ticker_1)
+            ticker_2 = active_data.get("ticker_2", default_ticker_2)
+    except Exception:
+        ticker_1 = default_ticker_1
+        ticker_2 = default_ticker_2
+else:
+    ticker_1 = default_ticker_1
+    ticker_2 = default_ticker_2
+
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
 inst_type = "SWAP"
@@ -31,10 +62,19 @@ max_snapshot_age_seconds = 15  # Reuse snapshot only if it is this fresh or newe
 stop_loss_fail_safe = 0.03  # 3% stop loss (reduced from 15% for proper arbitrage risk management)
 default_leverage = 1  # Default leverage for set_leverage calls.
 max_cycles = 0  # 0 = run indefinitely; set to 1 for a single cycle.
+# Default roundings (will be updated if possible)
 rounding_ticker_1 = 1
 rounding_ticker_2 = 2
 quantity_rounding_ticker_1 = 4
 quantity_rounding_ticker_2 = 3
+
+# Fetch dynamic rounding info from OKX
+try:
+    # Note: public_session is already initialized below, so we move this check after session init
+    pass 
+except Exception:
+    pass
+
 z_score_window = 21  # Z-score calculation window (21 x 1m candles = ~21 minutes)
                      # 21 bars is valid for 1m high-frequency data when:
                      # - Used only for entry timing (not sole cointegration validation)
@@ -48,6 +88,15 @@ ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entr
 EXIT_Z = 0.5  # Exit when Z-score reverts toward ±0.5 (mean reversion achieved)
 MIN_PERSIST_BARS = 3  # Require signal to persist for 3 bars before entering (3 minutes @ 1m)
                       # Prevents flash trades and confirms conviction in the spread divergence
+
+# PAIR HEALTH & MONITORING (conintegration_pair_switching.txt recommendations)
+HEALTH_CHECK_INTERVAL = 3600  # Check health every 1 hour (3600 seconds)
+STATUS_UPDATE_INTERVAL = 60   # Trading status update every 1 minute (60 seconds)
+P_VALUE_CRITICAL = 0.15        # More realistic statistical threshold for switching
+ZERO_CROSSINGS_MIN = 15       # Minimum zero crossings to consider a pair healthy
+CORRELATION_MIN = 0.60        # Minimum price correlation
+TREND_CRITICAL = 0.002        # Maximum allowed spread trend
+Z_SCORE_CRITICAL = 6.0        # Maximum allowed Z-score before switching
 
 max_drawdown_pct = 0.05  # Circuit breaker: exit if cumulative loss exceeds 5% of capital
 
@@ -71,7 +120,7 @@ account_session = AccountAPI(
     api_secret_key=api_secret,
     passphrase=passphrase,
     flag=flag,
-    debug=False,
+    debug=False
 )
 
 trade_session = TradeAPI(
@@ -79,5 +128,33 @@ trade_session = TradeAPI(
     api_secret_key=api_secret,
     passphrase=passphrase,
     flag=flag,
-    debug=False,
+    debug=False
 )
+
+# Added 10s timeout to prevent hanging on network issues
+# Since the SDK constructor doesn't accept requests_options/timeout, 
+# we set it directly on the session objects (which are httpx.Client subclasses).
+for session in [public_session, market_session, account_session, trade_session]:
+    session.timeout = 10.0
+
+# DYNAMIC ROUNDING FETCH
+try:
+    # Update rounding_ticker_1
+    res1 = public_session.get_instruments(instType=inst_type, instId=ticker_1)
+    if res1.get("code") == "0" and res1.get("data"):
+        inst1 = res1["data"][0]
+        tick_sz = inst1.get("tickSz", "0.01")
+        rounding_ticker_1 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
+        lot_sz = inst1.get("lotSz", "1")
+        quantity_rounding_ticker_1 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+
+    # Update rounding_ticker_2
+    res2 = public_session.get_instruments(instType=inst_type, instId=ticker_2)
+    if res2.get("code") == "0" and res2.get("data"):
+        inst2 = res2["data"][0]
+        tick_sz = inst2.get("tickSz", "0.01")
+        rounding_ticker_2 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
+        lot_sz = inst2.get("lotSz", "1")
+        quantity_rounding_ticker_2 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+except Exception as e:
+    print(f"Warning: Could not fetch dynamic rounding info: {e}")

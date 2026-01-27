@@ -137,24 +137,27 @@ trade_session = TradeAPI(
 for session in [public_session, market_session, account_session, trade_session]:
     session.timeout = 10.0
 
-# DYNAMIC ROUNDING FETCH
-try:
-    # Update rounding_ticker_1
-    res1 = public_session.get_instruments(instType=inst_type, instId=ticker_1)
-    if res1.get("code") == "0" and res1.get("data"):
-        inst1 = res1["data"][0]
-        tick_sz = inst1.get("tickSz", "0.01")
-        rounding_ticker_1 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
-        lot_sz = inst1.get("lotSz", "1")
-        quantity_rounding_ticker_1 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+skip_instrument_fetch = os.getenv("STATBOT_SKIP_INSTRUMENT_FETCH") == "1"
 
-    # Update rounding_ticker_2
-    res2 = public_session.get_instruments(instType=inst_type, instId=ticker_2)
-    if res2.get("code") == "0" and res2.get("data"):
-        inst2 = res2["data"][0]
-        tick_sz = inst2.get("tickSz", "0.01")
-        rounding_ticker_2 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
-        lot_sz = inst2.get("lotSz", "1")
-        quantity_rounding_ticker_2 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
-except Exception as e:
-    print(f"Warning: Could not fetch dynamic rounding info: {e}")
+# DYNAMIC ROUNDING FETCH
+if not skip_instrument_fetch:
+    try:
+        # Update rounding_ticker_1
+        res1 = public_session.get_instruments(instType=inst_type, instId=ticker_1)
+        if res1.get("code") == "0" and res1.get("data"):
+            inst1 = res1["data"][0]
+            tick_sz = inst1.get("tickSz", "0.01")
+            rounding_ticker_1 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
+            lot_sz = inst1.get("lotSz", "1")
+            quantity_rounding_ticker_1 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+
+        # Update rounding_ticker_2
+        res2 = public_session.get_instruments(instType=inst_type, instId=ticker_2)
+        if res2.get("code") == "0" and res2.get("data"):
+            inst2 = res2["data"][0]
+            tick_sz = inst2.get("tickSz", "0.01")
+            rounding_ticker_2 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
+            lot_sz = inst2.get("lotSz", "1")
+            quantity_rounding_ticker_2 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+    except Exception as e:
+        print(f"Warning: Could not fetch dynamic rounding info: {e}")

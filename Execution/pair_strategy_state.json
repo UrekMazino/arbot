@@ -42,7 +42,13 @@
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
-    "persistence_history": [],
+    "persistence_history": [
+        -1.2448511742292279,
+        -1.242384246926737,
+        -1.2335405229623253,
+        -1.238314408263294,
+        -1.1555758326956107
+    ],
     "z_history": [],
     "last_exit_time": 1769547535.1408167,
     "last_switch_reason": "orderbook_dead",

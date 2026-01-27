@@ -170,34 +170,7 @@ def get_latest_zscore(
     """
     import logging
     logger = logging.getLogger(__name__)
-    
-    inst_1 = inst_id_1 or ticker_1
-    inst_2 = inst_id_2 or ticker_2
-    if not inst_1 or not inst_2:
-        return [], False, 0
 
-    logger.info(f"get_latest_zscore: fetching klines for {inst_1} and {inst_2}")
-    window_val = z_score_window if window is None else window
-    try:
-        window_val = int(window_val)
-    except (TypeError, ValueError):
-        window_val = z_score_window
-    if window_val <= 1:
-        return [], False, 0
-
-    series_1, series_2 = get_latest_klines(
-        inst_id_1=inst_1,
-        inst_id_2=inst_2,
-        bar=bar,
-        limit=limit,
-        session=session,
-        ascending=True,
-    )
-    if not series_1 or not series_2:
-        logger.warning("get_latest_zscore: failed to fetch klines")
-        return [], False, 0
-
-    # Initialize metrics
     metrics = {
         "coint_flag": 0,
         "p_value": 1.0,
@@ -210,6 +183,32 @@ def get_latest_zscore(
         "price_2": 0.0,
         "orderbook_dead": False
     }
+    
+    inst_1 = inst_id_1 or ticker_1
+    inst_2 = inst_id_2 or ticker_2
+    if not inst_1 or not inst_2:
+        return [], False, metrics
+
+    logger.info(f"get_latest_zscore: fetching klines for {inst_1} and {inst_2}")
+    window_val = z_score_window if window is None else window
+    try:
+        window_val = int(window_val)
+    except (TypeError, ValueError):
+        window_val = z_score_window
+    if window_val <= 1:
+        return [], False, metrics
+
+    series_1, series_2 = get_latest_klines(
+        inst_id_1=inst_1,
+        inst_id_2=inst_2,
+        bar=bar,
+        limit=limit,
+        session=session,
+        ascending=True,
+    )
+    if not series_1 or not series_2:
+        logger.warning("get_latest_zscore: failed to fetch klines")
+        return [], False, metrics
 
     if use_orderbook:
         logger.info(f"get_latest_zscore: fetching mid prices for {inst_1} and {inst_2}")

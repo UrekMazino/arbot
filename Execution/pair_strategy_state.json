@@ -1,7 +1,11 @@
 {
-    "last_switch_time": 1769471221.555918,
+    "last_switch_time": 1769514553.375349,
     "graveyard": {
-        "ETH-USD_UM-SWAP/2Z-USDT-SWAP": 1769471221.5529168
+        "ETH-USD_UM-SWAP/2Z-USDT-SWAP": 1769471221.5529168,
+        "ETH-USD_UM-SWAP/KSM-USDT-SWAP": 1769514538.0747337,
+        "CHZ-USDT-SWAP/IOTA-USDT-SWAP": 1769514545.7711153,
+        "SKY-USDT-SWAP/XTZ-USDT-SWAP": 1769514553.373348
     },
-    "consecutive_losses": 0
+    "consecutive_losses": 0,
+    "last_health_score": 70
 }

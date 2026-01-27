@@ -187,8 +187,12 @@ def check_pair_health(metrics, latest_zscore, silent=False):
         health_score -= 5 * losses
 
     # Action determination
-    should_switch = health_score < 40 or coint_flag == 0
+    should_switch = health_score < 40
     recommendation = "STOP_AND_SWITCH" if should_switch else ("MONITOR_CLOSELY" if health_score < 70 else "PAIR_IS_HEALTHY")
+
+    # Store health score for emergency override checks
+    from func_pair_state import set_last_health_score
+    set_last_health_score(health_score)
 
     if not silent:
         logger.info("━━━ PERIODIC HEALTH CHECK ━━━")

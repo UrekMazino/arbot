@@ -39,12 +39,13 @@ from func_execution_calls import set_leverage
 from func_close_positions import close_all_positions, get_position_info
 from func_save_status import save_status
 from func_pair_state import (
-    add_to_graveyard, 
-    is_in_graveyard, 
-    can_switch, 
-    set_last_switch_time, 
+    add_to_graveyard,
+    is_in_graveyard,
+    can_switch,
+    set_last_switch_time,
     get_last_switch_time,
-    record_trade_result
+    record_trade_result,
+    get_last_health_score
 )
 
 # Setup logging
@@ -160,20 +161,32 @@ State Transitions (deterministic):
 """
 
 
-def _switch_to_next_pair():
+def _switch_to_next_pair(health_score=None):
     """
     Read the cointegrated pairs from Strategy folder and switch to the next one.
-    Includes Graveyard and Cooldown checks from conintegration_pair_switching.txt
+    Includes Graveyard and Cooldown checks with emergency override for critical health.
+
+    Args:
+        health_score: Current pair health score (0-100). If below 25, overrides cooldown.
     """
     import pandas as pd
     from pathlib import Path
-    
-    # 1. Check Cooldown
-    if not can_switch(cooldown_hours=24):
-        last_switch = get_last_switch_time()
-        elapsed = (time.time() - last_switch) / 3600
+
+    # 1. Check Cooldown with emergency override
+    last_switch = get_last_switch_time()
+    elapsed = (time.time() - last_switch) / 3600
+
+    if not can_switch(cooldown_hours=24, health_score=health_score, emergency_threshold=40):
         logger.warning(f"Switch aborted: Cooldown active ({elapsed:.1f}h elapsed, 24h required)")
+        if health_score is not None:
+            logger.warning(f"Health score: {health_score}/100 (emergency override requires < 40)")
         return False
+
+    # Log if emergency override was used
+    if health_score is not None and health_score < 40:
+        logger.warning(f"🚨 EMERGENCY OVERRIDE: Health score {health_score} < 40, bypassing cooldown ({elapsed:.1f}h elapsed)")
+    elif elapsed < 24:
+        logger.info(f"⚠️  Cooldown bypassed but health not critical: {health_score}/100")
 
     logger.info("Attempting to switch to next pair...")
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "2_cointegrated_pairs.csv"
@@ -358,21 +371,12 @@ if __name__ == "__main__":
             
             # Pause - protect API
             time.sleep(3)
-            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} ---")
-            
-            # Trading Status Update every minute
-            if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:
-                time_in_pair_min = (current_time - pair_start_time) / 60
-                logger.info("--- Trading Status Update ---")
-                logger.info(f"Time in pair: {time_in_pair_min:.1f} min")
-                logger.info(f"Signals seen: {signals_seen} | Trades: {trades_executed}")
-                last_status_update = current_time
 
             # 1. Consolidated API Fetch (Position/Order Status)
             acc_state = get_account_state()
             is_p_open, is_p_active = check_inst_status(acc_state, signal_positive_ticker)
             is_n_open, is_n_active = check_inst_status(acc_state, signal_negative_ticker)
-            
+
             checks_all = [is_p_open, is_n_open, is_p_active, is_n_active]
             is_manage_new_trades = not any(checks_all)
 
@@ -383,9 +387,21 @@ if __name__ == "__main__":
 
             # 3. CIRCUIT BREAKER: Check cumulative P&L
             total_pnl, pnl_pct = _calculate_cumulative_pnl(
-                signal_positive_ticker, signal_negative_ticker, 
+                signal_positive_ticker, signal_negative_ticker,
                 acc_state, price_p, price_n
             )
+
+            # Log cycle with PnL
+            pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
+            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) ---")
+
+            # Trading Status Update every minute
+            if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:
+                time_in_pair_min = (current_time - pair_start_time) / 60
+                logger.info("--- Trading Status Update ---")
+                logger.info(f"Time in pair: {time_in_pair_min:.1f} min")
+                logger.info(f"Signals seen: {signals_seen} | Trades: {trades_executed}")
+                last_status_update = current_time
             max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
             
             if total_pnl < -max_loss_allowed:
@@ -421,7 +437,11 @@ if __name__ == "__main__":
                 status_dict["message"] = "Health check failed; switching pair..."
                 save_status(status_dict)
                 logger.info("Kill switch 3: Pair health degraded. Switching to next prospect...")
-                if _switch_to_next_pair():
+
+                # Get the last health score for emergency override
+                health_score = get_last_health_score()
+
+                if _switch_to_next_pair(health_score=health_score):
                     logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                     print("Restarting to apply new pair...")
                     # Exit with code 3 to signal the manager to restart

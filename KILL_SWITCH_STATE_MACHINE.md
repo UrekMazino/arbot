@@ -38,15 +38,43 @@ manage_new_trades(0) → hot_trigger=True → coint_flag=1 → place_orders → 
 
 ### From CLOSING (1):
 
-#### Transition: 1 → 2 (Hard Stop - Regime Break)
-**Condition:** Z-score exceeds ±2.5 during monitoring
-**Trigger:** Spread too extreme = cointegration likely broken
+#### Transition: 1 → 2 (Hard Stop - TRUE Regime Break)
+**Condition:** Z-score DIVERGING from entry (getting worse, not oscillating)
+**Triggers:**
+- Z deteriorating by >1.5σ from entry (e.g., entered at -4.36, now at -6.0)
+- Sign flip: entered oversold (-4.36), now overbought (+2.5)
+- Persistent extreme: Z > 6.0 after 30+ minutes
+
+**NOT triggers (Fixed Bug):**
+- ❌ Z oscillating at entry level (entered -4.36, revisits -4.36) → NORMAL volatility
+- ❌ Z improving toward mean (entered -4.36, now -1.05) → DESIRED behavior
+
 **Action:** Immediately cancel all orders, close positions
 **Return:** kill_switch = 2
-**Logged:** "⚠️ REGIME BREAK DETECTED: Z-score=2.8 exceeded hard stop 2.5"
+**Logged:**
+- "🔴 REGIME BREAK: Z diverging from entry (4.36 → 6.02, +1.66σ worse)"
+- "🔴 REGIME BREAK: Sign flip - Entry Z=-4.36, now Z=+2.51"
+- "🔴 REGIME BREAK: Persistent extreme - Z=6.12 after 35.2 min"
+
+**Context Tracking:**
+- Entry Z-score recorded when position opens
+- Entry timestamp recorded for time-in-trade calculation
+- Cleared when position closes
 
 ```
-manage_new_trades(1) → monitor_zscore → abs(zscore) > 2.5 → cancel_all → return 2
+manage_new_trades(1) → monitor_zscore → check_regime_break(entry_z, current_z) → TRUE → return 2
+```
+
+**Example of CORRECT behavior:**
+```
+Entry: Z = -4.36 (extreme oversold)
+Cycle +1: Z = -1.05 (improving) ✅ Hold
+Cycle +2: Z = -4.36 (oscillates back to entry) ✅ Hold - NOT a regime break!
+Cycle +3: Z = -0.82 (improving again) ✅ Hold
+Cycle +4: Z = -0.45 (near mean) ✅ Take profit
+
+Old bug: Would exit at Cycle +2 with "regime break"
+Fixed: Recognizes this as normal volatility oscillation
 ```
 
 #### Transition: 1 → 2 (Signal Flip)
@@ -141,10 +169,13 @@ while True:
 | Scenario | Trigger | kill_switch Flow | Log Entry |
 |----------|---------|-----------------|-----------|
 | **Normal Trade** | Z reverts to mean | 0 → 1 → 2 | "Mean reversion complete" |
-| **Regime Break** | Z spikes to ±2.6 | 0 → 1 → 2 | "REGIME BREAK DETECTED" |
+| **Regime Break (Diverging)** | Z worsens by >1.5σ | 0 → 1 → 2 | "Z diverging from entry" |
+| **Regime Break (Sign Flip)** | Z sign flips | 0 → 1 → 2 | "Sign flip detected" |
+| **Regime Break (Persistent)** | Z > 6 after 30 min | 0 → 1 → 2 | "Persistent extreme" |
 | **Signal Invalid** | Z sign flips | 0 → 1 → 2 | "SIGNAL FLIPPED" |
 | **Lost Cointegration** | p_value ≥ 0.15 | 0 → 1 → 2 | "Cointegration lost" |
 | **Circuit Breaker** | Loss > 5% | [any] → exit | "CIRCUIT BREAKER TRIGGERED" |
+| **Normal Oscillation** | Z at entry level | 1 → 1 (hold) | "Normal oscillation near entry" |
 | **No Signal** | Z < threshold | 0 → 0 (loop) | No exit |
 
 ---

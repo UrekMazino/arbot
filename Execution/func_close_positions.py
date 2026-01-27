@@ -153,6 +153,11 @@ def close_all_positions(kill_switch):
         logger.info(f"Closing position for {ticker_2}: {size_2} {side_2}")
         place_market_close_order(ticker_2, size_2, side_2)
 
+    # Clear entry tracking after closing positions
+    from func_pair_state import clear_entry_tracking
+    clear_entry_tracking()
+    logger.info("🧹 Entry Z-score tracking cleared")
+
     # Output result
     kill_switch = 0
     return kill_switch

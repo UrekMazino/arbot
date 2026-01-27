@@ -23,7 +23,8 @@ from config_execution_api import (
     ticker_2,
     save_active_pair,
     STATUS_UPDATE_INTERVAL,
-    HEALTH_CHECK_INTERVAL
+    HEALTH_CHECK_INTERVAL,
+    account_session
 )
 from func_position_calls import (
     open_position_confirmation, 
@@ -339,6 +340,20 @@ if __name__ == "__main__":
     signals_seen = 0
     trades_executed = 0
 
+    # Capture starting equity for session P&L tracking
+    starting_equity = 0.0
+    try:
+        balance_res = account_session.get_account_balance()
+        if balance_res.get("code") == "0":
+            details = balance_res.get("data", [{}])[0].get("details", [])
+            for det in details:
+                if det.get("ccy") == "USDT":
+                    starting_equity = float(det.get("eq", 0))
+                    break
+        logger.info(f"📊 Starting equity: {starting_equity:.2f} USDT")
+    except Exception as e:
+        logger.warning(f"Failed to capture starting equity: {e}")
+
     # Save status
     save_status(status_dict)
 
@@ -385,15 +400,47 @@ if __name__ == "__main__":
             _, _, metrics = zscore_results
             price_p, price_n = metrics.get("price_1"), metrics.get("price_2")
 
+            # 2a. ORDERBOOK DEAD CHECK: Switch if tickers are delisted/illiquid
+            if metrics.get("orderbook_dead", False):
+                logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid. Switching pairs...")
+                status_dict["message"] = "Orderbook dead; switching pair..."
+                save_status(status_dict)
+
+                health_score = 0  # Force emergency override
+                if _switch_to_next_pair(health_score=health_score):
+                    logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                    print("Restarting to apply new pair...")
+                    sys.exit(3)
+                else:
+                    logger.error("Pair switch failed. Will retry next cycle.")
+
             # 3. CIRCUIT BREAKER: Check cumulative P&L
             total_pnl, pnl_pct = _calculate_cumulative_pnl(
                 signal_positive_ticker, signal_negative_ticker,
                 acc_state, price_p, price_n
             )
 
-            # Log cycle with PnL
+            # Get account equity
+            try:
+                balance_res = account_session.get_account_balance()
+                equity_usdt = 0.0
+                if balance_res.get("code") == "0":
+                    details = balance_res.get("data", [{}])[0].get("details", [])
+                    for det in details:
+                        if det.get("ccy") == "USDT":
+                            equity_usdt = float(det.get("eq", 0))
+                            break
+            except:
+                equity_usdt = 0.0
+
+            # Calculate session P&L (realized gains/losses)
+            session_pnl = equity_usdt - starting_equity if starting_equity > 0 else 0.0
+            session_pnl_pct = (session_pnl / starting_equity * 100) if starting_equity > 0 else 0.0
+
+            # Log cycle with PnL, equity, and session performance
             pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
-            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) ---")
+            session_emoji = "🟢" if session_pnl >= 0 else "🔴"
+            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) | Equity: {equity_usdt:.2f} USDT | {session_emoji} Session: {session_pnl:+.2f} USDT ({session_pnl_pct:+.2f}%) ---")
 
             # Trading Status Update every minute
             if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:

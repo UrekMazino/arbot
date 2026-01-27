@@ -2,6 +2,9 @@ import math
 import warnings
 import threading
 import time
+import logging
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 import numpy as np
 import pandas as pd
@@ -10,6 +13,16 @@ from statsmodels.tsa.stattools import coint
 
 from config_execution_api import depth, market_session, ticker_1, ticker_2, z_score_window, P_VALUE_CRITICAL
 from func_price_calls import get_latest_klines
+
+# Setup logging
+log_path = Path(__file__).resolve().parent / "logfile_okx.log"
+logger = logging.getLogger("func_get_zscore")
+if not logger.handlers:
+    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.setLevel(logging.INFO)
 
 
 def _compute_zscore(spread, window):
@@ -57,6 +70,7 @@ def _get_orderbook_with_timeout(session, inst_id, level_count, timeout=5):
 
 def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
     if not inst_id:
+        logger.error(f"_fetch_mid_price called with empty inst_id")
         return None
 
     active_session = session or market_session
@@ -68,34 +82,53 @@ def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
         level_count = depth
 
     # Issue #14 Fix: Use timeout-protected API call (5 second timeout)
+    logger.debug(f"Fetching orderbook for {inst_id} (depth={level_count})")
     response = _get_orderbook_with_timeout(active_session, inst_id, level_count, timeout=5)
     
     if response is None:
-        print(f"ERROR: Failed to fetch orderbook for {inst_id}: timeout or connection error")
+        logger.error(f"❌ Orderbook fetch failed for {inst_id}: timeout or connection error")
         return None
 
-    if response.get("code") != "0":
-        print(f"ERROR: OKX orderbook failed for {inst_id}: {response.get('msg')}")
+    response_code = response.get("code")
+    if response_code != "0":
+        error_msg = response.get("msg", "unknown error")
+        logger.error(f"❌ OKX API error for {inst_id}: code={response_code}, msg={error_msg}")
+        
+        # Specific error handling
+        if "Instrument ID does not exist" in error_msg or response_code == "51001":
+            logger.error(f"🚨 TICKER DELISTED OR INVALID: {inst_id}")
+        elif "rate limit" in error_msg.lower():
+            logger.error(f"⚠️ Rate limit exceeded for {inst_id}")
+        
         return None
 
     data = response.get("data", [])
+    if not data:
+        logger.error(f"❌ Empty orderbook data for {inst_id}")
+        return None
+        
     book = data[0] if isinstance(data, list) and data else {}
     bids = book.get("bids") or book.get("b") or []
     asks = book.get("asks") or book.get("a") or []
 
     if not bids or not asks:
+        logger.error(f"❌ No bids/asks in orderbook for {inst_id}: bids={len(bids)}, asks={len(asks)}")
         return None
 
     try:
         best_bid = max(float(level[0]) for level in bids if level)
         best_ask = min(float(level[0]) for level in asks if level)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.error(f"❌ Invalid bid/ask format for {inst_id}: {e}")
         return None
 
     if best_bid <= 0 or best_ask <= 0:
+        logger.error(f"❌ Invalid prices for {inst_id}: bid={best_bid}, ask={best_ask}")
         return None
 
-    return (best_bid + best_ask) / 2.0
+    mid_price = (best_bid + best_ask) / 2.0
+    logger.debug(f"✅ Mid price for {inst_id}: {mid_price:.6f}")
+    return mid_price
 
 
 def _latest_finite(values):
@@ -164,16 +197,7 @@ def get_latest_zscore(
         logger.warning("get_latest_zscore: failed to fetch klines")
         return [], False, 0
 
-    if use_orderbook:
-        logger.info(f"get_latest_zscore: fetching mid prices for {inst_1} and {inst_2}")
-        mid_1 = _fetch_mid_price(inst_1, depth_levels=depth_levels, session=session)
-        mid_2 = _fetch_mid_price(inst_2, depth_levels=depth_levels, session=session)
-        if mid_1 is not None and mid_2 is not None:
-            series_1 = _replace_last(series_1, mid_1)
-            series_2 = _replace_last(series_2, mid_2)
-        else:
-            logger.warning("get_latest_zscore: failed to fetch mid prices")
-
+    # Initialize metrics
     metrics = {
         "coint_flag": 0,
         "p_value": 1.0,
@@ -183,8 +207,28 @@ def get_latest_zscore(
         "spread_trend": 0.0,
         "correlation": 0.0,
         "price_1": 0.0,
-        "price_2": 0.0
+        "price_2": 0.0,
+        "orderbook_dead": False
     }
+
+    if use_orderbook:
+        logger.info(f"get_latest_zscore: fetching mid prices for {inst_1} and {inst_2}")
+        mid_1 = _fetch_mid_price(inst_1, depth_levels=depth_levels, session=session)
+        mid_2 = _fetch_mid_price(inst_2, depth_levels=depth_levels, session=session)
+        if mid_1 is not None and mid_2 is not None:
+            series_1 = _replace_last(series_1, mid_1)
+            series_2 = _replace_last(series_2, mid_2)
+            # Reset failure counter on success
+            from func_pair_state import reset_price_fetch_failures
+            reset_price_fetch_failures()
+        else:
+            logger.warning("get_latest_zscore: failed to fetch mid prices")
+            # Track consecutive failures - indicates delisted/illiquid tickers
+            from func_pair_state import increment_price_fetch_failures
+            failures = increment_price_fetch_failures()
+            if failures >= 5:
+                logger.error(f"⚠️ Price fetch failed {failures} times - tickers may be delisted/illiquid")
+                metrics["orderbook_dead"] = True
 
     min_len = min(len(series_1), len(series_2))
     if min_len < 2:

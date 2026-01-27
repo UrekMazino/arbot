@@ -80,15 +80,90 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 *   **2% Rule**: The bot risks exactly **2% of total capital** per trade. Position sizes are calculated based on the distance to the fail-safe stop loss.
 *   **Execution Buffer**: A **0.07% (7 bps)** buffer is applied to mid-prices for entries (0.05% taker fee + 0.02% slippage margin) to ensure immediate execution.
 *   **Dynamic Rounding**: Tick size and lot size are fetched dynamically from the OKX API to ensure order precision.
+*   **Margin Mode**: Configured for **cross margin** (recommended for pairs trading). In cross mode, all positions share the account's margin pool, making it capital efficient for simultaneous long+short positions. Isolated mode requires separate margin for each position.
 
 ### Safety Exits
-*   **Regime Break**: If `|Z|` exceeds **2.5** *after* a trade is placed, the bot closes immediately (indicates the statistical relationship has broken).
+
+#### Regime Break Detection (Context-Aware)
+The bot uses **intelligent regime break detection** that tracks entry context to avoid false exits:
+
+**TRUE Regime Breaks (triggers exit):**
+1. **Z-Score Diverging**: Current Z worsens by >1.5σ from entry
+   - Example: Entered at Z=-4.36, now at Z=-6.0 (+1.64σ worse)
+   - Indicates relationship deteriorating, not oscillating
+2. **Sign Flip**: Spread reverses direction
+   - Example: Entered oversold (Z=-4.36), now overbought (Z=+2.5)
+   - Indicates mean-reversion failed and spread broke
+3. **Persistent Extreme**: Z > 6.0 after 30+ minutes in trade
+   - Example: Z=6.2 after 35 minutes
+   - Indicates pair not mean-reverting as expected
+4. **Z-Stall Detector**: Z not trending toward zero (flat/stuck regime)
+   - Example: Z at 3.2 → 3.15 → 3.18 over 10 cycles (10 minutes)
+   - Triggers if Z change < 0.3σ in 10 cycles and |Z| > 1.5
+   - Indicates mean reversion has stalled
+5. **Time-Based Exit**: Position held > 60 minutes without reversion
+   - Example: 65 minutes in trade, Z still at 2.8
+   - Realizes profit when structural repricing prevents full mean reversion
+6. **Partial Mean Reversion**: Z improved >1.5σ and now < 2.0
+   - Example: Entered at Z=4.2, now at Z=1.8 (-2.4σ improvement)
+   - Takes profit on significant improvement even without full reversion to 0.5
+7. **Funding Bleed Guard**: Funding fees eroding unrealized profits
+   - Triggers when:
+     - Unrealized PnL > $5 (profitable position)
+     - Funding cost > $2 (significant bleed)
+     - Funding cost > 30% of unrealized PnL (high erosion ratio)
+   - Example: +$20 unrealized profit, -$8 funding cost (40% erosion)
+   - Prevents scenario where position PnL is positive but session PnL is negative
+
+**NOT Regime Breaks (continues holding):**
+- ❌ Z oscillating at entry level (entered -4.36, revisits -4.36) → Normal volatility
+- ❌ Z improving toward mean (entered -4.36, now -1.05) → Desired behavior
+
+**Implementation:**
+- Entry Z-score and timestamp recorded when position opens
+- Z-history tracked for last 10 cycles for stall detection
+- Each cycle compares current Z against entry context
+- Funding fees and unrealized PnL extracted from OKX position data
+- Prevents premature exits on expected volatility oscillations
+- **Bug Fixes (2026-01)**: 
+  - Old logic exited when Z returned to entry level, missing profitable mean reversions
+  - Added exit mechanisms for persistent divergence regimes (structural repricing, narrative shifts)
+  - Added funding bleed detection to prevent fee erosion of profits
+
 *   **Fail-Safe Stop Loss**: Hard 3% price move limit per asset.
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
 *   **Graveyard**: Failed pairs are blacklisted for **7 days**.
 *   **Cooldown**: Mandatory **24-hour wait** between pair switches to prevent over-trading and fee erosion.
+*   **Re-Entry Cooldown**: 5-minute wait after exit before re-entering same pair to prevent clustering at same Z-level.
+
+### Performance Tracking (Per-Cycle Logging)
+Each trading cycle logs comprehensive performance metrics:
+
+```
+--- Cycle 207 | SKY-USDT-SWAP/SPK-USDT-SWAP | 🟢 PnL: +0.00 USDT (+0.00%) | Equity: 1986.45 USDT | 🔴 Session: -13.55 USDT (-0.68%) ---
+```
+
+**Metrics Explained:**
+- **PnL**: Unrealized profit/loss from current open positions (real-time mark-to-market)
+- **Equity**: Current total account balance (includes all realized gains/losses)
+- **Session**: Actual profit/loss since bot started (Equity - Starting Equity)
+  - This is your **true performance indicator**
+  - Tracks cumulative realized gains/losses across all trades in the session
+  - Resets on bot restart
+
+**Why Three Metrics?**
+1. **PnL** → Shows if your current trade is winning (goes to 0 when position closes)
+2. **Equity** → Shows your total account value right now
+3. **Session** → Shows if you're actually making money overall (the real scoreboard)
+
+**Additional Enhancements (2026-01):**
+- **Delisted Ticker Detection**: Automatically switches pairs after 5 consecutive orderbook fetch failures
+- **Starting Equity Capture**: Recorded at bot startup for accurate session P&L calculation
+- **Emergency Override**: Health score < 40 bypasses 24h cooldown for immediate pair switching
+- **Enhanced Error Logging**: Detailed diagnostics for orderbook fetch failures (timeout, delisting, rate limits, illiquidity)
+- **Cross Margin Mode**: Capital-efficient margin sharing for long+short hedged positions
 
 ---
 
@@ -96,8 +171,9 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 *   **Language**: Python 3.x
 *   **Mathematics**: `statsmodels` (OLS, ADF), `numpy`, `scipy`.
 *   **Data Handling**: `pandas` for time-series and CSV management.
-*   **API**: `okx` SDK for REST (Account, Trade, Market).
+*   **API**: `okx` SDK for REST (Account, Trade, Market, Funding).
 *   **State Management**: Persistent JSON files for state tracking across restarts.
+*   **Diagnostics**: Built-in balance checker (`check_balance.py`) for account configuration verification.
 
 ---
 

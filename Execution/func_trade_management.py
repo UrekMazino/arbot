@@ -97,23 +97,35 @@ def generate_signal(z_history, cointegration_ok, in_position):
     if cointegration_ok != 1:
         return None, "No trade - cointegration invalid"
     
-    # ENTRY LOGIC
+    # ENTRY LOGIC - Use persistent state history across cycles
     if not in_position:
-        # Check if Z-score has persisted at extreme level for MIN_PERSIST_BARS bars
-        if len(z_history) >= MIN_PERSIST_BARS:
-            recent_zscores = z_history[-MIN_PERSIST_BARS:]
-            all_extreme = all(abs(z) >= ENTRY_Z for z in recent_zscores)
-            
-            if all_extreme:
-                # Determine direction based on current Z-score
-                if current_z <= -ENTRY_Z:
-                    return "BUY_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at -ENTRY_Z (oversold, bars={MIN_PERSIST_BARS})"
-                elif current_z >= ENTRY_Z:
-                    return "SELL_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at +ENTRY_Z (overbought, bars={MIN_PERSIST_BARS})"
+        from func_pair_state import add_to_persistence_history, get_persistence_history, can_reenter
+
+        # Check re-entry cooldown to prevent clustering at same Z level
+        if not can_reenter(cooldown_minutes=5):
+            return None, "Re-entry cooldown active (5 min since last exit)"
+
+        # Add current z-score to persistent history
+        add_to_persistence_history(current_z)
+
+        # Get last N cycles from persistent state
+        persistence_history = get_persistence_history()
+
+        if len(persistence_history) >= MIN_PERSIST_BARS:
+            recent_zscores = persistence_history[-MIN_PERSIST_BARS:]
+
+            # Check if all recent z-scores are in the same extreme zone
+            all_oversold = all(z <= -ENTRY_Z for z in recent_zscores)
+            all_overbought = all(z >= ENTRY_Z for z in recent_zscores)
+
+            if all_oversold:
+                return "BUY_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at -ENTRY_Z (oversold, bars={MIN_PERSIST_BARS})"
+            elif all_overbought:
+                return "SELL_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at +ENTRY_Z (overbought, bars={MIN_PERSIST_BARS})"
             else:
-                return None, f"No entry - Z-score not persistent (need {MIN_PERSIST_BARS} bars, got recent avg={abs(sum(recent_zscores)/len(recent_zscores)):.4f})"
+                return None, f"No entry - Z-score not persistent (history: {[round(z, 2) for z in recent_zscores]})"
         else:
-            return None, f"Insufficient history: {len(z_history)} bars < {MIN_PERSIST_BARS} required"
+            return None, f"Insufficient history: {len(persistence_history)} cycles < {MIN_PERSIST_BARS} required"
     
     # EXIT LOGIC
     if in_position:
@@ -346,8 +358,32 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
 
         # Fill targets
         # POSITION SIZING (2% Risk Rule)
-        # Risk per trade = 2% of total capital
-        risk_usdt = tradeable_capital_usdt * RISK_PER_TRADE_PCT
+        # Check actual available balance first
+        try:
+            balance_res = account_session.get_account_balance()
+            available_usdt = 0.0
+            if balance_res.get("code") == "0":
+                details = balance_res.get("data", [{}])[0].get("details", [])
+                for det in details:
+                    if det.get("ccy") == "USDT":
+                        available_usdt = float(det.get("availBal", 0))
+                        break
+            
+            if available_usdt <= 0:
+                logger.error(f"❌ No available USDT balance: {available_usdt}")
+                return kill_switch, signal_detected, trade_placed
+            
+            logger.info(f"💰 Available balance: {available_usdt:.2f} USDT")
+            
+            # Use the lower of configured capital or available balance
+            effective_capital = min(tradeable_capital_usdt, available_usdt * 0.95)  # 95% to leave buffer
+            logger.info(f"📊 Effective capital: {effective_capital:.2f} USDT (config: {tradeable_capital_usdt:.2f}, available: {available_usdt:.2f})")
+        except Exception as e:
+            logger.error(f"Failed to check balance: {e}. Using configured capital.")
+            effective_capital = tradeable_capital_usdt
+        
+        # Risk per trade = 2% of effective capital
+        risk_usdt = effective_capital * RISK_PER_TRADE_PCT
         
         # Stop loss distance in percentage (3% = 0.03)
         stop_loss_pct = stop_loss_fail_safe
@@ -360,14 +396,14 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         capital_long = initial_capital_usdt
         capital_short = initial_capital_usdt
         
-        # Validate against available capital
-        if initial_capital_usdt * 2 > tradeable_capital_usdt:
+        # Validate against effective capital
+        if initial_capital_usdt * 2 > effective_capital:
             logger.warning(
-                "Position size (%.2f per side) would exceed total capital. Reducing to 50/50 split.",
+                "Position size (%.2f per side) would exceed effective capital. Reducing to 50/50 split.",
                 initial_capital_usdt
             )
-            capital_long = tradeable_capital_usdt * 0.5
-            capital_short = tradeable_capital_usdt * 0.5
+            capital_long = effective_capital * 0.5
+            capital_short = effective_capital * 0.5
             initial_capital_usdt = capital_long
         
         # Log position sizing with 2% rule
@@ -492,6 +528,16 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 msg = f"Both orders placed. Long: {order_status_long}, Short: {order_status_short}"
                 print(msg)
                 logger.info(msg)
+
+                # Record entry Z-score for regime break detection
+                from func_pair_state import set_entry_z_score, clear_persistence_history
+                set_entry_z_score(latest_zscore)
+                logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
+
+                # Clear persistence history now that position is open
+                clear_persistence_history()
+                logger.info("🧹 Persistence history cleared (position opened)")
+
                 break
 
 
@@ -631,20 +677,54 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     latest_zscore = valid_zscores[-1]
     _log_zscore_status(latest_zscore)
 
-    # 1. Periodic Health Check
-    if health_check_due or coint_flag == 0:
-        # Note: we might not want to switch immediately if in position, 
-        # but the previous logic did. I'll stick to previous logic for now.
-        should_switch, score, rec = check_pair_health(metrics, latest_zscore)
+    # Track Z-score history for stall detection
+    from func_pair_state import add_to_z_history, get_z_history
+    add_to_z_history(latest_zscore)
+
+    # 0. FUNDING BLEED GUARD - Exit when fees erode profits
+    # CRITICAL: Prevent funding/fees from eating unrealized gains
+    from func_position_calls import get_account_state
+    from func_pair_state import get_entry_time
+    
+    state = get_account_state()
+    total_unrealized_pnl = 0.0
+    total_funding_cost = 0.0
+    
+    for pos in state.get("positions", []):
+        # Get unrealized PnL and funding fee from position data
+        upl = float(pos.get("upl", 0))  # Unrealized profit/loss
+        funding = float(pos.get("fundingFee", 0))  # Funding fee (negative = cost)
+        total_unrealized_pnl += upl
+        total_funding_cost += abs(funding) if funding < 0 else 0
+    
+    entry_time = get_entry_time()
+    time_in_trade = (time.time() - entry_time) / 60 if entry_time else 0
+    
+    # Guard: Exit if profitable but funding is bleeding it away
+    # Thresholds:
+    # - Unrealized PnL > $5 (profitable position)
+    # - Funding cost > $2 (significant bleed)
+    # - Funding cost > 30% of unrealized PnL (high ratio)
+    if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:
+        funding_ratio = (total_funding_cost / total_unrealized_pnl) * 100
+        if funding_ratio > 30:
+            msg = f"💸 KILL-SWITCH TRIGGERED: Funding bleed - UPnL: +${total_unrealized_pnl:.2f}, Funding cost: ${total_funding_cost:.2f} ({funding_ratio:.1f}% of profit)"
+            logger.warning(msg)
+            print(msg)
+            return 2
+
+    # 1. Periodic Health Check - ONLY FOR LOGGING, NOT IMMEDIATE EXIT
+    # CRITICAL: Health checks are regime-level diagnostics for pair selection
+    # They are NOT price-based risk controls and should NEVER force immediate exit
+    if health_check_due:
+        should_switch, score, rec = check_pair_health(metrics, latest_zscore, silent=False)
         if should_switch:
-            # If in position, maybe we should close first?
-            # Current bot logic for kill_switch=3 in main_execution calls _switch_to_next_pair
-            # which doesn't close positions. 
-            # I'll let main handle closing if kill_switch becomes 2.
-            # But if it's 3, it restarts.
-            # Usually, we should exit if health is bad.
-            logger.warning("Pair health failed while in position. Triggering exit.")
-            return 2 # Trigger close all
+            # Log the health degradation but DO NOT exit position
+            logger.warning(f"⚠️  Pair health degraded (score={score}) while in position.")
+            logger.warning("This pair will be blacklisted after position closes normally.")
+            logger.warning("Health checks do NOT force immediate exit - only price-based rules can.")
+            # Mark pair for graveyard after position closes
+            # (main_execution will handle this after normal exit)
             
     # 2. EXIT LOGIC: Mean Reversion
     if abs(latest_zscore) <= EXIT_Z:
@@ -653,12 +733,102 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         print(msg)
         return 2
 
-    # 3. HARD STOP-LOSS: Regime break
-    if abs(latest_zscore) > ZSCORE_HARD_STOP:
-        msg = f"🔴 KILL-SWITCH TRIGGERED: Regime break detected - Z={latest_zscore:.4f} exceeded hard stop {ZSCORE_HARD_STOP}"
-        logger.error(msg)
-        print(msg)
-        return 2
+    # 3. HARD STOP-LOSS: True regime break (Z getting WORSE, not oscillating)
+    from func_pair_state import get_entry_z_score, get_entry_time
+    entry_z = get_entry_z_score()
+    entry_time = get_entry_time()
+
+    if entry_z is not None:
+        abs_entry = abs(entry_z)
+        abs_current = abs(latest_zscore)
+        time_in_trade = (time.time() - entry_time) / 60 if entry_time else 0  # minutes
+
+        # TRUE regime breaks:
+        # 1. Z DIVERGING (getting worse, not oscillating at entry level)
+        z_deterioration = abs_current - abs_entry
+        if z_deterioration > 1.5:
+            msg = f"🔴 KILL-SWITCH TRIGGERED: Regime break - Z diverging from entry ({abs_entry:.2f} → {abs_current:.2f}, +{z_deterioration:.2f}σ worse)"
+            logger.error(msg)
+            print(msg)
+            return 2
+
+        # 2. SIGN FLIP (spread reversed direction)
+        if entry_z < 0 and latest_zscore > 2.0:  # Entered oversold, now overbought
+            msg = f"🔴 KILL-SWITCH TRIGGERED: Sign flip - Entry Z={entry_z:.2f}, now Z={latest_zscore:.2f}"
+            logger.error(msg)
+            print(msg)
+            return 2
+        elif entry_z > 0 and latest_zscore < -2.0:  # Entered overbought, now oversold
+            msg = f"🔴 KILL-SWITCH TRIGGERED: Sign flip - Entry Z={entry_z:.2f}, now Z={latest_zscore:.2f}"
+            logger.error(msg)
+            print(msg)
+            return 2
+
+        # 3. PERSISTENT EXTREME (not mean-reverting after long time)
+        if abs_current > 6.0 and time_in_trade > 30:
+            msg = f"🔴 KILL-SWITCH TRIGGERED: Persistent extreme - Z={abs_current:.2f} after {time_in_trade:.1f} min"
+            logger.error(msg)
+            print(msg)
+            return 2
+
+        # 4. STALL DETECTOR (Z not trending toward zero - flat/stuck regime)
+        # CRITICAL: Detect when mean reversion has stalled
+        z_history = get_z_history()
+        if len(z_history) >= 10:
+            z_now = z_history[-1]
+            z_10_cycles_ago = z_history[0]
+            z_change = abs(abs(z_now) - abs(z_10_cycles_ago))
+            
+            # Epsilon: minimum change expected over 10 cycles (10 minutes)
+            # If Z hasn't moved toward zero by at least 0.3σ in 10 cycles, it's stalled
+            epsilon = 0.3
+            
+            if z_change < epsilon and abs(z_now) > 1.5:
+                # Z is stuck in extreme zone (>1.5) and not moving toward zero
+                msg = f"⚠️  KILL-SWITCH TRIGGERED: Z-STALL - No mean reversion progress in 10 cycles (Z: {z_10_cycles_ago:.2f} → {z_now:.2f}, change: {z_change:.2f}σ)"
+                logger.warning(msg)
+                print(msg)
+                return 2
+
+        # 5. TIME-BASED EXIT (profit realization when mean reversion stalls)
+        # CRITICAL: Exit mechanism for persistent divergence regimes
+        if time_in_trade > 60:  # 60 minutes = 1 hour
+            # If we're still profitable after 1 hour but Z hasn't reverted, take profit
+            # This handles structural repricing / narrative shifts where mean reversion won't happen
+            msg = f"⏰ KILL-SWITCH TRIGGERED: Time-based profit realization - {time_in_trade:.1f} min in trade, Z still at {latest_zscore:.2f}"
+            logger.warning(msg)
+            print(msg)
+            return 2
+
+        # 6. PARTIAL MEAN REVERSION EXIT (Z improved significantly, take partial profit)
+        z_improvement = abs_entry - abs_current
+        if z_improvement > 1.5 and abs_current < 2.0:
+            # Z has improved by >1.5σ and is now below 2.0 (tradeable zone)
+            # Even if not at 0.5, this is significant improvement - realize profit
+            msg = f"💰 KILL-SWITCH TRIGGERED: Partial reversion profit - Z improved from {abs_entry:.2f} to {abs_current:.2f} (-{z_improvement:.2f}σ)"
+            logger.info(msg)
+            print(msg)
+            return 2
+
+        # NOT regime breaks: oscillations at entry level or improving
+        if abs(abs_current - abs_entry) < 1.0:
+            logger.info(f"✅ Normal oscillation: Z={latest_zscore:.2f} near entry {entry_z:.2f}")
+        elif abs_current < abs_entry:
+            logger.info(f"✅ Improving: Z={latest_zscore:.2f} (entry was {entry_z:.2f})")
+    else:
+        # NO ENTRY TRACKING (bot restarted with open positions)
+        # CRITICAL: Don't apply regime break logic without entry context!
+        # Only apply VERY conservative stops for true catastrophic scenarios
+        logger.warning(f"⚠️  No entry Z-score tracked (restart scenario). Current Z={latest_zscore:.2f}")
+
+        # Only trigger on EXTREME divergence (much higher threshold)
+        if abs(latest_zscore) > 8.0:
+            msg = f"🔴 KILL-SWITCH TRIGGERED: Catastrophic Z-score ({latest_zscore:.2f}) without entry context"
+            logger.error(msg)
+            print(msg)
+            return 2
+        else:
+            logger.info(f"Holding position (no entry context). Will close on mean reversion only.")
         
     # 4. MONITORING: Hold position
     logger.info(f"Hold position - Z={latest_zscore:.4f} still beyond EXIT_Z ({EXIT_Z})")

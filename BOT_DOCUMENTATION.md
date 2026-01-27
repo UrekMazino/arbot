@@ -97,12 +97,14 @@ The bot uses **intelligent regime break detection** that tracks entry context to
 3. **Persistent Extreme**: Z > 6.0 after 30+ minutes in trade
    - Example: Z=6.2 after 35 minutes
    - Indicates pair not mean-reverting as expected
-4. **Z-Stall Detector**: Z not trending toward zero (flat/stuck regime)
-   - Example: Z at 3.2 → 3.15 → 3.18 over 10 cycles (10 minutes)
-   - Triggers if Z change < 0.3σ in 10 cycles and |Z| > 1.5
-   - Indicates mean reversion has stalled
-5. **Time-Based Exit**: Position held > 60 minutes without reversion
-   - Example: 65 minutes in trade, Z still at 2.8
+4. **Z-Stall Detector (dynamic)**: Adaptive stall detection for flat/stuck regimes
+   - Window adapts to entry extremity (30-120 min based on |entry Z|)
+   - Epsilon adapts to recent Z volatility (0.2-0.5 sigma)
+   - No stall evaluation before 30 min; stricter after 2h
+   - Triggers when improvement < epsilon after the window and |Z| > 1.5; warns if |Z| > 1.0
+   - Volatility acceleration (recent > 1.5x prior) raises warnings
+5. **Time-Based Exit**: Position held longer than max(60 min, 2x stall window) without reversion
+   - Example: 125 minutes in trade, Z still far from mean
    - Realizes profit when structural repricing prevents full mean reversion
 6. **Partial Mean Reversion**: Z improved >1.5σ and now < 2.0
    - Example: Entered at Z=4.2, now at Z=1.8 (-2.4σ improvement)
@@ -121,9 +123,10 @@ The bot uses **intelligent regime break detection** that tracks entry context to
 
 **Implementation:**
 - Entry Z-score and timestamp recorded when position opens
-- Z-history tracked for last 10 cycles for stall detection
+- Z-history stored with timestamps (up to ~4 hours) for adaptive stall windows and volatility trend checks
 - Each cycle compares current Z against entry context
 - Funding fees and unrealized PnL extracted from OKX position data
+- Stall warnings logged at 1h/2h/3h milestones when trades remain open
 - Prevents premature exits on expected volatility oscillations
 - **Bug Fixes (2026-01)**: 
   - Old logic exited when Z returned to entry level, missing profitable mean reversions

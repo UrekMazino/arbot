@@ -18,6 +18,7 @@ from config_execution_api import (
     signal_negative_ticker,
     signal_positive_ticker,
     tradeable_capital_usdt,
+    stop_loss_fail_safe,
     max_drawdown_pct,
     ticker_1,
     ticker_2,
@@ -34,9 +35,9 @@ from func_position_calls import (
     get_pos_data_from_state
 )
 from func_price_calls import get_ticker_trade_liquidity
-from func_trade_management import manage_new_trades, monitor_exit
+from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT
 from func_get_zscore import get_latest_zscore
-from func_execution_calls import set_leverage
+from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info
 from func_save_status import save_status
 from func_pair_state import (
@@ -46,7 +47,11 @@ from func_pair_state import (
     set_last_switch_time,
     get_last_switch_time,
     record_trade_result,
-    get_last_health_score
+    get_last_health_score,
+    get_last_switch_reason,
+    set_last_switch_reason,
+    get_min_capital_cooldown,
+    set_min_capital_cooldown
 )
 
 # Setup logging
@@ -127,6 +132,92 @@ def _set_leverage_for_ticker(ticker, leverage):
     set_leverage(ticker, leverage)
 
 
+def _get_available_usdt():
+    try:
+        balance_res = account_session.get_account_balance()
+        if balance_res.get("code") != "0":
+            return 0.0
+        details = balance_res.get("data", [{}])[0].get("details", [])
+        for det in details:
+            if det.get("ccy") == "USDT":
+                return float(det.get("availBal", 0))
+    except Exception as exc:
+        logger.warning("Failed to fetch available USDT: %s", exc)
+    return 0.0
+
+
+def _get_per_leg_allocation():
+    available_usdt = _get_available_usdt()
+    if available_usdt > 0:
+        effective_capital = min(tradeable_capital_usdt, available_usdt * 0.95)
+    else:
+        effective_capital = tradeable_capital_usdt
+
+    if stop_loss_fail_safe <= 0:
+        return effective_capital * 0.5
+
+    risk_usdt = effective_capital * RISK_PER_TRADE_PCT
+    initial_capital_usdt = risk_usdt / stop_loss_fail_safe
+    if initial_capital_usdt * 2 > effective_capital:
+        initial_capital_usdt = effective_capital * 0.5
+    return initial_capital_usdt
+
+
+def _get_min_capital_for_ticker(ticker):
+    try:
+        req = get_min_capital_requirements(ticker)
+        if not req.get("ok"):
+            logger.warning(
+                "Min-capital check failed for %s: %s",
+                ticker,
+                req.get("error") or "unknown",
+            )
+            return 0.0
+        return req.get("min_capital") or 0.0
+    except Exception as exc:
+        logger.warning("Min-capital check failed for %s: %s", ticker, exc)
+        return 0.0
+
+
+def _pair_meets_min_capital(t1, t2, per_leg_capital):
+    remaining = get_min_capital_cooldown(t1, t2)
+    if remaining > 0:
+        logger.debug(
+            "Skipping pair %s/%s due to min-capital cooldown (%.1f sec remaining).",
+            t1,
+            t2,
+            remaining,
+        )
+        return False
+
+    min_cap_t1 = _get_min_capital_for_ticker(t1)
+    min_cap_t2 = _get_min_capital_for_ticker(t2)
+    if min_cap_t1 <= 0 or min_cap_t2 <= 0:
+        logger.warning(
+            "Min-capital check failed for %s/%s (min1=%.8f min2=%.8f).",
+            t1,
+            t2,
+            min_cap_t1,
+            min_cap_t2,
+        )
+        return False
+    required = max(min_cap_t1, min_cap_t2)
+    if required > per_leg_capital:
+        cooldown = set_min_capital_cooldown(t1, t2, required, per_leg_capital)
+        logger.info(
+            "Skipping pair %s/%s: min capital %.8f exceeds allocation %.8f (min1=%.8f min2=%.8f, cooldown=%.1fm).",
+            t1,
+            t2,
+            required,
+            per_leg_capital,
+            min_cap_t1,
+            min_cap_t2,
+            cooldown / 60,
+        )
+        return False
+    return True
+
+
 """
 KILL_SWITCH STATE MACHINE DOCUMENTATION
 ========================================
@@ -162,7 +253,7 @@ State Transitions (deterministic):
 """
 
 
-def _switch_to_next_pair(health_score=None):
+def _switch_to_next_pair(health_score=None, switch_reason="health"):
     """
     Read the cointegrated pairs from Strategy folder and switch to the next one.
     Includes Graveyard and Cooldown checks with emergency override for critical health.
@@ -189,11 +280,14 @@ def _switch_to_next_pair(health_score=None):
     elif elapsed < 24:
         logger.info(f"⚠️  Cooldown bypassed but health not critical: {health_score}/100")
 
-    logger.info("Attempting to switch to next pair...")
+    logger.info("Attempting to switch to next pair (reason=%s)...", switch_reason)
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "2_cointegrated_pairs.csv"
     if not csv_path.exists():
         logger.error(f"Cannot switch pair: CSV not found at {csv_path}")
         return False
+
+    per_leg_capital = _get_per_leg_allocation()
+    logger.info("Per-leg allocation for min-capital filter: %.8f", per_leg_capital)
         
     try:
         logger.info(f"Reading pairs from {csv_path}...")
@@ -207,8 +301,9 @@ def _switch_to_next_pair(health_score=None):
         curr_t2 = ticker_2
         logger.info(f"Current pair: {curr_t1}/{curr_t2}")
         
-        # Add current pair to graveyard before switching
-        add_to_graveyard(curr_t1, curr_t2)
+        # Add current pair to graveyard before switching unless this is a min-capital skip
+        if switch_reason != "min_capital":
+            add_to_graveyard(curr_t1, curr_t2)
         
         # Ensure we have the necessary columns
         if 'sym_1' not in df.columns or 'sym_2' not in df.columns:
@@ -230,10 +325,13 @@ def _switch_to_next_pair(health_score=None):
         for i in range(1, len(pairs)):
             idx = (curr_idx + i) % len(pairs)
             t1, t2 = pairs[idx]
-            if not is_in_graveyard(t1, t2):
-                next_t1, next_t2 = t1, t2
-                logger.info(f"Found healthy replacement at index {idx}: {next_t1}/{next_t2}")
-                break
+            if is_in_graveyard(t1, t2):
+                continue
+            if not _pair_meets_min_capital(t1, t2, per_leg_capital):
+                continue
+            next_t1, next_t2 = t1, t2
+            logger.info(f"Found healthy replacement at index {idx}: {next_t1}/{next_t2}")
+            break
         
         if next_t1 is None:
             logger.error("❌ No suitable replacement pair found in CSV (all pairs in graveyard or CSV too small)")
@@ -259,14 +357,41 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
     """
     Calculate cumulative P&L from open positions using fetched account state.
     """
+    total_pnl = 0.0
+    positions = []
+    if isinstance(state, dict):
+        positions = state.get("positions", [])
+
+    used_positions = 0
+    tickers = {ticker_p, ticker_n}
+
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        inst_id = pos.get("instId")
+        if inst_id not in tickers:
+            continue
+        try:
+            upl = float(pos.get("upl", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        total_pnl += upl
+        used_positions += 1
+
+    if used_positions > 0:
+        pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
+        if total_pnl != 0.0:
+            logger.info(
+                "Cumulative P&L: %.2f USDT (%.2f%%) | Threshold: %.2f USDT",
+                total_pnl,
+                pnl_pct,
+                -tradeable_capital_usdt * max_drawdown_pct,
+            )
+        return total_pnl, pnl_pct
+
     try:
         total_pnl = 0.0
-        
-        # Get position data from state
-        # Direction doesn't matter much for get_pos_data_from_state if we want any, 
-        # but the strategy usually has one per ticker.
-        # Check both Long and Short just in case.
-        
+        # Fallback to price-based estimate if position UPL is unavailable.
         for ticker, price_override in [(ticker_p, price_p), (ticker_n, price_n)]:
             for direction in ["Long", "Short"]:
                 entry_price, size = get_pos_data_from_state(state, ticker, direction=direction)
@@ -274,21 +399,31 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
                     current_price = price_override
                     if not current_price:
                         _, current_price = get_ticker_trade_liquidity(ticker, limit=1)
-                    
+
                     if current_price and current_price > 0:
                         if direction == "Long":
                             pnl = (current_price - entry_price) * size
                         else:
                             pnl = (entry_price - current_price) * size
                         total_pnl += pnl
-                        logger.debug(f"P&L {ticker} {direction.upper()}: entry={entry_price:.4f} current={current_price:.4f} size={size} pnl={pnl:.2f}")
-        
+                        logger.debug(
+                            "P&L %s %s: entry=%.4f current=%.4f size=%.6f pnl=%.2f",
+                            ticker,
+                            direction.upper(),
+                            entry_price,
+                            current_price,
+                            size,
+                            pnl,
+                        )
+
         pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
-        
-        # Log summary
         if total_pnl != 0.0:
-            logger.info(f"Cumulative P&L: {total_pnl:.2f} USDT ({pnl_pct:.2f}%) | Threshold: {-tradeable_capital_usdt * max_drawdown_pct:.2f} USDT")
-        
+            logger.info(
+                "Cumulative P&L: %.2f USDT (%.2f%%) | Threshold: %.2f USDT",
+                total_pnl,
+                pnl_pct,
+                -tradeable_capital_usdt * max_drawdown_pct,
+            )
         return total_pnl, pnl_pct
     except Exception as e:
         logger.error(f"Error calculating P&L: {e}")
@@ -322,6 +457,20 @@ if __name__ == "__main__":
         logger.critical(str(e))
         print(str(e))
         exit(1)
+
+    per_leg_capital = _get_per_leg_allocation()
+    if not _pair_meets_min_capital(ticker_1, ticker_2, per_leg_capital):
+        logger.warning(
+            "Active pair fails min-capital filter (allocation=%.8f). Switching pair.",
+            per_leg_capital,
+        )
+        set_last_switch_reason("min_capital")
+        if _switch_to_next_pair(health_score=0, switch_reason="min_capital"):
+            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+            print("Restarting to apply new pair...")
+            sys.exit(3)
+        logger.error("No suitable replacement pair found for min-capital filter.")
+        sys.exit(1)
     
     # Run the bot
     print("StatBot initialised...")
@@ -407,7 +556,8 @@ if __name__ == "__main__":
                 save_status(status_dict)
 
                 health_score = 0  # Force emergency override
-                if _switch_to_next_pair(health_score=health_score):
+                set_last_switch_reason("orderbook_dead")
+                if _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead"):
                     logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                     print("Restarting to apply new pair...")
                     sys.exit(3)
@@ -487,8 +637,9 @@ if __name__ == "__main__":
 
                 # Get the last health score for emergency override
                 health_score = get_last_health_score()
+                switch_reason = get_last_switch_reason() or "health"
 
-                if _switch_to_next_pair(health_score=health_score):
+                if _switch_to_next_pair(health_score=health_score, switch_reason=switch_reason):
                     logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                     print("Restarting to apply new pair...")
                     # Exit with code 3 to signal the manager to restart

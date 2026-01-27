@@ -5,6 +5,15 @@ from pathlib import Path
 
 STATE_FILE = Path(__file__).resolve().parent / "pair_strategy_state.json"
 
+# Min-capital cooldown defaults (seconds)
+MIN_CAPITAL_COOLDOWN_SHORT = 180
+MIN_CAPITAL_COOLDOWN_MEDIUM = 300
+MIN_CAPITAL_COOLDOWN_LONG = 600
+MIN_CAPITAL_SHORTAGE_MEDIUM = 0.20
+MIN_CAPITAL_SHORTAGE_HIGH = 0.50
+Z_HISTORY_MAX_AGE_SECONDS = 14400
+Z_HISTORY_MAX_LEN = 5000
+
 def load_pair_state():
     if not STATE_FILE.exists():
         return {
@@ -14,7 +23,10 @@ def load_pair_state():
             "last_health_score": None,
             "price_fetch_failures": 0,
             "entry_z_score": None,
-            "entry_time": None
+            "entry_time": None,
+            "last_switch_reason": "",
+            "min_capital_cooldowns": {},
+            "stall_warning_marks": []
         }
     try:
         with open(STATE_FILE, "r") as f:
@@ -33,9 +45,15 @@ def load_pair_state():
                 state["entry_z_score"] = None
             if "entry_time" not in state:
                 state["entry_time"] = None
+            if "last_switch_reason" not in state:
+                state["last_switch_reason"] = ""
+            if "min_capital_cooldowns" not in state:
+                state["min_capital_cooldowns"] = {}
+            if "stall_warning_marks" not in state:
+                state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None}
+        return {"last_switch_time": 0, "graveyard": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
 
 def save_pair_state(state):
     try:
@@ -87,6 +105,71 @@ def set_last_switch_time(timestamp=None):
     state = load_pair_state()
     state["last_switch_time"] = timestamp
     save_pair_state(state)
+
+def set_last_switch_reason(reason):
+    state = load_pair_state()
+    state["last_switch_reason"] = str(reason or "")
+    save_pair_state(state)
+
+def get_last_switch_reason():
+    state = load_pair_state()
+    return state.get("last_switch_reason", "")
+
+def calculate_min_capital_cooldown(required, allocated):
+    try:
+        required_val = float(required)
+        allocated_val = float(allocated)
+    except (TypeError, ValueError):
+        return MIN_CAPITAL_COOLDOWN_MEDIUM
+
+    if required_val <= 0 or allocated_val <= 0:
+        return MIN_CAPITAL_COOLDOWN_MEDIUM
+
+    shortage_pct = (required_val - allocated_val) / required_val
+    if shortage_pct > MIN_CAPITAL_SHORTAGE_HIGH:
+        return MIN_CAPITAL_COOLDOWN_LONG
+    if shortage_pct > MIN_CAPITAL_SHORTAGE_MEDIUM:
+        return MIN_CAPITAL_COOLDOWN_MEDIUM
+    return MIN_CAPITAL_COOLDOWN_SHORT
+
+def _min_capital_key(t1, t2):
+    return "/".join(sorted([str(t1), str(t2)]))
+
+def set_min_capital_cooldown(t1, t2, required, allocated):
+    cooldown = calculate_min_capital_cooldown(required, allocated)
+    state = load_pair_state()
+    cooldowns = state.get("min_capital_cooldowns", {})
+    key = _min_capital_key(t1, t2)
+    cooldowns[key] = {
+        "ts": time.time(),
+        "cooldown": cooldown,
+        "required": float(required),
+        "allocated": float(allocated),
+    }
+    state["min_capital_cooldowns"] = cooldowns
+    save_pair_state(state)
+    return cooldown
+
+def get_min_capital_cooldown(t1, t2):
+    state = load_pair_state()
+    cooldowns = state.get("min_capital_cooldowns", {})
+    key = _min_capital_key(t1, t2)
+    entry = cooldowns.get(key)
+    if not entry:
+        return 0.0
+
+    ts = entry.get("ts") or 0
+    cooldown = entry.get("cooldown") or 0
+    if ts <= 0 or cooldown <= 0:
+        return 0.0
+
+    elapsed = time.time() - ts
+    if elapsed >= cooldown:
+        cooldowns.pop(key, None)
+        state["min_capital_cooldowns"] = cooldowns
+        save_pair_state(state)
+        return 0.0
+    return float(cooldown - elapsed)
 
 def set_last_health_score(score):
     """Store the last health score for emergency override checks."""
@@ -151,6 +234,7 @@ def clear_entry_tracking():
     state["entry_time"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
     state["z_history"] = []  # Clear stall detection history
+    state["stall_warning_marks"] = []
     save_pair_state(state)
 
 def can_reenter(cooldown_minutes=5):
@@ -178,22 +262,50 @@ def add_to_persistence_history(z_score):
     save_pair_state(state)
 
 def add_to_z_history(z_score):
-    """Add current z-score to monitoring history (last 10 cycles for stall detection)."""
+    """Add current z-score to monitoring history (time-based stall detection)."""
     state = load_pair_state()
-    if "z_history" not in state:
-        state["z_history"] = []
+    history = state.get("z_history", [])
+    if not isinstance(history, list):
+        history = []
 
-    state["z_history"].append(z_score)
-    # Keep only last 10 cycles
-    if len(state["z_history"]) > 10:
-        state["z_history"] = state["z_history"][-10:]
+    if history and any(
+        not isinstance(entry, dict) or "z" not in entry or "ts" not in entry
+        for entry in history
+    ):
+        history = []
 
+    try:
+        z_val = float(z_score)
+    except (TypeError, ValueError):
+        return
+
+    now = time.time()
+    history.append({"ts": now, "z": z_val})
+
+    cutoff = now - Z_HISTORY_MAX_AGE_SECONDS
+    history = [
+        entry for entry in history
+        if isinstance(entry, dict) and entry.get("ts", 0) >= cutoff
+    ]
+
+    if len(history) > Z_HISTORY_MAX_LEN:
+        history = history[-Z_HISTORY_MAX_LEN:]
+
+    state["z_history"] = history
     save_pair_state(state)
 
 def get_z_history():
     """Get Z-score history for stall detection."""
     state = load_pair_state()
-    return state.get("z_history", [])
+    history = state.get("z_history", [])
+    if not isinstance(history, list):
+        return []
+    if history and any(
+        not isinstance(entry, dict) or "z" not in entry or "ts" not in entry
+        for entry in history
+    ):
+        return []
+    return history
 
 def get_persistence_history():
     """Get persistence history."""
@@ -205,6 +317,29 @@ def clear_persistence_history():
     state = load_pair_state()
     state["persistence_history"] = []
     save_pair_state(state)
+
+def get_stall_warning_marks():
+    state = load_pair_state()
+    marks = state.get("stall_warning_marks", [])
+    if not isinstance(marks, list):
+        return []
+    return marks
+
+def add_stall_warning_mark(mark):
+    try:
+        mark_val = int(mark)
+    except (TypeError, ValueError):
+        return False
+    state = load_pair_state()
+    marks = state.get("stall_warning_marks", [])
+    if not isinstance(marks, list):
+        marks = []
+    if mark_val in marks:
+        return False
+    marks.append(mark_val)
+    state["stall_warning_marks"] = marks
+    save_pair_state(state)
+    return True
 
 def can_switch(cooldown_hours=24, health_score=None, emergency_threshold=25):
     """

@@ -10,7 +10,7 @@ from config_execution_api import (
     depth,
 )
 from func_calculation import get_trade_details
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 
 def _bool_str(value):
@@ -108,6 +108,19 @@ def _fetch_instrument_info(inst_id):
     return data[0] if data else None
 
 
+def _get_orderbook_payload(inst_id):
+    try:
+        res = market_session.get_orderbook(instId=inst_id, sz=str(depth))
+    except Exception as exc:
+        return None, f"Failed to fetch orderbook: {exc}"
+
+    if res.get("code") != "0":
+        return None, f"Orderbook fetch failed: {res.get('msg')}"
+
+    payload = {"arg": {"channel": "books", "instId": inst_id}, "data": res.get("data", [])}
+    return payload, None
+
+
 def _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=None):
     if quantity <= 0:
         return quantity
@@ -143,6 +156,119 @@ def _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=None):
         print(f"Adjusted quantity to lot size: {quantity} -> {adjusted}")
 
     return float(adjusted)
+
+
+def _get_min_order_qty(instrument_info):
+    if not instrument_info:
+        return Decimal("0")
+
+    lot_sz_raw = instrument_info.get("lotSz")
+    min_sz_raw = instrument_info.get("minSz")
+    try:
+        lot_sz = Decimal(str(lot_sz_raw)) if lot_sz_raw is not None else Decimal("0")
+    except (TypeError, ValueError):
+        lot_sz = Decimal("0")
+    try:
+        min_sz = Decimal(str(min_sz_raw)) if min_sz_raw is not None else Decimal("0")
+    except (TypeError, ValueError):
+        min_sz = Decimal("0")
+
+    if lot_sz <= 0 and min_sz <= 0:
+        return Decimal("0")
+    if lot_sz <= 0:
+        return min_sz
+    if min_sz <= 0:
+        return lot_sz
+
+    steps = (min_sz / lot_sz).to_integral_value(rounding=ROUND_UP)
+    return steps * lot_sz
+
+
+def _calculate_min_capital(entry_price, instrument_info):
+    if entry_price <= 0:
+        return 0.0, 0.0
+    min_qty = _get_min_order_qty(instrument_info)
+    if min_qty <= 0:
+        return 0.0, 0.0
+    min_capital = float(min_qty) * entry_price
+    return float(min_qty), min_capital
+
+
+def get_min_capital_requirements(inst_id, orderbook_payload=None, instrument_info=None):
+    info = instrument_info or _fetch_instrument_info(inst_id)
+    if not info:
+        return {"ok": False, "error": "instrument info unavailable"}
+
+    if orderbook_payload is None:
+        orderbook_payload, err = _get_orderbook_payload(inst_id)
+        if not orderbook_payload:
+            return {"ok": False, "error": err}
+
+    entry_long, _, _ = get_trade_details(orderbook_payload, direction="long", capital=1.0)
+    entry_short, _, _ = get_trade_details(orderbook_payload, direction="short", capital=1.0)
+
+    min_qty_long, min_cap_long = _calculate_min_capital(entry_long, info)
+    min_qty_short, min_cap_short = _calculate_min_capital(entry_short, info)
+
+    min_capital = max(min_cap_long, min_cap_short)
+    min_qty = max(min_qty_long, min_qty_short)
+
+    return {
+        "ok": min_capital > 0,
+        "min_capital": min_capital,
+        "min_qty": min_qty,
+        "entry_long": entry_long,
+        "entry_short": entry_short,
+        "orderbook_payload": orderbook_payload,
+        "instrument_info": info,
+    }
+
+
+def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
+                          enforce_lot_size=True, instrument_info=None):
+    entry_side = _resolve_entry_side(direction)
+    if not entry_side:
+        return {"ok": False, "error": "direction must be long/short or buy/sell."}
+
+    if orderbook_payload is None:
+        orderbook_payload, err = _get_orderbook_payload(inst_id)
+        if not orderbook_payload:
+            return {"ok": False, "error": err}
+
+    entry_price, quantity, stop_price = get_trade_details(
+        orderbook_payload,
+        direction="long" if entry_side == "buy" else "short",
+        capital=capital,
+    )
+
+    info = instrument_info
+    if enforce_lot_size:
+        if info is None:
+            info = _fetch_instrument_info(inst_id)
+        if info:
+            quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=info)
+
+    ok = entry_price > 0 and quantity > 0 and stop_price > 0
+    error = ""
+    if not ok:
+        error = f"entry={entry_price} qty={quantity} stop={stop_price} capital={capital}"
+
+    min_qty, min_capital = _calculate_min_capital(entry_price, info)
+
+    return {
+        "ok": ok,
+        "inst_id": inst_id,
+        "direction": direction,
+        "entry_side": entry_side,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "stop_price": stop_price,
+        "min_qty": min_qty,
+        "min_capital": min_capital,
+        "orderbook_payload": orderbook_payload,
+        "instrument_info": info,
+        "error": error,
+    }
 
 
 def place_stop_loss_order(inst_id, side, size, trigger_price, td_mode_override=None, pos_side="",
@@ -197,17 +323,10 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         return None
 
     if orderbook_payload is None:
-        try:
-            res = market_session.get_orderbook(instId=inst_id, sz=str(depth))
-        except Exception as exc:
-            print(f"ERROR: Failed to fetch orderbook: {exc}")
+        orderbook_payload, err = _get_orderbook_payload(inst_id)
+        if not orderbook_payload:
+            print(f"ERROR: {err}")
             return None
-
-        if res.get("code") != "0":
-            print(f"ERROR: Orderbook fetch failed: {res.get('msg')}")
-            return None
-
-        orderbook_payload = {"arg": {"channel": "books", "instId": inst_id}, "data": res.get("data", [])}
 
     entry_price, quantity, stop_price = get_trade_details(
         orderbook_payload,
@@ -225,7 +344,7 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=instrument_info)
 
     if entry_price <= 0 or quantity <= 0 or stop_price <= 0:
-        print("ERROR: Invalid trade details (entry, quantity, stop).")
+        print(f"ERROR: Invalid trade details (entry={entry_price}, quantity={quantity}, stop={stop_price}).")
         return None
 
     if limit_offset and limit_offset != 0:
@@ -489,17 +608,10 @@ def initialise_order_execution(
     Returns a dict with entry/stop responses and extracted IDs, or None on failure.
     """
     if orderbook_payload is None:
-        try:
-            res = market_session.get_orderbook(instId=ticker, sz=str(depth))
-        except Exception as exc:
-            print(f"ERROR: Failed to fetch orderbook: {exc}")
+        orderbook_payload, err = _get_orderbook_payload(ticker)
+        if not orderbook_payload:
+            print(f"ERROR: {err}")
             return None
-
-        if res.get("code") != "0":
-            print(f"ERROR: Orderbook fetch failed: {res.get('msg')}")
-            return None
-
-        orderbook_payload = {"arg": {"channel": "books", "instId": ticker}, "data": res.get("data", [])}
 
     result = place_entry_with_stop(
         inst_id=ticker,

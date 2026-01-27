@@ -14,15 +14,28 @@ from config_execution_api import (
     ZERO_CROSSINGS_MIN,
     CORRELATION_MIN,
     TREND_CRITICAL,
-    Z_SCORE_CRITICAL
+    Z_SCORE_CRITICAL,
 )
 
-from func_pair_state import get_consecutive_losses
+from func_pair_state import (
+    get_consecutive_losses,
+    set_last_health_score,
+    set_last_switch_reason,
+    set_min_capital_cooldown,
+)
 
 # Risk management thresholds
 ZSCORE_HARD_STOP = 2.5  # Hard stop-loss if Z-score exceeds this (regime break detection)
 ZSCORE_EXIT_TARGET = 0.05  # Exit at mean reversion with small buffer for fees (~0.07% round-trip)
 RISK_PER_TRADE_PCT = 0.02  # 2% of total capital risked per trade
+PARTIAL_EXIT_HEALTH_THRESHOLD = 60
+PARTIAL_EXIT_MINUTES = 30
+Z_STALL_BASE_WINDOW_SECONDS = 3600
+Z_STALL_VOLATILITY_ACCEL_RATIO = 1.5
+Z_STALL_EARLY_GRACE_MINUTES = 30
+Z_STALL_LATE_STRICT_MINUTES = 120
+Z_STALL_TRIGGER_ABS = 1.5
+Z_STALL_WARN_ABS = 1.0
 
 """
 MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
@@ -46,9 +59,10 @@ kill_switch = 2: Final stop, close everything
 
 All transitions are logged with timestamps and context.
 """
-from func_price_calls import get_ticker_trade_liquidity
+from func_price_calls import get_ticker_trade_liquidity, get_ticker_liquidity_analysis
 from func_get_zscore import get_latest_zscore
-from func_execution_calls import initialise_order_execution
+from func_execution_calls import initialise_order_execution, preview_entry_details, get_min_capital_requirements
+from func_close_positions import close_all_positions
 from func_order_review import check_order
 import time
 import math
@@ -67,6 +81,120 @@ if not logger.handlers:
     fh.setFormatter(fmt)
     logger.addHandler(fh)
     logger.setLevel(logging.INFO)
+
+def _resolve_entry_id(entry_result):
+    if not isinstance(entry_result, dict):
+        return ""
+    entry_id = entry_result.get("entry_id") or ""
+    if entry_id:
+        return str(entry_id)
+    entry = entry_result.get("entry")
+    if isinstance(entry, dict):
+        data = entry.get("data") or []
+        if data and isinstance(data[0], dict):
+            return str(data[0].get("ordId") or data[0].get("clOrdId") or "")
+    return ""
+
+
+def _entry_result_ok(entry_result):
+    if not isinstance(entry_result, dict):
+        return False
+    if entry_result.get("ok") is False:
+        return False
+    return True
+
+
+def _log_missing_entry_id(side_label, entry_result):
+    code = None
+    msg = None
+    if isinstance(entry_result, dict):
+        entry = entry_result.get("entry")
+        if isinstance(entry, dict):
+            code = entry.get("code")
+            msg = entry.get("msg")
+    err_msg = f"ERROR: {side_label} entry missing order id (code={code} msg={msg})."
+    logger.error(err_msg)
+    print(err_msg)
+
+def _z_history_values(z_history):
+    values = []
+    for entry in z_history:
+        z_val = entry.get("z") if isinstance(entry, dict) else entry
+        try:
+            values.append(float(z_val))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+def _calc_std(values):
+    if not values:
+        return 0.0
+    mean_val = sum(values) / len(values)
+    variance = sum((val - mean_val) ** 2 for val in values) / len(values)
+    return math.sqrt(variance)
+
+def _recent_volatility(z_values):
+    if len(z_values) < 10:
+        return 0.5
+    recent = z_values[-20:]
+    return _calc_std(recent)
+
+def _adaptive_stall_window_seconds(entry_z):
+    abs_entry = abs(entry_z)
+    if abs_entry < 2.5:
+        return 1800
+    if abs_entry < 3.5:
+        return Z_STALL_BASE_WINDOW_SECONDS
+    if abs_entry < 4.5:
+        return 5400
+    return 7200
+
+def _adaptive_stall_epsilon(volatility, time_in_trade_sec):
+    if volatility > 1.0:
+        epsilon = 0.5
+    elif volatility > 0.5:
+        epsilon = 0.3
+    else:
+        epsilon = 0.2
+
+    minutes_in_trade = time_in_trade_sec / 60.0
+    if minutes_in_trade < Z_STALL_EARLY_GRACE_MINUTES:
+        return None
+    if minutes_in_trade < 60:
+        epsilon *= 0.7
+    elif minutes_in_trade > Z_STALL_LATE_STRICT_MINUTES:
+        epsilon *= 1.3
+    return epsilon
+
+def _volatility_accelerating(z_values):
+    if len(z_values) < 40:
+        return False
+    recent = z_values[-20:]
+    prior = z_values[-40:-20]
+    recent_vol = _calc_std(recent)
+    prior_vol = _calc_std(prior)
+    if prior_vol <= 0:
+        return False
+    return recent_vol > prior_vol * Z_STALL_VOLATILITY_ACCEL_RATIO
+
+def _z_at_or_before(z_history, target_ts):
+    z_val = None
+    for entry in z_history:
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("ts")
+        if ts is None:
+            continue
+        if ts <= target_ts:
+            z_val = entry.get("z")
+        elif z_val is not None:
+            break
+    if z_val is None:
+        return None
+    try:
+        return float(z_val)
+    except (TypeError, ValueError):
+        return None
 
 # Issue #11 Fix: Signal generation with persistence requirement and professional thresholds
 def generate_signal(z_history, cointegration_ok, in_position):
@@ -287,6 +415,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
     if health_check_due or coint_flag == 0:
         should_switch, score, rec = check_pair_health(metrics, latest_zscore)
         if should_switch:
+            set_last_switch_reason("health")
             return 3, False, False
     
     # 3. Signal Generation
@@ -340,7 +469,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             signal_negative_ticker, last_price_n, avg_liquidity_ticker_n,
         )
 
-            # Determine long ticker vs short ticker liquidity ratio
+        # Determine long ticker vs short ticker liquidity ratio
         if signal_sign_positive:
             long_ticker = signal_positive_ticker
             short_ticker = signal_negative_ticker
@@ -443,6 +572,79 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         remaining_capital_long = capital_long
         remaining_capital_short = capital_short
 
+        # Evaluate min-capital requirements before preflight to avoid noisy adjustments
+        min_req_long = get_min_capital_requirements(long_ticker)
+        min_req_short = get_min_capital_requirements(short_ticker)
+        if not min_req_long.get("ok") or not min_req_short.get("ok"):
+            msg = (
+                "ERROR: Min-capital requirements unavailable; "
+                f"long={min_req_long.get('error') or 'unknown'} "
+                f"short={min_req_short.get('error') or 'unknown'}. Skipping entry."
+            )
+            print(msg)
+            logger.error(msg)
+            return kill_switch, signal_detected, trade_placed
+
+        min_capital_long = min_req_long.get("min_capital") or 0.0
+        min_capital_short = min_req_short.get("min_capital") or 0.0
+        required_floor = max(min_capital_long, min_capital_short)
+        if required_floor > 0 and initial_capital_usdt < required_floor:
+            if required_floor > capital_long or required_floor > capital_short:
+                cooldown = set_min_capital_cooldown(
+                    long_ticker,
+                    short_ticker,
+                    required_floor,
+                    capital_long,
+                )
+                msg = (
+                    "ERROR: Minimum per-leg capital exceeds allocation; "
+                    f"required={required_floor:.8f} long_min={min_capital_long:.8f} "
+                    f"short_min={min_capital_short:.8f} allocated={capital_long:.8f}. "
+                    f"Switching pair (cooldown={cooldown/60:.1f}m)."
+                )
+                print(msg)
+                logger.error(msg)
+                set_last_switch_reason("min_capital")
+                # Force pair switch by using emergency override threshold in main_execution.
+                set_last_health_score(0)
+                return 3, signal_detected, trade_placed
+
+            logger.info(
+                "Raising initial capital from %.8f to %.8f to meet min order size "
+                "(long_min=%.8f short_min=%.8f).",
+                initial_capital_usdt,
+                required_floor,
+                min_capital_long,
+                min_capital_short,
+            )
+            initial_capital_usdt = required_floor
+
+        # Preflight both legs to avoid one-sided entries on invalid trade details
+        preflight_long = preview_entry_details(
+            long_ticker,
+            "buy",
+            initial_capital_usdt,
+            orderbook_payload=min_req_long.get("orderbook_payload"),
+            instrument_info=min_req_long.get("instrument_info"),
+        )
+        preflight_short = preview_entry_details(
+            short_ticker,
+            "sell",
+            initial_capital_usdt,
+            orderbook_payload=min_req_short.get("orderbook_payload"),
+            instrument_info=min_req_short.get("instrument_info"),
+        )
+
+        if not preflight_long.get("ok") or not preflight_short.get("ok"):
+            msg = (
+                "ERROR: Invalid trade details; "
+                f"long={preflight_long.get('error') or 'ok'} "
+                f"short={preflight_short.get('error') or 'ok'}. Skipping entry."
+            )
+            print(msg)
+            logger.error(msg)
+            return kill_switch, signal_detected, trade_placed
+
         # Trade until filled or signal is false
         order_status_long = ""
         order_status_short = ""
@@ -451,13 +653,22 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         while kill_switch == 0:
             # Place long order
             if count_long == 0:
+                long_payload = preflight_long.get("orderbook_payload") if preflight_long else None
+                long_info = preflight_long.get("instrument_info") if preflight_long else None
                 result_long = initialise_order_execution(
                     long_ticker,
                     "buy",
                     initial_capital_usdt,
+                    orderbook_payload=long_payload,
+                    instrument_info=long_info,
                 )
-                if result_long:
-                    order_long_id = result_long.get("entry_id", "")
+                preflight_long = None
+                if result_long and _entry_result_ok(result_long):
+                    order_long_id = _resolve_entry_id(result_long)
+                    if not order_long_id:
+                        _log_missing_entry_id("Long", result_long)
+                        close_all_positions(0)
+                        return kill_switch, signal_detected, trade_placed
                     order_status_long = "placed"
                     count_long = 1
                     remaining_capital_long = remaining_capital_long - initial_capital_usdt
@@ -485,16 +696,27 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 else:
                     order_long_id = ""
                     order_status_long = "failed"
+                    logger.error("Long entry failed; skipping pair entry.")
+                    return kill_switch, signal_detected, trade_placed
 
             # Place short order
             if count_short == 0:
+                short_payload = preflight_short.get("orderbook_payload") if preflight_short else None
+                short_info = preflight_short.get("instrument_info") if preflight_short else None
                 result_short = initialise_order_execution(
                     short_ticker,
                     "sell",
                     initial_capital_usdt,
+                    orderbook_payload=short_payload,
+                    instrument_info=short_info,
                 )
-                if result_short:
-                    order_short_id = result_short.get("entry_id", "")
+                preflight_short = None
+                if result_short and _entry_result_ok(result_short):
+                    order_short_id = _resolve_entry_id(result_short)
+                    if not order_short_id:
+                        _log_missing_entry_id("Short", result_short)
+                        close_all_positions(0)
+                        return kill_switch, signal_detected, trade_placed
                     order_status_short = "placed"
                     count_short = 1
                     remaining_capital_short = remaining_capital_short - initial_capital_usdt
@@ -522,12 +744,17 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 else:
                     order_short_id = ""
                     order_status_short = "failed"
+                    logger.error("Short entry failed; closing any opened leg.")
+                    close_all_positions(0)
+                    return kill_switch, signal_detected, trade_placed
             
             # Exit loop after both orders placed
             if count_long == 1 and count_short == 1:
                 msg = f"Both orders placed. Long: {order_status_long}, Short: {order_status_short}"
                 print(msg)
                 logger.info(msg)
+                if order_long_id and order_short_id:
+                    trade_placed = True
 
                 # Record entry Z-score for regime break detection
                 from func_pair_state import set_entry_z_score, clear_persistence_history
@@ -734,7 +961,7 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         return 2
 
     # 3. HARD STOP-LOSS: True regime break (Z getting WORSE, not oscillating)
-    from func_pair_state import get_entry_z_score, get_entry_time
+    from func_pair_state import get_entry_z_score, get_entry_time, get_last_health_score
     entry_z = get_entry_z_score()
     entry_time = get_entry_time()
 
@@ -742,6 +969,7 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         abs_entry = abs(entry_z)
         abs_current = abs(latest_zscore)
         time_in_trade = (time.time() - entry_time) / 60 if entry_time else 0  # minutes
+        last_health_score = get_last_health_score()
 
         # TRUE regime breaks:
         # 1. Z DIVERGING (getting worse, not oscillating at entry level)
@@ -753,12 +981,15 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             return 2
 
         # 2. SIGN FLIP (spread reversed direction)
-        if entry_z < 0 and latest_zscore > 2.0:  # Entered oversold, now overbought
+        flip_threshold = 2.0
+        if time_in_trade >= Z_STALL_EARLY_GRACE_MINUTES:
+            flip_threshold = 1.0
+        if entry_z < 0 and latest_zscore > flip_threshold:
             msg = f"🔴 KILL-SWITCH TRIGGERED: Sign flip - Entry Z={entry_z:.2f}, now Z={latest_zscore:.2f}"
             logger.error(msg)
             print(msg)
             return 2
-        elif entry_z > 0 and latest_zscore < -2.0:  # Entered overbought, now oversold
+        elif entry_z > 0 and latest_zscore < -flip_threshold:
             msg = f"🔴 KILL-SWITCH TRIGGERED: Sign flip - Entry Z={entry_z:.2f}, now Z={latest_zscore:.2f}"
             logger.error(msg)
             print(msg)
@@ -773,29 +1004,86 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
 
         # 4. STALL DETECTOR (Z not trending toward zero - flat/stuck regime)
         # CRITICAL: Detect when mean reversion has stalled
+        stall_window_seconds = None
         z_history = get_z_history()
-        if len(z_history) >= 10:
-            z_now = z_history[-1]
-            z_10_cycles_ago = z_history[0]
-            z_change = abs(abs(z_now) - abs(z_10_cycles_ago))
-            
-            # Epsilon: minimum change expected over 10 cycles (10 minutes)
-            # If Z hasn't moved toward zero by at least 0.3σ in 10 cycles, it's stalled
-            epsilon = 0.3
-            
-            if z_change < epsilon and abs(z_now) > 1.5:
-                # Z is stuck in extreme zone (>1.5) and not moving toward zero
-                msg = f"⚠️  KILL-SWITCH TRIGGERED: Z-STALL - No mean reversion progress in 10 cycles (Z: {z_10_cycles_ago:.2f} → {z_now:.2f}, change: {z_change:.2f}σ)"
-                logger.warning(msg)
-                print(msg)
-                return 2
+        z_stall_warning = False
+        z_stall_change = None
+        if z_history and isinstance(z_history[0], dict):
+            z_values = _z_history_values(z_history)
+            recent_vol = _recent_volatility(z_values)
+            vol_accel = _volatility_accelerating(z_values)
+            window_seconds = _adaptive_stall_window_seconds(entry_z)
+            stall_window_seconds = window_seconds
+            time_in_trade_sec = time_in_trade * 60
+            epsilon = _adaptive_stall_epsilon(recent_vol, time_in_trade_sec)
+            if epsilon is not None and vol_accel:
+                epsilon *= 1.1
+
+            hours_in_trade = time_in_trade / 60.0
+            try:
+                from func_pair_state import get_stall_warning_marks, add_stall_warning_mark
+                warning_marks = get_stall_warning_marks()
+                for mark in (1, 2, 3):
+                    if hours_in_trade >= mark and mark not in warning_marks:
+                        msg = (
+                            "STALL WARNING: trade open %dh, Z=%.2f entry=%.2f vol=%.2f window=%.0fmin"
+                            % (mark, latest_zscore, entry_z, recent_vol, window_seconds / 60)
+                        )
+                        if epsilon is not None:
+                            msg += f" eps={epsilon:.2f}"
+                        logger.warning(msg)
+                        add_stall_warning_mark(mark)
+            except Exception as exc:
+                logger.debug("Stall warning milestone tracking failed: %s", exc)
+
+            abs_current = abs(latest_zscore)
+            if vol_accel and abs_current > Z_STALL_WARN_ABS:
+                z_stall_warning = True
+
+            if epsilon is not None and time_in_trade_sec >= window_seconds:
+                target_ts = time.time() - window_seconds
+                z_lookback = _z_at_or_before(z_history, target_ts)
+                if z_lookback is None:
+                    z_lookback = entry_z
+                abs_lookback = abs(z_lookback) if z_lookback is not None else abs_current
+                improvement = abs_lookback - abs_current
+                z_stall_change = improvement
+
+                if improvement < -epsilon and abs_current > Z_STALL_WARN_ABS:
+                    msg = (
+                        "KILL-SWITCH TRIGGERED: Z-DIVERGENCE - Z moved away from mean in "
+                        f"{window_seconds/60:.0f} min (Z: {z_lookback:.2f} -> {latest_zscore:.2f}, "
+                        f"change: {improvement:.2f} sigma, eps={epsilon:.2f}, vol={recent_vol:.2f})"
+                    )
+                    logger.warning(msg)
+                    print(msg)
+                    return 2
+
+                if improvement < epsilon:
+                    if abs_current > Z_STALL_TRIGGER_ABS:
+                        accel_note = " accel" if vol_accel else ""
+                        msg = (
+                            "KILL-SWITCH TRIGGERED: Z-STALL - No mean reversion progress in "
+                            f"{window_seconds/60:.0f} min (Z: {z_lookback:.2f} -> {latest_zscore:.2f}, "
+                            f"change: {improvement:.2f} sigma, eps={epsilon:.2f}, vol={recent_vol:.2f}{accel_note})"
+                        )
+                        logger.warning(msg)
+                        print(msg)
+                        return 2
+
+                    if abs_current > Z_STALL_WARN_ABS:
+                        z_stall_warning = True
 
         # 5. TIME-BASED EXIT (profit realization when mean reversion stalls)
         # CRITICAL: Exit mechanism for persistent divergence regimes
-        if time_in_trade > 60:  # 60 minutes = 1 hour
-            # If we're still profitable after 1 hour but Z hasn't reverted, take profit
-            # This handles structural repricing / narrative shifts where mean reversion won't happen
-            msg = f"⏰ KILL-SWITCH TRIGGERED: Time-based profit realization - {time_in_trade:.1f} min in trade, Z still at {latest_zscore:.2f}"
+        max_minutes = 60
+        if stall_window_seconds:
+            max_minutes = max(60, (stall_window_seconds / 60) * 2)
+        if time_in_trade > max_minutes:
+            msg = (
+                "⏰ KILL-SWITCH TRIGGERED: Time-based profit realization - "
+                f"{time_in_trade:.1f} min in trade (max {max_minutes:.0f}), Z still at {latest_zscore:.2f}"
+            )
             logger.warning(msg)
             print(msg)
             return 2
@@ -804,11 +1092,51 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         z_improvement = abs_entry - abs_current
         if z_improvement > 1.5 and abs_current < 2.0:
             # Z has improved by >1.5σ and is now below 2.0 (tradeable zone)
-            # Even if not at 0.5, this is significant improvement - realize profit
-            msg = f"💰 KILL-SWITCH TRIGGERED: Partial reversion profit - Z improved from {abs_entry:.2f} to {abs_current:.2f} (-{z_improvement:.2f}σ)"
-            logger.info(msg)
-            print(msg)
-            return 2
+            # Partial exits are gated by regime checks (health/time/liquidity/stall)
+            allow_partial = False
+            reasons = []
+
+            if last_health_score is not None and last_health_score < PARTIAL_EXIT_HEALTH_THRESHOLD:
+                allow_partial = True
+                reasons.append(f"health={last_health_score:.1f}")
+
+            if time_in_trade >= PARTIAL_EXIT_MINUTES:
+                allow_partial = True
+                reasons.append(f"time={time_in_trade:.1f}m")
+
+            if z_stall_warning:
+                allow_partial = True
+                if z_stall_change is None:
+                    reasons.append("z_stall")
+                else:
+                    reasons.append(f"z_stall={z_stall_change:.2f}")
+
+            if not allow_partial:
+                try:
+                    liq_pos = get_ticker_liquidity_analysis(signal_positive_ticker)
+                    liq_neg = get_ticker_liquidity_analysis(signal_negative_ticker)
+                    if liq_pos.get("label") == "low" or liq_neg.get("label") == "low":
+                        allow_partial = True
+                        reasons.append("liquidity=low")
+                except Exception as exc:
+                    logger.warning("Liquidity stress check failed: %s", exc)
+
+            if allow_partial:
+                msg = (
+                    "💰 KILL-SWITCH TRIGGERED: Partial reversion profit - "
+                    f"Z improved from {abs_entry:.2f} to {abs_current:.2f} (-{z_improvement:.2f}σ) "
+                    f"gate={', '.join(reasons)}"
+                )
+                logger.info(msg)
+                print(msg)
+                return 2
+
+            logger.info(
+                "Partial reversion gate blocked: health=%s time=%.1fm z_stall=%s",
+                "n/a" if last_health_score is None else f"{last_health_score:.1f}",
+                time_in_trade,
+                "yes" if z_stall_warning else "no",
+            )
 
         # NOT regime breaks: oscillations at entry level or improving
         if abs(abs_current - abs_entry) < 1.0:

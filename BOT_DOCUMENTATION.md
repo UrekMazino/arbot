@@ -1,110 +1,103 @@
 # OKX StatBot - Statistical Arbitrage Documentation
 
-## 1. Overview
-StatBot is an autonomous trading system designed for the OKX exchange. It implements a **Statistical Arbitrage** strategy, specifically **Pairs Trading**, based on the cointegration of two assets. The bot identifies when the "spread" between two statistically related assets diverges from its historical mean and bets on its eventual reversion.
+## 1. System Overview
+StatBot is a high-frequency (1-minute resolution) autonomous trading system optimized for the OKX exchange. It implements a **Statistical Arbitrage** strategy, specifically **Pairs Trading**, utilizing cointegration as the primary mean-reversion engine. The system is architected to handle long-running execution with automated pair switching and self-healing capabilities.
 
 ---
 
 ## 2. Core Strategy & Mathematics
 
 ### Cointegration (The ADF Test)
-The bot uses the **Augmented Dickey-Fuller (ADF)** test to verify if a pair of assets is cointegrated. Cointegration means that although the individual prices might move randomly, a specific linear combination of them stays within a stable range.
-*   **P-Value Threshold**: 0.15 (A p-value < 0.15 indicates a statistically significant relationship).
+The bot uses the **Augmented Dickey-Fuller (ADF)** test to verify the stationarity of the spread between two assets. 
+*   **P-Value Threshold**: 0.15 (A p-value < 0.15 indicates a statistically significant cointegrated relationship).
+*   **Stationarity**: Cointegration ensures that a linear combination of two non-stationary price series produces a stationary residual (the spread), which is predictable and mean-reverting.
 
-### Hedge Ratio & Spread
-To calculate the spread, the bot performs an **Ordinary Least Squares (OLS)** regression on the log-prices of the two assets. Using log-prices ensures the hedge ratio is proportional and accounts for percentage moves rather than absolute price moves.
-*   **Formula**: `Spread = ln(Price_A) - (Hedge_Ratio * ln(Price_B))`
-*   The **Hedge Ratio** determines how many units of Asset B are needed to offset the price movements of Asset A.
+### Hedge Ratio & Spread Calculation
+The spread is calculated using an **Ordinary Least Squares (OLS)** regression on the natural logarithms of the asset prices. Using log-prices ensures the hedge ratio is scale-invariant and represents percentage moves.
+*   **OLS Model**: `ln(Price_A) = α + β * ln(Price_B) + ε`
+*   **Formula**: `Spread = ln(Price_A) - (β * ln(Price_B))`
+*   **Hedge Ratio (β)**: Determined dynamically by the OLS fit, representing the units of Asset B needed to hedge one unit of Asset A.
 
-### Execution Price Buffers
-To ensure immediate execution and account for exchange fees, the bot applies a buffer to the entry prices:
-*   **Taker Fee/Slippage Buffer**: 0.07% (0.0007) is added/subtracted from the mid-price to ensure orders are filled quickly while maintaining safety margins.
-
-### Z-Score
-The Z-Score represents how many standard deviations the current spread is away from its moving average.
+### Z-Score Normalization
+The Z-Score represents the number of standard deviations the current spread is from its moving average, allowing for a standardized entry/exit signal.
 *   **Window**: 21 periods (1-minute bars).
-*   **Formula**: `Z = (Current_Spread - Mean_Spread) / StdDev_Spread`
+*   **Formula**: `Z = (Spread_t - μ_Spread) / σ_Spread`
+*   Where `μ` is the 21-period moving average and `σ` is the 21-period standard deviation.
 
 ---
 
-## 3. The Trade Cycle
+## 3. Architecture & Execution Flow
 
-### Subprocess Manager
-StatBot runs inside a manager process (`main_execution.py`). 
-*   If the bot needs to switch pairs, it saves the new configuration and exits with **Code 3**.
-*   The Manager detects Code 3 and automatically restarts the bot, ensuring a fresh initialization of all API sessions and parameters without manual intervention.
+### Subprocess Manager (Self-Healing)
+StatBot employs a dual-process architecture (`main_execution.py`):
+1.  **Manager Process**: Monitors the execution process.
+2.  **Execution Process**: Performs the trading logic.
+*   **Exit Code 3**: When a pair switch is required, the execution process exits with code 3. The Manager detects this, re-loads the new configuration from `active_pair.json`, and restarts the bot. This ensures clean memory management and fresh API session initialization.
 
-### The "Cycle" Heartbeat
-Each cycle (approx. 5-7 seconds) performs:
-1.  **Consolidated API Fetch**: Retrieves all account positions and orders in a single call to minimize rate limits.
-2.  **Market Data Update**: Fetches 1m Klines and live Orderbook mid-prices.
-3.  **Circuit Breaker Check**: Evaluates cumulative P&L against the total capital.
-4.  **Decision Engine**:
-    *   **Seeking Trades**: If no position is open, checks for entry signals.
-    *   **Monitoring**: If a position is open, checks for exit or stop-loss conditions.
+### The Trade Cycle (Latency: ~5-7s)
+1.  **Consolidated API Fetch**: Single call to retrieve all account positions and orders to minimize rate limit consumption.
+2.  **Market Data Update**: Fetches 1m Klines and live Orderbook (5-level depth) mid-prices.
+3.  **Circuit Breaker**: Evaluates cumulative P&L against `tradeable_capital_usdt`.
+4.  **Decision Engine**: Evaluates Z-score against persistence requirements and health metrics.
 
 ---
 
 ## 4. Signal Generation
 
 ### Entry Criteria (🎯)
-*   **Threshold**: |Z-Score| >= 2.0.
-*   **Persistence**: The Z-Score must remain above the threshold for **3 consecutive bars** (3 minutes) to filter out flash spikes.
+*   **Threshold**: `|Z-Score| >= 2.0`.
+*   **Persistence**: The Z-Score must satisfy the threshold for **3 consecutive bars** (3 minutes) to filter out noise and flash spikes.
 *   **Direction**:
     *   **Positive Z (> 2.0)**: Sell the spread (Short Asset A, Long Asset B).
     *   **Negative Z (< -2.0)**: Buy the spread (Long Asset A, Short Asset B).
 
 ### Exit Criteria (🟢)
-*   **Mean Reversion**: |Z-Score| <= 0.5.
-*   The trade is closed when the spread returns significantly toward its mean, capturing the profit from the convergence.
+*   **Mean Reversion**: `|Z-Score| <= 0.5`.
+*   **Signal Flip**: If the Z-score sign changes unexpectedly (e.g., from +2.0 to -0.1), the trade is closed to prevent exposure to a broken relationship.
 
 ---
 
-## 5. Health Scoring System
-Every hour (or upon a potential break), the bot performs a **Periodic Health Check**. It calculates a score from 0 to 100 based on statistical metrics.
+## 5. Health Scoring System (0-100)
+A periodic health check (default every 1 hour) calculates a score based on the following weights. If the score falls below **40**, a pair switch is triggered.
 
-| Metric | Threshold | Deduction | Importance |
+| Metric | Threshold | Penalty | Category |
 |--------|-----------|-----------|------------|
 | **P-Value** | >= 0.15 | -50 pts | Critical |
+| **P-Value** | 0.05 - 0.15 | -15 pts | Warning |
 | **Spread Trend** | > 0.002 | -30 pts | Critical |
 | **Z-Score** | > 6.0 | -25 pts | Critical |
 | **Consecutive Losses**| >= 3 | -20 pts | Performance |
+| **Recent Loss** | per loss | -5 pts | Performance |
 | **Correlation** | < 0.60 | -15 pts | Warning |
 | **ADF Ratio** | < 0.8 | -15 pts | Warning |
 | **Zero Crossings** | < 15 | -15 pts | Warning |
 
-*   **Action**: If the score drops below **40**, the bot triggers a pair switch.
-
 ---
 
-## 6. Risk Management
+## 6. Risk Management & Safety
 
-### Circuit Breaker
-*   **Max Drawdown**: 5% of total capital. If hit, the bot closes all positions and stops trading.
-
-### Position Sizing (2% Rule)
-*   The bot risks exactly **2% of total capital** per trade.
-*   Position size is calculated based on the distance to the fail-safe stop loss.
+### Position Sizing & Precision
+*   **2% Rule**: The bot risks exactly **2% of total capital** per trade. Position sizes are calculated based on the distance to the fail-safe stop loss.
+*   **Execution Buffer**: A **0.07% (7 bps)** buffer is applied to mid-prices for entries (0.05% taker fee + 0.02% slippage margin) to ensure immediate execution.
+*   **Dynamic Rounding**: Tick size and lot size are fetched dynamically from the OKX API to ensure order precision.
 
 ### Safety Exits
-*   **Regime Break (Hard Stop)**: If |Z| exceeds **2.5** after a trade is placed, the bot closes immediately (indicates the statistical relationship has broken).
-*   **Fail-Safe Stop Loss**: 3% price move against the position.
-*   **Signal Flip**: If the Z-score sign changes unexpectedly, the trade is closed.
+*   **Regime Break**: If `|Z|` exceeds **2.5** *after* a trade is placed, the bot closes immediately (indicates the statistical relationship has broken).
+*   **Fail-Safe Stop Loss**: Hard 3% price move limit per asset.
+*   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
-*   **Graveyard**: Pairs that fail health checks are moved to a graveyard and skipped for **7 days**.
+*   **Graveyard**: Failed pairs are blacklisted for **7 days**.
 *   **Cooldown**: Mandatory **24-hour wait** between pair switches to prevent over-trading and fee erosion.
 
 ---
 
-## 7. Files & Configuration
-
-*   **`config_execution_api.py`**: Global settings, thresholds, and API credentials.
-*   **`active_pair.json`**: Stores the currently traded pair for persistence across restarts.
-*   **`2_cointegrated_pairs.csv`**: The master list of 1,800+ prospective pairs for switching.
-*   **`pair_strategy_state.json`**: Persistent memory of Graveyard, Cooldowns, and Losses.
-*   **`logfile_okx.log`**: Detailed audit trail of every decision, computation, and API call.
-*   **`status.json`**: High-level status for external monitoring.
+## 7. Technical Stack
+*   **Language**: Python 3.x
+*   **Mathematics**: `statsmodels` (OLS, ADF), `numpy`, `scipy`.
+*   **Data Handling**: `pandas` for time-series and CSV management.
+*   **API**: `okx` SDK for REST (Account, Trade, Market).
+*   **State Management**: Persistent JSON files for state tracking across restarts.
 
 ---
 

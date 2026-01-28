@@ -53,7 +53,7 @@ StatBot employs a dual-process architecture (`main_execution.py`):
 
 ### Exit Criteria (🟢)
 *   **Mean Reversion**: `|Z-Score| <= 0.5`.
-*   **Signal Flip**: If the Z-score sign changes unexpectedly (e.g., from +2.0 to -0.1), the trade is closed to prevent exposure to a broken relationship.
+*   **Sustained Sign Flip**: Exits only after the Z-score crosses the opposite zone and persists there for ~5 minutes, avoiding false exits on brief oscillations.
 
 ---
 
@@ -84,54 +84,27 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 
 ### Safety Exits
 
-#### Regime Break Detection (Context-Aware)
-The bot uses **intelligent regime break detection** that tracks entry context to avoid false exits:
+#### Advanced Trade Manager (Dynamic Exits)
+The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry context and recent Z-history to avoid false exits.
 
-**TRUE Regime Breaks (triggers exit):**
-1. **Z-Score Diverging**: Current Z worsens by >1.5σ from entry
-   - Example: Entered at Z=-4.36, now at Z=-6.0 (+1.64σ worse)
-   - Indicates relationship deteriorating, not oscillating
-2. **Sign Flip**: Spread reverses direction
-   - Example: Entered oversold (Z=-4.36), now overbought (Z=+2.5)
-   - Indicates mean-reversion failed and spread broke
-3. **Persistent Extreme**: Z > 6.0 after 30+ minutes in trade
-   - Example: Z=6.2 after 35 minutes
-   - Indicates pair not mean-reverting as expected
-4. **Z-Stall Detector (dynamic)**: Adaptive stall detection for flat/stuck regimes
-   - Window adapts to entry extremity (30-120 min based on |entry Z|)
-   - Epsilon adapts to recent Z volatility (0.2-0.5 sigma)
-   - No stall evaluation before 30 min; stricter after 2h
-   - Triggers when improvement < epsilon after the window and |Z| > 1.5; warns if |Z| > 1.0
-   - Volatility acceleration (recent > 1.5x prior) raises warnings
-5. **Time-Based Exit**: Position held longer than max(60 min, 2x stall window) without reversion
-   - Example: 125 minutes in trade, Z still far from mean
-   - Realizes profit when structural repricing prevents full mean reversion
-6. **Partial Mean Reversion**: Z improved >1.5σ and now < 2.0
-   - Example: Entered at Z=4.2, now at Z=1.8 (-2.4σ improvement)
-   - Takes profit on significant improvement even without full reversion to 0.5
-7. **Funding Bleed Guard**: Funding fees eroding unrealized profits
-   - Triggers when:
-     - Unrealized PnL > $5 (profitable position)
-     - Funding cost > $2 (significant bleed)
-     - Funding cost > 30% of unrealized PnL (high erosion ratio)
-   - Example: +$20 unrealized profit, -$8 funding cost (40% erosion)
-   - Prevents scenario where position PnL is positive but session PnL is negative
+**Exit conditions (priority order):**
+1. **Mean Reversion**: `|Z| <= EXIT_Z`.
+2. **Sustained Sign Flip**: Opposite-zone persistence for ~5 minutes and still moving away.
+3. **Divergence**: `|Z|` worsens by > 1.5 sigma from entry.
+4. **Dynamic Stall**: Adaptive window (30-120 min) and epsilon (0.2-0.5 sigma); warns above 1.0 and exits above 1.5 when improvement is insufficient.
+5. **Trailing Stop**: Activates near the mean and trails by 0.5 sigma.
+6. **Partial Exit**: Default 50% when `|Z| < 1.0` (skips if below min/lot size).
+7. **Max Hold**: Default 6 hours (warning at 4 hours).
+8. **Funding Bleed Guard**: Exits when funding costs materially erode unrealized gains.
 
-**NOT Regime Breaks (continues holding):**
-- ❌ Z oscillating at entry level (entered -4.36, revisits -4.36) → Normal volatility
-- ❌ Z improving toward mean (entered -4.36, now -1.05) → Desired behavior
+**Not exits:**
+- Z oscillating near entry or improving toward the mean.
 
 **Implementation:**
-- Entry Z-score and timestamp recorded when position opens
-- Z-history stored with timestamps (up to ~4 hours) for adaptive stall windows and volatility trend checks
-- Each cycle compares current Z against entry context
-- Funding fees and unrealized PnL extracted from OKX position data
-- Stall warnings logged at 1h/2h/3h milestones when trades remain open
-- Prevents premature exits on expected volatility oscillations
-- **Bug Fixes (2026-01)**: 
-  - Old logic exited when Z returned to entry level, missing profitable mean reversions
-  - Added exit mechanisms for persistent divergence regimes (structural repricing, narrative shifts)
-  - Added funding bleed detection to prevent fee erosion of profits
+- Entry Z/time recorded on fill; recent Z-history retained for adaptive checks.
+- Partial exits close both legs via market reduce-only orders with lot/min size adjustment.
+- Funding fees and unrealized PnL are pulled from OKX position data.
+- Warnings are logged at 1h/2h/3h trade duration milestones.
 
 *   **Fail-Safe Stop Loss**: Hard 3% price move limit per asset.
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
@@ -168,6 +141,7 @@ Each trading cycle logs comprehensive performance metrics:
 - **Enhanced Error Logging**: Detailed diagnostics for orderbook fetch failures (timeout, delisting, rate limits, illiquidity)
 - **Cross Margin Mode**: Capital-efficient margin sharing for long+short hedged positions
 - **Manual Close Auto-Reset**: If the bot is monitoring (`kill_switch=1`) and no positions/orders exist for 3 cycles, it clears entry tracking and resumes trading
+- **Equity Reconciliation Logs**: Estimated entry/exit fees and slippage are logged at trade close to explain equity drift
 
 ### Log Rotation and Retention
 StatBot uses a rotating log file to prevent indefinite growth. Control it via `.env`:

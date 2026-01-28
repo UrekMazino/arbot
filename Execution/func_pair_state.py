@@ -24,6 +24,8 @@ def load_pair_state():
             "price_fetch_failures": 0,
             "entry_z_score": None,
             "entry_time": None,
+            "entry_equity": None,
+            "entry_notional": None,
             "last_switch_reason": "",
             "min_capital_cooldowns": {},
             "stall_warning_marks": []
@@ -45,6 +47,10 @@ def load_pair_state():
                 state["entry_z_score"] = None
             if "entry_time" not in state:
                 state["entry_time"] = None
+            if "entry_equity" not in state:
+                state["entry_equity"] = None
+            if "entry_notional" not in state:
+                state["entry_notional"] = None
             if "last_switch_reason" not in state:
                 state["last_switch_reason"] = ""
             if "min_capital_cooldowns" not in state:
@@ -53,7 +59,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
+        return {"last_switch_time": 0, "graveyard": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
 
 def save_pair_state(state):
     try:
@@ -227,11 +233,35 @@ def get_entry_time():
     state = load_pair_state()
     return state.get("entry_time")
 
+def set_entry_equity(equity_usdt):
+    """Record equity at the time of position entry."""
+    state = load_pair_state()
+    state["entry_equity"] = float(equity_usdt)
+    save_pair_state(state)
+
+def get_entry_equity():
+    """Get recorded equity at position entry."""
+    state = load_pair_state()
+    return state.get("entry_equity")
+
+def set_entry_notional(notional_usdt):
+    """Record estimated notional size at entry (USDT)."""
+    state = load_pair_state()
+    state["entry_notional"] = float(notional_usdt)
+    save_pair_state(state)
+
+def get_entry_notional():
+    """Get estimated notional size at entry (USDT)."""
+    state = load_pair_state()
+    return state.get("entry_notional")
+
 def clear_entry_tracking():
     """Clear entry tracking when position is closed."""
     state = load_pair_state()
     state["entry_z_score"] = None
     state["entry_time"] = None
+    state["entry_equity"] = None
+    state["entry_notional"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
     state["z_history"] = []  # Clear stall detection history
     state["stall_warning_marks"] = []

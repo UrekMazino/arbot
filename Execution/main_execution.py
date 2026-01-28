@@ -42,6 +42,7 @@ from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
 from func_save_status import save_status
+from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
     is_in_graveyard,
@@ -55,7 +56,10 @@ from func_pair_state import (
     get_min_capital_cooldown,
     set_min_capital_cooldown,
     clear_entry_tracking,
-    clear_persistence_history
+    clear_persistence_history,
+    set_entry_equity,
+    get_entry_equity,
+    get_entry_notional
 )
 
 # Setup logging
@@ -572,6 +576,7 @@ if __name__ == "__main__":
     prev_total_pnl = None
     manual_close_clear_count = 0
     manual_close_clear_threshold = 3
+    fee_tracker = FeeTracker()
 
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
@@ -776,7 +781,10 @@ if __name__ == "__main__":
                 res_ks, sig_seen, tr_placed = manage_new_trades(kill_switch, health_check_due, zscore_results)
                 kill_switch = res_ks
                 if sig_seen: signals_seen += 1
-                if tr_placed: trades_executed += 1
+                if tr_placed:
+                    trades_executed += 1
+                    if equity_usdt is not None:
+                        set_entry_equity(equity_usdt)
             
             # 5. Monitoring existing trades / Mean reversion exit
             if not is_manage_new_trades or kill_switch == 1:
@@ -819,6 +827,30 @@ if __name__ == "__main__":
                 # Phase 3: Record trade result before closing
                 # total_pnl was calculated at the start of the loop
                 is_win = total_pnl > 0
+                entry_equity = get_entry_equity()
+                entry_notional = get_entry_notional()
+                if entry_equity is not None and equity_usdt is not None and entry_notional:
+                    equity_change = equity_usdt - entry_equity
+                    costs = fee_tracker.record_trade_costs(entry_notional)
+                    reconciliation = fee_tracker.reconcile_equity_drift(total_pnl, equity_change)
+                    logger.info(
+                        "Trade costs: entry_fee=%.4f exit_fee=%.4f slippage=%.4f total=%.4f",
+                        costs["entry_fee"],
+                        costs["exit_fee"],
+                        costs["slippage"],
+                        costs["total_costs"],
+                    )
+                    logger.info(
+                        "Equity reconciliation: trade_pnl=%.2f equity_change=%.2f diff=%.2f fees=%.2f "
+                        "slippage=%.2f funding=%.2f unexplained=%.2f",
+                        reconciliation["trade_pnl"],
+                        reconciliation["equity_change"],
+                        reconciliation["difference"],
+                        reconciliation["fees"],
+                        reconciliation["slippage"],
+                        reconciliation["funding"],
+                        reconciliation["unexplained"],
+                    )
                 record_trade_result(is_win)
                 logger.info(f"Trade result recorded: {'WIN' if is_win else 'LOSS'} (PNL: {total_pnl:.2f} USDT)")
                 

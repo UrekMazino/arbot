@@ -3,7 +3,7 @@
     Based on OKX API v5 documentation
 """
 
-from config_strategy_api import public_session, account_session, time_frame
+from config_strategy_api import public_session, account_session, time_frame, settle_ccy_filter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import time
@@ -49,6 +49,10 @@ def _safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_ccy(value):
+    return str(value or "").strip().upper()
 
 
 def _get_fee_rates_for_type(inst_type):
@@ -116,6 +120,14 @@ def get_symbols_by_maker_fees(
 
     # Filter only live/active instruments
     active_instruments = [inst for inst in all_instruments if inst.get('state') == 'live']
+
+    if settle_ccy_filter:
+        before = len(active_instruments)
+        active_instruments = [
+            inst for inst in active_instruments
+            if _normalize_ccy(inst.get('settleCcy')) in settle_ccy_filter
+        ]
+        print(f"Filtered by settleCcy {settle_ccy_filter}: {before} -> {len(active_instruments)}")
 
     print(f"Found {len(all_instruments)} total instruments")
     print(f"Found {len(active_instruments)} active/live instruments\n")

@@ -141,6 +141,7 @@ Each trading cycle logs comprehensive performance metrics:
 - **Cross Margin Mode**: Capital-efficient margin sharing for long+short hedged positions
 - **Manual Close Auto-Reset**: If the bot is monitoring (`kill_switch=1`) and no positions/orders exist for 3 cycles, it clears entry tracking and resumes trading
 - **Equity Reconciliation Logs**: Estimated entry/exit fees and slippage are logged at trade close to explain equity drift
+- **Compliance Restricted Ticker Filter**: sCode=51155 marks a ticker as restricted; pairs containing restricted tickers are skipped on future switches
 
 ### Log Rotation and Retention
 StatBot uses a rotating log file to prevent indefinite growth. Control it via `.env`:
@@ -160,6 +161,15 @@ Pairs with `min_equity_recommended` above this threshold are removed.
 
 Execution also reads `min_equity_recommended` and skips pairs during pair switching if
 your current account equity is below the requirement.
+
+### Settle Currency Filtering (Strategy + Execution)
+To avoid mixed-margin pairs (e.g., COIN-margined vs USDT-margined), you can filter by settle currency:
+```
+STATBOT_STRATEGY_SETTLE_CCY=USDT
+STATBOT_EXECUTION_SETTLE_CCY=USDT
+```
+Defaults are `USDT`. Execution will also skip pairs where both legs do not share the same `settleCcy`.
+Set either variable to `ALL` (or leave empty) to disable filtering.
 
 ---
 

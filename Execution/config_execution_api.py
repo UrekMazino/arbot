@@ -31,6 +31,16 @@ def _env_flag(name, default=False):
         return False
     return default
 
+
+def _env_list(name, default=""):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        raw = default
+    items = [part.strip().upper() for part in str(raw).split(",") if part.strip()]
+    if not items or "ALL" in items:
+        return []
+    return items
+
 def save_active_pair(t1, t2):
     """Save the current active pair to active_pair.json."""
     data = {"ticker_1": t1, "ticker_2": t2}
@@ -53,6 +63,7 @@ default_ticker_2 = "ZETA-USDT-SWAP"
 ticker_1 = default_ticker_1
 ticker_2 = default_ticker_2
 lock_on_pair = _env_flag("STATBOT_LOCK_ON_PAIR", False)
+allowed_settle_ccy = _env_list("STATBOT_EXECUTION_SETTLE_CCY", "USDT")
 
 # Try to load active pair from JSON if it exists (unless locked in env)
 active_pair_file = os.path.join(os.path.dirname(__file__), "active_pair.json")

@@ -1,4 +1,6 @@
 from config_strategy_api import z_score_window, min_equity_filter_usdt
+from pathlib import Path
+import json
 from statsmodels.tsa.stattools import coint
 import statsmodels.api as sm
 import pandas as pd
@@ -7,6 +9,22 @@ import math
 import warnings
 from decimal import Decimal, ROUND_UP
 from itertools import combinations
+
+def _load_restricted_tickers():
+    state_path = Path(__file__).resolve().parents[1] / "Execution" / "pair_strategy_state.json"
+    if not state_path.exists():
+        return set()
+    try:
+        with state_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return set()
+    restricted = data.get("restricted_tickers", {})
+    if isinstance(restricted, dict):
+        return {str(key) for key in restricted.keys() if key}
+    if isinstance(restricted, list):
+        return {str(item) for item in restricted if item}
+    return set()
 
 
 # Calculate Z-score
@@ -195,6 +213,8 @@ def get_cointegrated_pairs(json_symbols):
     coint_pair_list = []
     total_comparisons = 0
     pairs_with_crossings = 0
+    restricted_tickers = _load_restricted_tickers()
+    restricted_removed = 0
 
     series_by_symbol = {}
     symbol_meta = {}
@@ -218,6 +238,10 @@ def get_cointegrated_pairs(json_symbols):
         }
 
     symbols = list(series_by_symbol.keys())
+    if restricted_tickers:
+        before = len(symbols)
+        symbols = [sym for sym in symbols if sym not in restricted_tickers]
+        restricted_removed = before - len(symbols)
 
     for sym_1, sym_2 in combinations(symbols, 2):
         series_1 = series_by_symbol[sym_1]
@@ -280,6 +304,8 @@ def get_cointegrated_pairs(json_symbols):
     print(f"Pairs without crossings:     {len(coint_pair_list) - pairs_with_crossings:,}")
     if filtered_count:
         print(f"Pairs filtered by min equity: {filtered_count:,} (threshold: {min_equity_filter_usdt:.2f} USDT)")
+    if restricted_removed:
+        print(f"Symbols filtered by compliance restrictions: {restricted_removed:,}")
 
     if len(df_coint) > 0:
         print(f"\nZero Crossings Statistics:")

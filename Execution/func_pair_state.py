@@ -19,6 +19,7 @@ def load_pair_state():
         return {
             "last_switch_time": 0,
             "graveyard": {}, # { "ticker_1/ticker_2": fail_timestamp }
+            "restricted_tickers": {}, # { "TICKER": {"ts": float, "code": str, "msg": str} }
             "consecutive_losses": 0,
             "last_health_score": None,
             "price_fetch_failures": 0,
@@ -36,6 +37,8 @@ def load_pair_state():
             # Ensure consecutive_losses exists
             if "consecutive_losses" not in state:
                 state["consecutive_losses"] = 0
+            if "restricted_tickers" not in state:
+                state["restricted_tickers"] = {}
             # Ensure last_health_score exists
             if "last_health_score" not in state:
                 state["last_health_score"] = None
@@ -59,7 +62,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
+        return {"last_switch_time": 0, "graveyard": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
 
 def save_pair_state(state):
     try:
@@ -86,6 +89,39 @@ def add_to_graveyard(t1, t2):
     state["graveyard"][pair_key] = time.time()
     state["consecutive_losses"] = 0 # Reset losses when switching
     save_pair_state(state)
+
+def add_restricted_ticker(ticker, code="", msg=""):
+    if not ticker:
+        return False
+    state = load_pair_state()
+    restricted = state.get("restricted_tickers", {})
+    if ticker in restricted:
+        return False
+    restricted[ticker] = {
+        "ts": time.time(),
+        "code": str(code or ""),
+        "msg": str(msg or ""),
+    }
+    state["restricted_tickers"] = restricted
+    save_pair_state(state)
+    return True
+
+def is_restricted_ticker(ticker, lookback_days=365):
+    if not ticker:
+        return False
+    state = load_pair_state()
+    restricted = state.get("restricted_tickers", {})
+    entry = restricted.get(ticker)
+    if not entry:
+        return False
+    ts = entry.get("ts") or 0
+    if lookback_days and ts > 0:
+        if time.time() - ts > (lookback_days * 24 * 60 * 60):
+            restricted.pop(ticker, None)
+            state["restricted_tickers"] = restricted
+            save_pair_state(state)
+            return False
+    return True
 
 def is_in_graveyard(t1, t2, lookback_days=7):
     state = load_pair_state()

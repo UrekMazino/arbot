@@ -27,7 +27,8 @@ from config_execution_api import (
     STATUS_UPDATE_INTERVAL,
     HEALTH_CHECK_INTERVAL,
     account_session,
-    lock_on_pair
+    lock_on_pair,
+    allowed_settle_ccy
 )
 from func_position_calls import (
     open_position_confirmation, 
@@ -59,7 +60,8 @@ from func_pair_state import (
     clear_persistence_history,
     set_entry_equity,
     get_entry_equity,
-    get_entry_notional
+    get_entry_notional,
+    is_restricted_ticker
 )
 
 # Setup logging
@@ -197,11 +199,37 @@ def _get_min_capital_for_ticker(ticker):
                 ticker,
                 req.get("error") or "unknown",
             )
-            return 0.0
-        return req.get("min_capital") or 0.0
+            return {"min_capital": 0.0, "settle_ccy": ""}
+        info = req.get("instrument_info") or {}
+        settle_ccy = str(info.get("settleCcy") or "").upper()
+        return {"min_capital": req.get("min_capital") or 0.0, "settle_ccy": settle_ccy}
     except Exception as exc:
         logger.warning("Min-capital check failed for %s: %s", ticker, exc)
-    return 0.0
+    return {"min_capital": 0.0, "settle_ccy": ""}
+
+
+def _settle_filter_ok(t1, t2, settle_t1, settle_t2):
+    if allowed_settle_ccy:
+        if settle_t1 not in allowed_settle_ccy or settle_t2 not in allowed_settle_ccy:
+            logger.info(
+                "Skipping pair %s/%s: settleCcy filter (t1=%s t2=%s allowed=%s).",
+                t1,
+                t2,
+                settle_t1 or "unknown",
+                settle_t2 or "unknown",
+                ",".join(allowed_settle_ccy),
+            )
+            return False
+    if settle_t1 and settle_t2 and settle_t1 != settle_t2:
+        logger.info(
+            "Skipping pair %s/%s: mismatched settleCcy (%s vs %s).",
+            t1,
+            t2,
+            settle_t1,
+            settle_t2,
+        )
+        return False
+    return True
 
 
 def _format_uptime(seconds):
@@ -230,8 +258,14 @@ def _pair_meets_min_capital(t1, t2, per_leg_capital):
         )
         return False
 
-    min_cap_t1 = _get_min_capital_for_ticker(t1)
-    min_cap_t2 = _get_min_capital_for_ticker(t2)
+    min_req_t1 = _get_min_capital_for_ticker(t1)
+    min_req_t2 = _get_min_capital_for_ticker(t2)
+    min_cap_t1 = min_req_t1["min_capital"]
+    min_cap_t2 = min_req_t2["min_capital"]
+    settle_t1 = min_req_t1["settle_ccy"]
+    settle_t2 = min_req_t2["settle_ccy"]
+    if not _settle_filter_ok(t1, t2, settle_t1, settle_t2):
+        return False
     if min_cap_t1 <= 0 or min_cap_t2 <= 0:
         logger.warning(
             "Min-capital check failed for %s/%s (min1=%.8f min2=%.8f).",
@@ -389,6 +423,13 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             pair = pairs[idx]
             t1, t2 = pair["sym_1"], pair["sym_2"]
             if is_in_graveyard(t1, t2):
+                continue
+            if is_restricted_ticker(t1) or is_restricted_ticker(t2):
+                logger.info(
+                    "Skipping pair %s/%s: compliance restricted ticker.",
+                    t1,
+                    t2,
+                )
                 continue
             if not _pair_meets_min_capital(t1, t2, per_leg_capital):
                 continue
@@ -600,6 +641,30 @@ if __name__ == "__main__":
     _set_leverage_for_ticker(signal_positive_ticker, default_leverage)
     _set_leverage_for_ticker(signal_negative_ticker, default_leverage)
 
+    # Reject active pair if settle currency is mismatched or not allowed.
+    try:
+        settle_req_1 = _get_min_capital_for_ticker(ticker_1)
+        settle_req_2 = _get_min_capital_for_ticker(ticker_2)
+        settle_1 = settle_req_1["settle_ccy"]
+        settle_2 = settle_req_2["settle_ccy"]
+        if not _settle_filter_ok(ticker_1, ticker_2, settle_1, settle_2):
+            if lock_on_pair:
+                logger.error(
+                    "Active pair fails settleCcy filter but lock_on_pair is enabled (pair=%s/%s).",
+                    ticker_1,
+                    ticker_2,
+                )
+            else:
+                set_last_switch_reason("settle_ccy_filter")
+                if _switch_to_next_pair(health_score=0, switch_reason="settle_ccy_filter"):
+                    logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                    print("Restarting to apply new pair...")
+                    sys.exit(3)
+                else:
+                    logger.error("Pair switch failed. Will retry next cycle.")
+    except Exception as exc:
+        logger.warning("SettleCcy filter check failed at startup: %s", exc)
+
     # Cleanup any positions/orders for instruments outside the active pair
     try:
         acc_state_start = get_account_state()
@@ -645,6 +710,37 @@ if __name__ == "__main__":
 
             checks_all = [is_p_open, is_n_open, is_p_active, is_n_active]
             is_manage_new_trades = not any(checks_all)
+
+            if is_restricted_ticker(signal_positive_ticker) or is_restricted_ticker(signal_negative_ticker):
+                if lock_on_pair:
+                    logger.error(
+                        "Compliance restricted ticker in active pair; lock_on_pair enabled (pair=%s/%s).",
+                        ticker_1,
+                        ticker_2,
+                    )
+                    status_dict["message"] = "Compliance restricted; lock_on_pair enabled"
+                    save_status(status_dict)
+                else:
+                    if is_manage_new_trades:
+                        logger.error(
+                            "Compliance restricted ticker in active pair; switching (pair=%s/%s).",
+                            ticker_1,
+                            ticker_2,
+                        )
+                        status_dict["message"] = "Compliance restricted; switching pair..."
+                        save_status(status_dict)
+                        set_last_switch_reason("compliance_restricted")
+                        if _switch_to_next_pair(health_score=0, switch_reason="compliance_restricted"):
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            sys.exit(3)
+                        else:
+                            logger.error("Pair switch failed. Will retry next cycle.")
+                    else:
+                        logger.warning(
+                            "Compliance restricted ticker in active pair, but positions/orders are open. "
+                            "Deferring switch."
+                        )
 
             if kill_switch == 1 and is_manage_new_trades:
                 manual_close_clear_count += 1

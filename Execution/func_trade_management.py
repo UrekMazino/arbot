@@ -23,6 +23,8 @@ from func_pair_state import (
     set_last_health_score,
     set_last_switch_reason,
     set_min_capital_cooldown,
+    add_restricted_ticker,
+    is_restricted_ticker,
 )
 
 # Risk management thresholds
@@ -37,6 +39,7 @@ Z_STALL_EARLY_GRACE_MINUTES = 30
 Z_STALL_LATE_STRICT_MINUTES = 120
 Z_STALL_TRIGGER_ABS = 1.5
 Z_STALL_WARN_ABS = 1.0
+COMPLIANCE_RESTRICTION_CODE = "51155"
 
 """
 MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
@@ -186,6 +189,44 @@ def _log_missing_entry_id(side_label, entry_result):
     err_msg = f"ERROR: {side_label} entry missing order id (code={code} msg={msg})."
     logger.error(err_msg)
     print(err_msg)
+
+def _extract_entry_error(entry_result):
+    if not isinstance(entry_result, dict):
+        return "", ""
+    entry = entry_result.get("entry")
+    if not isinstance(entry, dict):
+        return "", ""
+    s_code = ""
+    s_msg = ""
+    data_list = entry.get("data", [])
+    if isinstance(data_list, list) and data_list:
+        order_data = data_list[0] if isinstance(data_list[0], dict) else {}
+        s_code = order_data.get("sCode") or ""
+        s_msg = order_data.get("sMsg") or ""
+    if not s_code:
+        code = entry.get("code")
+        if code and code != "0":
+            s_code = code
+    if not s_msg:
+        s_msg = entry.get("msg") or ""
+    return str(s_code or ""), str(s_msg or "")
+
+def _handle_compliance_restriction(entry_result, ticker):
+    s_code, s_msg = _extract_entry_error(entry_result)
+    if str(s_code) != COMPLIANCE_RESTRICTION_CODE:
+        return False
+    added = add_restricted_ticker(ticker, code=s_code, msg=s_msg)
+    if added:
+        logger.error(
+            "Compliance restriction for %s (sCode=%s, sMsg=%s).",
+            ticker,
+            s_code,
+            s_msg,
+        )
+        print(f"ERROR: Compliance restriction for {ticker}: sCode={s_code}, sMsg={s_msg}")
+    set_last_switch_reason("compliance_restricted")
+    set_last_health_score(0)
+    return not lock_on_pair
 
 def _z_history_values(z_history):
     values = []
@@ -510,6 +551,12 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
 
     # Place and manage trades
     if hot and kill_switch == 0:
+        if is_restricted_ticker(signal_positive_ticker) or is_restricted_ticker(signal_negative_ticker):
+            set_last_switch_reason("compliance_restricted")
+            set_last_health_score(0)
+            if not lock_on_pair:
+                return 3, signal_detected, trade_placed
+            return kill_switch, signal_detected, trade_placed
 
         # Get the trade history for liquidity
         avg_liquidity_ticker_p, last_price_p = get_ticker_trade_liquidity(signal_positive_ticker)
@@ -778,6 +825,8 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                     order_long_id = ""
                     order_status_long = "failed"
                     logger.error("Long entry failed; skipping pair entry. Response: %s", result_long)
+                    if _handle_compliance_restriction(result_long, long_ticker):
+                        return 3, signal_detected, trade_placed
                     return kill_switch, signal_detected, trade_placed
 
             # Place short order
@@ -826,7 +875,10 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                     order_short_id = ""
                     order_status_short = "failed"
                     logger.error("Short entry failed; closing any opened leg. Response: %s", result_short)
+                    should_switch = _handle_compliance_restriction(result_short, short_ticker)
                     close_all_positions(0)
+                    if should_switch:
+                        return 3, signal_detected, trade_placed
                     return kill_switch, signal_detected, trade_placed
             
             # Exit loop after both orders placed

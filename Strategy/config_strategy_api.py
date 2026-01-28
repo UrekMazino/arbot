@@ -24,6 +24,16 @@ try:
     min_equity_filter_usdt = float(os.getenv("STATBOT_STRATEGY_MIN_EQUITY", "0") or 0)
 except (TypeError, ValueError):
     min_equity_filter_usdt = 0.0
+def _env_list(name, default=""):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        raw = default
+    items = [part.strip().upper() for part in str(raw).split(",") if part.strip()]
+    if not items or "ALL" in items:
+        return []
+    return items
+
+settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")
@@ -73,4 +83,6 @@ print(f"Kline Limit: {kline_limit}")
 print(f"Z-Score Window: {z_score_window}")
 if min_equity_filter_usdt > 0:
     print(f"Min Equity Filter: {min_equity_filter_usdt:.2f} USDT")
+if settle_ccy_filter:
+    print(f"Settle CCY Filter: {', '.join(settle_ccy_filter)}")
 print(f"{'='*60}\n")

@@ -1,6 +1,7 @@
 import math
 
 from config_execution_api import account_session, inst_type, trade_session
+from func_api_retry import call_with_retries, is_disconnect_error, log_disconnect_once
 
 def get_account_state(inst_type_value=None, session_acc=None, session_trade=None):
     """
@@ -19,19 +20,27 @@ def get_account_state(inst_type_value=None, session_acc=None, session_trade=None
 
     try:
         # Fetch all positions for the instrument type
-        pos_res = acc_session.get_positions(instType=it_value)
+        pos_res = call_with_retries(lambda: acc_session.get_positions(instType=it_value))
         if pos_res.get("code") == "0":
             state["positions"] = pos_res.get("data", [])
     except Exception as e:
-        print(f"ERROR: Failed to fetch all positions: {e}")
+        msg = f"ERROR: Failed to fetch all positions: {e}"
+        if is_disconnect_error(e):
+            log_disconnect_once("positions_all", msg)
+        else:
+            print(msg)
 
     try:
         # Fetch all open orders for the instrument type
-        ord_res = tr_session.get_order_list(instType=it_value)
+        ord_res = call_with_retries(lambda: tr_session.get_order_list(instType=it_value))
         if ord_res.get("code") == "0":
             state["orders"] = ord_res.get("data", [])
     except Exception as e:
-        print(f"ERROR: Failed to fetch all open orders: {e}")
+        msg = f"ERROR: Failed to fetch all open orders: {e}"
+        if is_disconnect_error(e):
+            log_disconnect_once("orders_all", msg)
+        else:
+            print(msg)
 
     return state
 

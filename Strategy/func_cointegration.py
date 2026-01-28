@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import math
 import warnings
+from decimal import Decimal, ROUND_UP
 from itertools import combinations
 
 
@@ -149,6 +150,43 @@ def extract_close_prices(klines):
     return close_prices
 
 
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_min_order_qty(min_sz, lot_sz):
+    try:
+        min_sz_dec = Decimal(str(min_sz)) if min_sz is not None else Decimal("0")
+    except (TypeError, ValueError):
+        min_sz_dec = Decimal("0")
+    try:
+        lot_sz_dec = Decimal(str(lot_sz)) if lot_sz is not None else Decimal("0")
+    except (TypeError, ValueError):
+        lot_sz_dec = Decimal("0")
+
+    if min_sz_dec <= 0 and lot_sz_dec <= 0:
+        return 0.0
+    if lot_sz_dec <= 0:
+        return float(min_sz_dec)
+    if min_sz_dec <= 0:
+        return float(lot_sz_dec)
+
+    steps = (min_sz_dec / lot_sz_dec).to_integral_value(rounding=ROUND_UP)
+    return float(steps * lot_sz_dec)
+
+
+def _calculate_min_capital(last_price, min_sz, lot_sz):
+    if last_price is None or last_price <= 0:
+        return 0.0, 0.0
+    min_qty = _get_min_order_qty(min_sz, lot_sz)
+    if min_qty <= 0:
+        return 0.0, 0.0
+    return min_qty, float(min_qty) * float(last_price)
+
+
 # Get co-integrated pairs
 def get_cointegrated_pairs(json_symbols):
     """
@@ -159,10 +197,25 @@ def get_cointegrated_pairs(json_symbols):
     pairs_with_crossings = 0
 
     series_by_symbol = {}
+    symbol_meta = {}
     for sym, data in json_symbols.items():
         series = extract_close_prices(data['klines'])
         if series:
             series_by_symbol[sym] = np.array(series, dtype=float)
+        info = data.get('symbol_info', {}) if isinstance(data, dict) else {}
+        min_sz = info.get('min_sz') if isinstance(info, dict) else None
+        lot_sz = info.get('lot_sz') if isinstance(info, dict) else None
+        if min_sz is None and isinstance(info, dict):
+            min_sz = info.get('minSz')
+        if lot_sz is None and isinstance(info, dict):
+            lot_sz = info.get('lotSz')
+        last_close = series[-1] if series else None
+        min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz)
+        symbol_meta[sym] = {
+            "min_qty": min_qty,
+            "min_capital": min_capital,
+            "last_close": last_close,
+        }
 
     symbols = list(series_by_symbol.keys())
 
@@ -180,6 +233,11 @@ def get_cointegrated_pairs(json_symbols):
             if zero_crossings > 0:
                 pairs_with_crossings += 1
 
+            min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
+            min_cap_2 = symbol_meta.get(sym_2, {}).get("min_capital", 0.0) or 0.0
+            required_floor = max(min_cap_1, min_cap_2) if min_cap_1 > 0 and min_cap_2 > 0 else None
+            min_equity = required_floor * 2 if required_floor else None
+
             coint_pair_list.append({
                 "sym_1": sym_1,
                 "sym_2": sym_2,
@@ -188,6 +246,10 @@ def get_cointegrated_pairs(json_symbols):
                 "c_value": critical_values,
                 "hedge_ratio": hedge_ratio,
                 "zero_crossing": zero_crossings,
+                "min_capital_1": min_cap_1 if min_cap_1 > 0 else None,
+                "min_capital_2": min_cap_2 if min_cap_2 > 0 else None,
+                "min_capital_per_leg": required_floor,
+                "min_equity_recommended": min_equity,
             })
 
     # Output results
@@ -210,6 +272,14 @@ def get_cointegrated_pairs(json_symbols):
         print(f"  Max:     {df_coint['zero_crossing'].max()}")
         print(f"  Mean:    {df_coint['zero_crossing'].mean():.2f}")
         print(f"  Median:  {df_coint['zero_crossing'].median():.0f}")
+
+        if "min_capital_per_leg" in df_coint.columns:
+            min_caps = df_coint["min_capital_per_leg"].dropna().astype(float).tolist()
+            if min_caps:
+                max_per_leg = max(min_caps)
+                print("\nMin Capital Summary:")
+                print(f"  Max per-leg min capital: {max_per_leg:.4f} USDT")
+                print(f"  Recommended starting equity: {max_per_leg * 2:.4f} USDT")
     print(f"{'=' * 60}\n")
 
     return df_coint

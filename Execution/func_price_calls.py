@@ -4,6 +4,7 @@ from bisect import bisect_left
 from collections import deque
 
 from config_execution_api import depth, market_session, ticker_1, ticker_2
+from func_api_retry import call_with_retries, is_disconnect_error, log_disconnect_once
 
 DEFAULT_BAR = "1m"
 DEFAULT_LIMIT = 200
@@ -395,13 +396,22 @@ def get_candlesticks(inst_id, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, before=None,
         kwargs["after"] = str(int(after))
 
     try:
-        response = active_session.get_candlesticks(**kwargs)
+        response = call_with_retries(lambda: active_session.get_candlesticks(**kwargs))
     except Exception as exc:
-        print(f"ERROR: Failed to get candlesticks: {exc}")
+        msg = f"ERROR: Failed to get candlesticks: {exc}"
+        if is_disconnect_error(exc):
+            log_disconnect_once("candlesticks", msg)
+        else:
+            print(msg)
         return {"code": "1", "msg": str(exc), "data": []}
 
     if response.get("code") != "0":
-        print(f"ERROR: OKX candlesticks failed: {response.get('msg')}")
+        err_msg = response.get("msg")
+        msg = f"ERROR: OKX candlesticks failed: {err_msg}"
+        if is_disconnect_error(err_msg):
+            log_disconnect_once("candlesticks", msg)
+        else:
+            print(msg)
     return response
 
 

@@ -44,6 +44,12 @@ class RateLimiter:
 # OKX limit: 20 req/2sec, but we use 5 req/sec for safety margin
 rate_limiter = RateLimiter(max_requests_per_second=5)
 
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 
 def _get_fee_rates_for_type(inst_type):
     """Get fee rates for an instrument type (OKX has same fees per type, not per instrument)"""
@@ -151,7 +157,9 @@ def get_symbols_by_maker_fees(
             'taker_fee': taker_fee,
             'status': instrument.get('state', 'unknown'),
             'category': fee_info.get('category', ''),
-            'inst_type': inst_type
+            'inst_type': inst_type,
+            'min_sz': _safe_float(instrument.get('minSz')),
+            'lot_sz': _safe_float(instrument.get('lotSz'))
         }
 
         # Track all fees

@@ -167,6 +167,16 @@ Each trading cycle logs comprehensive performance metrics:
 - **Emergency Override**: Health score < 40 bypasses 24h cooldown for immediate pair switching
 - **Enhanced Error Logging**: Detailed diagnostics for orderbook fetch failures (timeout, delisting, rate limits, illiquidity)
 - **Cross Margin Mode**: Capital-efficient margin sharing for long+short hedged positions
+- **Manual Close Auto-Reset**: If the bot is monitoring (`kill_switch=1`) and no positions/orders exist for 3 cycles, it clears entry tracking and resumes trading
+
+### Log Rotation and Retention
+StatBot uses a rotating log file to prevent indefinite growth. Control it via `.env`:
+```
+STATBOT_LOG_MAX_MB=4
+STATBOT_LOG_BACKUPS=2
+```
+This keeps the current log up to ~4 MB plus 2 rotated backups (total ~12 MB).  
+Optional: `STATBOT_LOG_LEVEL=INFO|WARNING|ERROR` to control verbosity.
 
 ---
 

@@ -4,16 +4,32 @@
 """
 
 import os
+import json
 
 try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
 
+if load_dotenv:
+    load_dotenv()
+
 from okx.PublicData import PublicAPI
 from okx.Account import AccountAPI
 from okx.Trade import TradeAPI
 from okx.MarketData import MarketAPI
+
+
+def _env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return default
 
 def save_active_pair(t1, t2):
     """Save the current active pair to active_pair.json."""
@@ -34,10 +50,33 @@ mode = "demo"  # "demo" or "live"
 default_ticker_1 = "ETH-USD-SWAP"
 default_ticker_2 = "ZETA-USDT-SWAP"
 
-# Try to load active pair from JSON if it exists
-import json
+ticker_1 = default_ticker_1
+ticker_2 = default_ticker_2
+lock_on_pair = _env_flag("STATBOT_LOCK_ON_PAIR", False)
+
+# Try to load active pair from JSON if it exists (unless locked in env)
 active_pair_file = os.path.join(os.path.dirname(__file__), "active_pair.json")
-if os.path.exists(active_pair_file):
+lock_pair_raw = os.getenv("STATBOT_LOCK_PAIR", "").strip()
+lock_pair_active = False
+if lock_on_pair and lock_pair_raw:
+    try:
+        lock_pair = json.loads(lock_pair_raw)
+        lock_t1 = str(lock_pair.get("ticker_1") or "").strip()
+        lock_t2 = str(lock_pair.get("ticker_2") or "").strip()
+        if lock_t1 and lock_t2:
+            ticker_1 = lock_t1
+            ticker_2 = lock_t2
+            lock_pair_active = True
+            if os.getenv("STATBOT_MANAGED") == "1":
+                print(f"Lock pair override enabled: {ticker_1}/{ticker_2}")
+        else:
+            print("Warning: STATBOT_LOCK_PAIR missing ticker_1 or ticker_2; ignoring.")
+    except Exception as exc:
+        print(f"Warning: Failed to parse STATBOT_LOCK_PAIR ({exc}); ignoring.")
+elif lock_pair_raw and not lock_on_pair:
+    pass
+
+if not lock_pair_active and os.path.exists(active_pair_file):
     try:
         with open(active_pair_file, "r") as f:
             active_data = json.load(f)
@@ -46,9 +85,6 @@ if os.path.exists(active_pair_file):
     except Exception:
         ticker_1 = default_ticker_1
         ticker_2 = default_ticker_2
-else:
-    ticker_1 = default_ticker_1
-    ticker_2 = default_ticker_2
 
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
@@ -103,10 +139,6 @@ max_drawdown_pct = 0.05  # Circuit breaker: exit if cumulative loss exceeds 5% o
 # ENVIRONMENT SETTINGS
 flag = "1" if mode == "demo" else "0"  # "1" = demo, "0" = live
 ws_url = "wss://wspap.okx.com:8443/ws/v5/public" if mode == "demo" else "wss://ws.okx.com:8443/ws/v5/public"
-
-# Load credentials
-if load_dotenv:
-    load_dotenv()
 
 api_key = os.getenv("OKX_API_KEY", "")
 api_secret = os.getenv("OKX_API_SECRET", "")

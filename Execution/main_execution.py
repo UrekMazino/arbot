@@ -6,7 +6,7 @@ import time
 import sys
 import subprocess
 from pathlib import Path
-from logging.handlers import RotatingFileHandler
+from func_log_setup import get_logger
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -25,7 +25,8 @@ from config_execution_api import (
     save_active_pair,
     STATUS_UPDATE_INTERVAL,
     HEALTH_CHECK_INTERVAL,
-    account_session
+    account_session,
+    lock_on_pair
 )
 from func_position_calls import (
     open_position_confirmation, 
@@ -38,7 +39,7 @@ from func_price_calls import get_ticker_trade_liquidity
 from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
-from func_close_positions import close_all_positions, get_position_info
+from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
 from func_save_status import save_status
 from func_pair_state import (
     add_to_graveyard,
@@ -51,18 +52,13 @@ from func_pair_state import (
     get_last_switch_reason,
     set_last_switch_reason,
     get_min_capital_cooldown,
-    set_min_capital_cooldown
+    set_min_capital_cooldown,
+    clear_entry_tracking,
+    clear_persistence_history
 )
 
 # Setup logging
-logger = logging.getLogger("main_execution")
-if not logger.handlers:
-    log_path = Path(__file__).resolve().parent / "logfile_okx.log"
-    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-    logger.setLevel(logging.INFO)
+logger = get_logger("main_execution")
 
 
 def _validate_ticker_configuration():
@@ -176,7 +172,22 @@ def _get_min_capital_for_ticker(ticker):
         return req.get("min_capital") or 0.0
     except Exception as exc:
         logger.warning("Min-capital check failed for %s: %s", ticker, exc)
-        return 0.0
+    return 0.0
+
+
+def _format_uptime(seconds):
+    seconds = max(0, int(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _green(text):
+    return f"\x1b[32m{text}\x1b[0m"
 
 
 def _pair_meets_min_capital(t1, t2, per_leg_capital):
@@ -263,6 +274,13 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     """
     import pandas as pd
     from pathlib import Path
+
+    if lock_on_pair:
+        logger.warning(
+            "Pair switch requested (reason=%s) but lock_on_pair is enabled. Staying on current pair.",
+            switch_reason,
+        )
+        return False
 
     # 1. Check Cooldown with emergency override
     last_switch = get_last_switch_time()
@@ -434,9 +452,13 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
 if __name__ == "__main__":
     # Manager process to handle restarts (especially on Windows)
     if os.getenv("STATBOT_MANAGED") != "1":
+        start_ts = os.getenv("STATBOT_START_TS")
+        if not start_ts:
+            start_ts = str(time.time())
         while True:
             env = os.environ.copy()
             env["STATBOT_MANAGED"] = "1"
+            env["STATBOT_START_TS"] = start_ts
             try:
                 # Use sys.executable to ensure the same Python interpreter is used
                 ret = subprocess.call([sys.executable] + sys.argv, env=env)
@@ -465,12 +487,15 @@ if __name__ == "__main__":
             per_leg_capital,
         )
         set_last_switch_reason("min_capital")
-        if _switch_to_next_pair(health_score=0, switch_reason="min_capital"):
-            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-            print("Restarting to apply new pair...")
-            sys.exit(3)
-        logger.error("No suitable replacement pair found for min-capital filter.")
-        sys.exit(1)
+        if lock_on_pair:
+            logger.warning("lock_on_pair enabled; staying on current pair despite min-capital failure.")
+        else:
+            if _switch_to_next_pair(health_score=0, switch_reason="min_capital"):
+                logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                print("Restarting to apply new pair...")
+                sys.exit(3)
+            logger.error("No suitable replacement pair found for min-capital filter.")
+            sys.exit(1)
     
     # Run the bot
     print("StatBot initialised...")
@@ -483,11 +508,19 @@ if __name__ == "__main__":
     kill_switch = 0
     
     # Session tracking
+    try:
+        bot_start_time = float(os.getenv("STATBOT_START_TS") or "")
+    except ValueError:
+        bot_start_time = time.time()
     pair_start_time = time.time()
     last_health_check = time.time()  # First check on startup or after 1h
     last_status_update = time.time()
     signals_seen = 0
     trades_executed = 0
+    prev_equity_usdt = None
+    prev_total_pnl = None
+    manual_close_clear_count = 0
+    manual_close_clear_threshold = 3
 
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
@@ -510,6 +543,19 @@ if __name__ == "__main__":
     print("Setting leverage...")
     _set_leverage_for_ticker(signal_positive_ticker, default_leverage)
     _set_leverage_for_ticker(signal_negative_ticker, default_leverage)
+
+    # Cleanup any positions/orders for instruments outside the active pair
+    try:
+        acc_state_start = get_account_state()
+        closed_count = close_non_active_positions(
+            {signal_positive_ticker, signal_negative_ticker},
+            state=acc_state_start,
+            include_orders=True,
+        )
+        if closed_count:
+            logger.warning("Closed %d non-active positions at startup.", closed_count)
+    except Exception as exc:
+        logger.warning("Failed to cleanup non-active positions at startup: %s", exc)
     
     # Check if we should start in monitoring mode (positions already open)
     is_p_open = open_position_confirmation(signal_positive_ticker)
@@ -544,6 +590,19 @@ if __name__ == "__main__":
             checks_all = [is_p_open, is_n_open, is_p_active, is_n_active]
             is_manage_new_trades = not any(checks_all)
 
+            if kill_switch == 1 and is_manage_new_trades:
+                manual_close_clear_count += 1
+                if manual_close_clear_count >= manual_close_clear_threshold:
+                    logger.warning(
+                        "No active positions/orders detected while monitoring. Resetting kill_switch to resume trading."
+                    )
+                    clear_entry_tracking()
+                    clear_persistence_history()
+                    kill_switch = 0
+                    manual_close_clear_count = 0
+            else:
+                manual_close_clear_count = 0
+
             # 2. Market Data Fetch
             zscore_results = get_latest_zscore()
             _, _, metrics = zscore_results
@@ -551,18 +610,23 @@ if __name__ == "__main__":
 
             # 2a. ORDERBOOK DEAD CHECK: Switch if tickers are delisted/illiquid
             if metrics.get("orderbook_dead", False):
-                logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid. Switching pairs...")
-                status_dict["message"] = "Orderbook dead; switching pair..."
-                save_status(status_dict)
-
-                health_score = 0  # Force emergency override
-                set_last_switch_reason("orderbook_dead")
-                if _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead"):
-                    logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-                    print("Restarting to apply new pair...")
-                    sys.exit(3)
+                if lock_on_pair:
+                    logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid, lock_on_pair enabled.")
+                    status_dict["message"] = "Orderbook dead; lock_on_pair enabled"
+                    save_status(status_dict)
                 else:
-                    logger.error("Pair switch failed. Will retry next cycle.")
+                    logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid. Switching pairs...")
+                    status_dict["message"] = "Orderbook dead; switching pair..."
+                    save_status(status_dict)
+
+                    health_score = 0  # Force emergency override
+                    set_last_switch_reason("orderbook_dead")
+                    if _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead"):
+                        logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                        print("Restarting to apply new pair...")
+                        sys.exit(3)
+                    else:
+                        logger.error("Pair switch failed. Will retry next cycle.")
 
             # 3. CIRCUIT BREAKER: Check cumulative P&L
             total_pnl, pnl_pct = _calculate_cumulative_pnl(
@@ -590,14 +654,53 @@ if __name__ == "__main__":
             # Log cycle with PnL, equity, and session performance
             pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
             session_emoji = "🟢" if session_pnl >= 0 else "🔴"
-            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) | Equity: {equity_usdt:.2f} USDT | {session_emoji} Session: {session_pnl:+.2f} USDT ({session_pnl_pct:+.2f}%) ---")
+            uptime = _format_uptime(current_time - bot_start_time)
+            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | Uptime: {uptime} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) | Equity: {equity_usdt:.2f} USDT | {session_emoji} Session: {session_pnl:+.2f} USDT ({session_pnl_pct:+.2f}%) ---")
+
+            if prev_equity_usdt is not None and prev_total_pnl is not None:
+                equity_delta = equity_usdt - prev_equity_usdt
+                pair_pnl_delta = total_pnl - prev_total_pnl
+                drift = equity_delta - pair_pnl_delta
+                if abs(drift) >= 0.5:
+                    other_positions = []
+                    for pos in acc_state.get("positions", []):
+                        if not isinstance(pos, dict):
+                            continue
+                        inst_id = pos.get("instId")
+                        if inst_id in (signal_positive_ticker, signal_negative_ticker):
+                            continue
+                        pos_raw = pos.get("pos") or pos.get("position") or pos.get("size")
+                        try:
+                            pos_val = float(pos_raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if abs(pos_val) > 0:
+                            other_positions.append(inst_id)
+                    other_note = ""
+                    if other_positions:
+                        preview = ", ".join(other_positions[:5])
+                        suffix = "..." if len(other_positions) > 5 else ""
+                        other_note = f" other_positions={len(other_positions)} [{preview}{suffix}]"
+                    logger.warning(
+                        "Equity delta %.2f USDT differs from pair PnL delta %.2f USDT by %.2f USDT.%s",
+                        equity_delta,
+                        pair_pnl_delta,
+                        drift,
+                        other_note,
+                    )
+
+            prev_equity_usdt = equity_usdt
+            prev_total_pnl = total_pnl
 
             # Trading Status Update every minute
             if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:
                 time_in_pair_min = (current_time - pair_start_time) / 60
+                uptime = _format_uptime(current_time - bot_start_time)
                 logger.info("--- Trading Status Update ---")
+                logger.info(f"Uptime: {uptime}")
                 logger.info(f"Time in pair: {time_in_pair_min:.1f} min")
                 logger.info(f"Signals seen: {signals_seen} | Trades: {trades_executed}")
+                print(_green(f"Uptime: {uptime}"))
                 last_status_update = current_time
             max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
             
@@ -631,24 +734,30 @@ if __name__ == "__main__":
 
             # Handle pair switch signal (e.g. health check failed)
             if kill_switch == 3:
-                status_dict["message"] = "Health check failed; switching pair..."
-                save_status(status_dict)
-                logger.info("Kill switch 3: Pair health degraded. Switching to next prospect...")
-
-                # Get the last health score for emergency override
-                health_score = get_last_health_score()
-                switch_reason = get_last_switch_reason() or "health"
-
-                if _switch_to_next_pair(health_score=health_score, switch_reason=switch_reason):
-                    logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-                    print("Restarting to apply new pair...")
-                    # Exit with code 3 to signal the manager to restart
-                    sys.exit(3)
-                else:
-                    logger.error("Pair switch failed. Resetting kill_switch to 0.")
-                    # If switch failed, reset kill_switch and wait before trying again
+                if lock_on_pair:
+                    status_dict["message"] = "Pair swap blocked (lock_on_pair enabled)."
+                    save_status(status_dict)
+                    logger.info("Kill switch 3 blocked: lock_on_pair enabled. Staying on current pair.")
                     kill_switch = 0
-                    time.sleep(10)
+                else:
+                    status_dict["message"] = "Health check failed; switching pair..."
+                    save_status(status_dict)
+                    logger.info("Kill switch 3: Pair health degraded. Switching to next prospect...")
+
+                    # Get the last health score for emergency override
+                    health_score = get_last_health_score()
+                    switch_reason = get_last_switch_reason() or "health"
+
+                    if _switch_to_next_pair(health_score=health_score, switch_reason=switch_reason):
+                        logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                        print("Restarting to apply new pair...")
+                        # Exit with code 3 to signal the manager to restart
+                        sys.exit(3)
+                    else:
+                        logger.error("Pair switch failed. Resetting kill_switch to 0.")
+                        # If switch failed, reset kill_switch and wait before trying again
+                        kill_switch = 0
+                        time.sleep(10)
 
 
             # Close all active orders and positions

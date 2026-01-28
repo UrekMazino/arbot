@@ -15,6 +15,7 @@ from config_execution_api import (
     CORRELATION_MIN,
     TREND_CRITICAL,
     Z_SCORE_CRITICAL,
+    lock_on_pair,
 )
 
 from func_pair_state import (
@@ -67,20 +68,11 @@ from func_order_review import check_order
 import time
 import math
 import logging
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
+from func_log_setup import get_logger
 import datetime
 
 # Logger for trade management diagnostics
-log_path = Path(__file__).resolve().parent / "logfile_okx.log"
-logger = logging.getLogger("func_trade_management")
-if not logger.handlers:
-    # RotatingFileHandler: max 5MB per file, keep 3 backup files
-    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-    logger.setLevel(logging.INFO)
+logger = get_logger("func_trade_management")
 
 def _resolve_entry_id(entry_result):
     if not isinstance(entry_result, dict):
@@ -596,6 +588,16 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                     required_floor,
                     capital_long,
                 )
+                if lock_on_pair:
+                    msg = (
+                        "ERROR: Minimum per-leg capital exceeds allocation; "
+                        f"required={required_floor:.8f} long_min={min_capital_long:.8f} "
+                        f"short_min={min_capital_short:.8f} allocated={capital_long:.8f}. "
+                        f"lock_on_pair enabled (cooldown={cooldown/60:.1f}m). Skipping entry."
+                    )
+                    print(msg)
+                    logger.error(msg)
+                    return kill_switch, signal_detected, trade_placed
                 msg = (
                     "ERROR: Minimum per-leg capital exceeds allocation; "
                     f"required={required_floor:.8f} long_min={min_capital_long:.8f} "

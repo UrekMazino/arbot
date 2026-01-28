@@ -1,4 +1,5 @@
 import logging
+import math
 
 from config_execution_api import account_session, trade_session, inst_type, ticker_1, ticker_2, td_mode
 
@@ -111,6 +112,74 @@ def place_market_close_order(ticker, size, side):
     except Exception as exc:
         logger.error(f"Error placing market close order for {ticker}: {exc}")
         return None
+
+
+def _safe_float(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _position_side(pos_side, pos_val):
+    side_norm = str(pos_side or "").lower()
+    if side_norm == "long":
+        return "Buy"
+    if side_norm == "short":
+        return "Sell"
+    return "Buy" if pos_val > 0 else "Sell"
+
+
+def close_non_active_positions(active_tickers, state=None, include_orders=True):
+    active_set = set(active_tickers or [])
+    from func_position_calls import get_account_state
+
+    if state is None:
+        state = get_account_state()
+
+    if include_orders:
+        try:
+            orders = state.get("orders", [])
+            cancel_reqs = []
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                inst_id = order.get("instId")
+                ord_id = order.get("ordId")
+                if not inst_id or not ord_id:
+                    continue
+                if inst_id in active_set:
+                    continue
+                cancel_reqs.append({"instId": inst_id, "ordId": ord_id})
+
+            if cancel_reqs:
+                for i in range(0, len(cancel_reqs), 20):
+                    batch = cancel_reqs[i:i + 20]
+                    trade_session.cancel_multiple_orders(batch)
+                logger.warning("Cancelled %d open orders for non-active instruments.", len(cancel_reqs))
+        except Exception as exc:
+            logger.error("Error cancelling non-active orders: %s", exc)
+
+    closed = 0
+    for pos in state.get("positions", []):
+        if not isinstance(pos, dict):
+            continue
+        inst_id = pos.get("instId")
+        if not inst_id or inst_id in active_set:
+            continue
+        pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
+        if pos_val is None or abs(pos_val) == 0:
+            continue
+        side = _position_side(pos.get("posSide"), pos_val)
+        size = abs(pos_val)
+        logger.warning("Closing non-active position for %s: %.6f %s", inst_id, size, side)
+        place_market_close_order(inst_id, size, side)
+        closed += 1
+
+    return closed
 
 
 # Close all positions for both tickers

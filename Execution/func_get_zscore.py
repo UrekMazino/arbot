@@ -3,8 +3,6 @@ import warnings
 import threading
 import time
 import logging
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
 
 import numpy as np
 import pandas as pd
@@ -13,16 +11,10 @@ from statsmodels.tsa.stattools import coint
 
 from config_execution_api import depth, market_session, ticker_1, ticker_2, z_score_window, P_VALUE_CRITICAL
 from func_price_calls import get_latest_klines
+from func_log_setup import get_logger
 
 # Setup logging
-log_path = Path(__file__).resolve().parent / "logfile_okx.log"
-logger = logging.getLogger("func_get_zscore")
-if not logger.handlers:
-    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-    logger.setLevel(logging.INFO)
+logger = get_logger("func_get_zscore")
 
 
 def _compute_zscore(spread, window):

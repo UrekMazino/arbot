@@ -100,7 +100,26 @@ def _open_trade_manager(entry_z, position_size, entry_time=None):
 
 
 def _ensure_trade_manager_state(entry_z, entry_time):
-    if trade_manager.trade_state is None:
+    state = trade_manager.trade_state
+    if state is None:
+        _open_trade_manager(entry_z, position_size=0.0, entry_time=entry_time)
+        return
+
+    reset_needed = False
+    try:
+        if entry_z is not None and abs(float(state.entry_z) - float(entry_z)) > 1e-4:
+            reset_needed = True
+    except (TypeError, ValueError):
+        reset_needed = True
+
+    try:
+        if entry_time is not None and abs(float(state.entry_time) - float(entry_time)) > 60:
+            reset_needed = True
+    except (TypeError, ValueError):
+        reset_needed = True
+
+    if reset_needed:
+        _close_trade_manager()
         _open_trade_manager(entry_z, position_size=0.0, entry_time=entry_time)
 
 
@@ -527,7 +546,10 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
     if health_check_due or coint_flag == 0:
         should_switch, score, rec = check_pair_health(metrics, latest_zscore)
         if should_switch:
-            set_last_switch_reason("health")
+            if coint_flag == 0:
+                set_last_switch_reason("cointegration_lost")
+            else:
+                set_last_switch_reason("health")
             return 3, False, False
     
     # 3. Signal Generation

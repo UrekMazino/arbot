@@ -1,4 +1,14 @@
-from config_strategy_api import z_score_window, min_equity_filter_usdt
+from config_strategy_api import (
+    z_score_window,
+    min_equity_filter_usdt,
+    max_pairs_per_ticker,
+    min_p_value_filter,
+    max_p_value_filter,
+    min_zero_crossings,
+    min_hedge_ratio,
+    max_hedge_ratio,
+    min_capital_per_leg,
+)
 from pathlib import Path
 import json
 from statsmodels.tsa.stattools import coint
@@ -280,6 +290,45 @@ def get_cointegrated_pairs(json_symbols):
     df_coint = pd.DataFrame(coint_pair_list)
     df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
     filtered_count = 0
+    filtered_breakdown = {}
+
+    if not df_coint.empty:
+        if min_p_value_filter is not None and max_p_value_filter is not None:
+            if min_p_value_filter > 0 and max_p_value_filter > 0 and min_p_value_filter < max_p_value_filter:
+                before = len(df_coint)
+                df_coint = df_coint[
+                    (df_coint["p_value"] >= min_p_value_filter) &
+                    (df_coint["p_value"] <= max_p_value_filter)
+                ].copy()
+                filtered_breakdown["p_value"] = before - len(df_coint)
+
+        if min_zero_crossings and min_zero_crossings > 0:
+            before = len(df_coint)
+            df_coint = df_coint[df_coint["zero_crossing"] >= min_zero_crossings].copy()
+            filtered_breakdown["zero_crossing"] = before - len(df_coint)
+
+        if min_hedge_ratio is not None and max_hedge_ratio is not None:
+            if min_hedge_ratio >= 0 and max_hedge_ratio > 0 and min_hedge_ratio <= max_hedge_ratio:
+                before = len(df_coint)
+                hr_abs = df_coint["hedge_ratio"].abs()
+                df_coint = df_coint[(hr_abs >= min_hedge_ratio) & (hr_abs <= max_hedge_ratio)].copy()
+                filtered_breakdown["hedge_ratio"] = before - len(df_coint)
+
+        if min_capital_per_leg is not None and min_capital_per_leg > 0:
+            if "min_capital_per_leg" in df_coint.columns:
+                before = len(df_coint)
+                cap_vals = pd.to_numeric(df_coint["min_capital_per_leg"], errors="coerce")
+                df_coint = df_coint[cap_vals >= min_capital_per_leg].copy()
+                filtered_breakdown["min_capital"] = before - len(df_coint)
+
+        if max_pairs_per_ticker and max_pairs_per_ticker > 0 and not df_coint.empty:
+            before = len(df_coint)
+            counts = pd.concat([df_coint["sym_1"], df_coint["sym_2"]]).value_counts()
+            df_coint = df_coint[
+                (df_coint["sym_1"].map(counts) <= max_pairs_per_ticker) &
+                (df_coint["sym_2"].map(counts) <= max_pairs_per_ticker)
+            ].copy()
+            filtered_breakdown["ticker_diversity"] = before - len(df_coint)
     if (
         min_equity_filter_usdt
         and min_equity_filter_usdt > 0
@@ -292,6 +341,7 @@ def get_cointegrated_pairs(json_symbols):
         )
         df_coint = df_coint[mask].copy()
         filtered_count = before - len(df_coint)
+        filtered_breakdown["min_equity"] = filtered_count
     df_coint.to_csv('2_cointegrated_pairs.csv', index=False)
 
     # Print statistics
@@ -302,6 +352,10 @@ def get_cointegrated_pairs(json_symbols):
     print(f"Cointegrated pairs found:    {len(coint_pair_list):,}")
     print(f"Pairs with crossings (>0):   {pairs_with_crossings:,}")
     print(f"Pairs without crossings:     {len(coint_pair_list) - pairs_with_crossings:,}")
+    if filtered_breakdown:
+        for key, count in filtered_breakdown.items():
+            if count:
+                print(f"Pairs filtered by {key}: {count:,}")
     if filtered_count:
         print(f"Pairs filtered by min equity: {filtered_count:,} (threshold: {min_equity_filter_usdt:.2f} USDT)")
     if restricted_removed:

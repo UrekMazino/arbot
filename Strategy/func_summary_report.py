@@ -32,6 +32,13 @@ def plot_pair_analysis(sym_1, sym_2, price_data, ax_prices, ax_spread, ax_zscore
     if len(prices_1) == 0 or len(prices_2) == 0:
         return None
 
+    min_len = min(len(prices_1), len(prices_2))
+    if min_len < 2:
+        return None
+    if len(prices_1) != len(prices_2):
+        prices_1 = prices_1[-min_len:]
+        prices_2 = prices_2[-min_len:]
+
     # Get cointegration statistics
     coint_flag, p_value, adf_stat, crit_val, hedge_ratio, zero_crossings = calculate_cointegration(
         prices_1, prices_2

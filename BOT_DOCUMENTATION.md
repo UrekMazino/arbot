@@ -109,9 +109,17 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
-*   **Graveyard**: Failed pairs are blacklisted for **7 days**.
+*   **Graveyard**: Failed pairs are blacklisted using reason-based TTLs:
+    - `cointegration_lost`: 10 days
+    - `orderbook_dead`: 30 days
+    - `compliance_restricted`: no expiry
+    - `manual`: 3 days
+    - `health`: 7 days
+    - `settle_ccy_filter`: 30 days
+    - default: 7 days
 *   **Cooldown**: Mandatory **24-hour wait** between pair switches to prevent over-trading and fee erosion.
 *   **Re-Entry Cooldown**: 5-minute wait after exit before re-entering same pair to prevent clustering at same Z-level.
+*   **Pair Universe Refresh**: If a switch finds no eligible replacement, Execution runs `Strategy/main_strategy.py` to regenerate `2_cointegrated_pairs.csv` and waits 5 minutes before retrying. The refresh loop continues until a valid pair is available.
 
 ### Performance Tracking (Per-Cycle Logging)
 Each trading cycle logs comprehensive performance metrics:
@@ -142,6 +150,7 @@ Each trading cycle logs comprehensive performance metrics:
 - **Manual Close Auto-Reset**: If the bot is monitoring (`kill_switch=1`) and no positions/orders exist for 3 cycles, it clears entry tracking and resumes trading
 - **Equity Reconciliation Logs**: Estimated entry/exit fees and slippage are logged at trade close to explain equity drift
 - **Compliance Restricted Ticker Filter**: sCode=51155 marks a ticker as restricted; pairs containing restricted tickers are skipped on future switches
+- **Empty Universe Refresh Loop**: If a switch cannot find a valid replacement, the bot re-runs Strategy and waits 5 minutes between attempts until a pair is available
 
 ### Log Rotation and Retention
 StatBot uses a rotating log file to prevent indefinite growth. Control it via `.env`:
@@ -161,6 +170,14 @@ Pairs with `min_equity_recommended` above this threshold are removed.
 
 Execution also reads `min_equity_recommended` and skips pairs during pair switching if
 your current account equity is below the requirement.
+
+### Strategy Lookback (Klines)
+Control how many candles the Strategy fetches per symbol:
+```
+STATBOT_STRATEGY_KLINE_LIMIT=500
+```
+OKX limits each request to 100 candles, so the Strategy paginates until it reaches
+the requested limit (or runs out of data).
 
 ### Settle Currency Filtering (Strategy + Execution)
 To avoid mixed-margin pairs (e.g., COIN-margined vs USDT-margined), you can filter by settle currency:

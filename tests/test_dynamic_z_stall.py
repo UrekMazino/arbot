@@ -63,6 +63,7 @@ def _build_z_history(start_ts, end_ts, points, z_start, z_end):
 
 class TestDynamicZStall(unittest.TestCase):
     def _run_monitor_exit(self, now_ts, entry_z, entry_time, current_z, z_history):
+        ftm._close_trade_manager()
         zscore_results = ([current_z], False, {"coint_flag": 1})
         with patch("func_pair_state.get_entry_z_score", return_value=entry_z), \
             patch("func_pair_state.get_entry_time", return_value=entry_time), \

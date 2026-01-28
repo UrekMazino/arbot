@@ -13,6 +13,15 @@ MIN_CAPITAL_SHORTAGE_MEDIUM = 0.20
 MIN_CAPITAL_SHORTAGE_HIGH = 0.50
 Z_HISTORY_MAX_AGE_SECONDS = 14400
 Z_HISTORY_MAX_LEN = 5000
+GRAVEYARD_DEFAULT_DAYS = 7
+GRAVEYARD_REASON_DAYS = {
+    "cointegration_lost": 10,
+    "orderbook_dead": 30,
+    "compliance_restricted": None,
+    "manual": 3,
+    "health": 7,
+    "settle_ccy_filter": 30,
+}
 
 def load_pair_state():
     if not STATE_FILE.exists():
@@ -83,10 +92,23 @@ def get_consecutive_losses():
     state = load_pair_state()
     return state.get("consecutive_losses", 0)
 
-def add_to_graveyard(t1, t2):
+def _graveyard_days_for_reason(reason):
+    if not reason:
+        return GRAVEYARD_DEFAULT_DAYS
+    reason_key = str(reason).strip().lower()
+    if reason_key in GRAVEYARD_REASON_DAYS:
+        return GRAVEYARD_REASON_DAYS[reason_key]
+    return GRAVEYARD_DEFAULT_DAYS
+
+def add_to_graveyard(t1, t2, reason=""):
     state = load_pair_state()
     pair_key = f"{t1}/{t2}"
-    state["graveyard"][pair_key] = time.time()
+    ttl_days = _graveyard_days_for_reason(reason)
+    state["graveyard"][pair_key] = {
+        "ts": time.time(),
+        "reason": str(reason or ""),
+        "ttl_days": ttl_days,
+    }
     state["consecutive_losses"] = 0 # Reset losses when switching
     save_pair_state(state)
 
@@ -127,14 +149,32 @@ def is_in_graveyard(t1, t2, lookback_days=7):
     state = load_pair_state()
     pair_key = f"{t1}/{t2}"
     alt_pair_key = f"{t2}/{t1}"
-    
-    fail_time = state["graveyard"].get(pair_key) or state["graveyard"].get(alt_pair_key)
-    if not fail_time:
+
+    entry = state["graveyard"].get(pair_key)
+    entry_key = pair_key
+    if not entry:
+        entry = state["graveyard"].get(alt_pair_key)
+        entry_key = alt_pair_key
+    if not entry:
         return False
-    
-    # Check if 7 days have passed
-    if time.time() - fail_time < (lookback_days * 24 * 60 * 60):
+
+    if isinstance(entry, dict):
+        fail_time = entry.get("ts") or 0
+        ttl_days = entry.get("ttl_days")
+        reason = entry.get("reason") or ""
+        if ttl_days is None:
+            return True
+        if ttl_days <= 0:
+            ttl_days = _graveyard_days_for_reason(reason)
+    else:
+        fail_time = entry
+        ttl_days = lookback_days
+
+    if fail_time and time.time() - fail_time < (ttl_days * 24 * 60 * 60):
         return True
+
+    state["graveyard"].pop(entry_key, None)
+    save_pair_state(state)
     return False
 
 def get_last_switch_time():

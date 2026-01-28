@@ -18,12 +18,27 @@ load_dotenv()
 # CONFIG
 mode = "demo"  # "demo" or "live"
 time_frame = "1m"  # Timeframe for klines (1m, 5m, 15m, 1H, 1D, etc.)
-kline_limit = 200  # Number of candles to fetch
 z_score_window = 21  # Z-score calculation window
-try:
-    min_equity_filter_usdt = float(os.getenv("STATBOT_STRATEGY_MIN_EQUITY", "0") or 0)
-except (TypeError, ValueError):
-    min_equity_filter_usdt = 0.0
+def _env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _env_int(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _env_list(name, default=""):
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
@@ -33,7 +48,16 @@ def _env_list(name, default=""):
         return []
     return items
 
+kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)
+min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0.0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
+max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 5)
+min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)
+max_p_value_filter = _env_float("STATBOT_STRATEGY_MAX_P_VALUE", 0.02)
+min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 1)
+min_hedge_ratio = _env_float("STATBOT_STRATEGY_MIN_HEDGE_RATIO", 0.3)
+max_hedge_ratio = _env_float("STATBOT_STRATEGY_MAX_HEDGE_RATIO", 3.0)
+min_capital_per_leg = _env_float("STATBOT_STRATEGY_MIN_CAPITAL_PER_LEG", 1.0)
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")
@@ -85,4 +109,16 @@ if min_equity_filter_usdt > 0:
     print(f"Min Equity Filter: {min_equity_filter_usdt:.2f} USDT")
 if settle_ccy_filter:
     print(f"Settle CCY Filter: {', '.join(settle_ccy_filter)}")
+print(
+    "Pair Filters: max_per_ticker={0}, p_value=[{1}, {2}], "
+    "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}".format(
+        max_pairs_per_ticker,
+        min_p_value_filter,
+        max_p_value_filter,
+        min_zero_crossings,
+        min_hedge_ratio,
+        max_hedge_ratio,
+        min_capital_per_leg,
+    )
+)
 print(f"{'='*60}\n")

@@ -67,6 +67,11 @@ from func_pair_state import (
 # Setup logging
 logger = get_logger("main_execution")
 
+SWITCH_RESULT_SWITCHED = "switched"
+SWITCH_RESULT_BLOCKED = "blocked"
+SWITCH_RESULT_HARD_STOP = "hard_stop"
+STRATEGY_REFRESH_SLEEP_SECONDS = 300
+
 
 def _validate_ticker_configuration():
     """
@@ -247,6 +252,57 @@ def _green(text):
     return f"\x1b[32m{text}\x1b[0m"
 
 
+def _sleep_with_progress(seconds, label="Sleeping"):
+    total = max(0, int(seconds))
+    if total <= 0:
+        return
+    def _format_mmss(value):
+        mins, secs = divmod(max(0, int(value)), 60)
+        return f"{mins:02d}:{secs:02d}"
+
+    total_label = _format_mmss(total)
+    print(f"{label} for {total_label}")
+    bar_len = 20
+    start = time.time()
+    elapsed = 0
+    while elapsed < total:
+        filled = int((elapsed / total) * bar_len)
+        bar = "#" * filled + "-" * (bar_len - filled)
+        remaining = total - elapsed
+        sys.stdout.write(
+            f"\r{label}: [{bar}] {_format_mmss(elapsed)}/{total_label} remaining {_format_mmss(remaining)}"
+        )
+        sys.stdout.flush()
+        sleep_for = min(5, total - elapsed)
+        time.sleep(sleep_for)
+        elapsed = int(time.time() - start)
+    sys.stdout.write(
+        f"\r{label}: [{'#' * bar_len}] {total_label}/{total_label} remaining 00:00\n"
+    )
+    sys.stdout.flush()
+
+
+def _run_strategy_refresh():
+    strategy_path = Path(__file__).resolve().parent.parent / "Strategy" / "main_strategy.py"
+    if not strategy_path.exists():
+        logger.error("Cannot refresh pairs: Strategy script not found at %s", strategy_path)
+        return False
+    logger.warning("No replacement pairs available. Running Strategy to refresh pair universe...")
+    logger.info("Searching for new pairs via Strategy refresh...")
+    print("Searching for new pairs...")
+    try:
+        env = os.environ.copy()
+        ret = subprocess.call([sys.executable, str(strategy_path)], env=env)
+    except Exception as exc:
+        logger.error("Strategy refresh failed: %s", exc)
+        return False
+    if ret != 0:
+        logger.error("Strategy refresh failed with exit code %s", ret)
+        return False
+    logger.info("Strategy refresh completed.")
+    return True
+
+
 def _pair_meets_min_capital(t1, t2, per_leg_capital):
     remaining = get_min_capital_cooldown(t1, t2)
     if remaining > 0:
@@ -343,54 +399,54 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             "Pair switch requested (reason=%s) but lock_on_pair is enabled. Staying on current pair.",
             switch_reason,
         )
-        return False
+        return SWITCH_RESULT_BLOCKED
 
     # 1. Check Cooldown with emergency override
     last_switch = get_last_switch_time()
     elapsed = (time.time() - last_switch) / 3600
 
     if not can_switch(cooldown_hours=24, health_score=health_score, emergency_threshold=40):
-        logger.warning(f"Switch aborted: Cooldown active ({elapsed:.1f}h elapsed, 24h required)")
+        logger.warning("Switch aborted: Cooldown active (%.1fh elapsed, 24h required)", elapsed)
         if health_score is not None:
-            logger.warning(f"Health score: {health_score}/100 (emergency override requires < 40)")
-        return False
+            logger.warning("Health score: %s/100 (emergency override requires < 40)", health_score)
+        return SWITCH_RESULT_BLOCKED
 
     # Log if emergency override was used
     if health_score is not None and health_score < 40:
-        logger.warning(f"🚨 EMERGENCY OVERRIDE: Health score {health_score} < 40, bypassing cooldown ({elapsed:.1f}h elapsed)")
+        logger.warning(
+            "EMERGENCY OVERRIDE: Health score %s < 40, bypassing cooldown (%.1fh elapsed)",
+            health_score,
+            elapsed,
+        )
     elif elapsed < 24:
-        logger.info(f"⚠️  Cooldown bypassed but health not critical: {health_score}/100")
+        logger.info("Cooldown bypassed but health not critical: %s/100", health_score)
 
     logger.info("Attempting to switch to next pair (reason=%s)...", switch_reason)
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "2_cointegrated_pairs.csv"
-    if not csv_path.exists():
-        logger.error(f"Cannot switch pair: CSV not found at {csv_path}")
-        return False
 
     per_leg_capital = _get_per_leg_allocation()
     logger.info("Per-leg allocation for min-capital filter: %.8f", per_leg_capital)
-        
-    try:
-        logger.info(f"Reading pairs from {csv_path}...")
+
+    def _read_pairs():
+        if not csv_path.exists():
+            logger.error("Cannot switch pair: CSV not found at %s", csv_path)
+            return []
+        logger.info("Reading pairs from %s...", csv_path)
         df = pd.read_csv(csv_path)
         if df.empty:
             logger.error("Cannot switch pair: CSV is empty")
-            return False
-            
+            return []
+
         # Get current pair from config
         curr_t1 = ticker_1
         curr_t2 = ticker_2
-        logger.info(f"Current pair: {curr_t1}/{curr_t2}")
-        
-        # Add current pair to graveyard before switching unless this is a min-capital skip
-        if switch_reason != "min_capital":
-            add_to_graveyard(curr_t1, curr_t2)
-        
+        logger.info("Current pair: %s/%s", curr_t1, curr_t2)
+
         # Ensure we have the necessary columns
-        if 'sym_1' not in df.columns or 'sym_2' not in df.columns:
-            logger.error(f"CSV missing sym_1 or sym_2 columns. Columns found: {df.columns.tolist()}")
-            return False
-            
+        if "sym_1" not in df.columns or "sym_2" not in df.columns:
+            logger.error("CSV missing sym_1 or sym_2 columns. Columns found: %s", df.columns.tolist())
+            return []
+
         pairs = []
         for _, row in df.iterrows():
             sym_1 = row.get("sym_1")
@@ -399,9 +455,12 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 continue
             min_equity = _parse_min_equity(row.get("min_equity_recommended"))
             pairs.append({"sym_1": sym_1, "sym_2": sym_2, "min_equity": min_equity})
-        logger.info(f"Found {len(pairs)} pairs in CSV.")
-        
-        # Find current pair index
+        logger.info("Found %d pairs in CSV.", len(pairs))
+        return pairs
+
+    def _find_next_pair(pairs):
+        curr_t1 = ticker_1
+        curr_t2 = ticker_2
         curr_idx = -1
         for i, pair in enumerate(pairs):
             s1 = pair["sym_1"]
@@ -409,8 +468,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             if (s1 == curr_t1 and s2 == curr_t2) or (s1 == curr_t2 and s2 == curr_t1):
                 curr_idx = i
                 break
-        
-        # Search for next healthy pair (not in graveyard)
+
         next_t1, next_t2 = None, None
         equity_usdt = _get_equity_usdt()
         if equity_usdt > 0:
@@ -444,27 +502,70 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 )
                 continue
             next_t1, next_t2 = t1, t2
-            logger.info(f"Found healthy replacement at index {idx}: {next_t1}/{next_t2}")
+            logger.info("Found healthy replacement at index %d: %s/%s", idx, next_t1, next_t2)
             break
-        
-        if next_t1 is None:
-            logger.error("❌ No suitable replacement pair found in CSV (all pairs in graveyard or CSV too small)")
-            return False
-            
-        msg = f"🔄 Switching from {curr_t1}/{curr_t2} to {next_t1}/{next_t2}"
+        return next_t1, next_t2
+
+    try:
+        next_t1, next_t2 = None, None
+        while next_t1 is None:
+            pairs = _read_pairs()
+            if not pairs:
+                refreshed = _run_strategy_refresh()
+                if refreshed:
+                    pairs = _read_pairs()
+                    if pairs:
+                        next_t1, next_t2 = _find_next_pair(pairs)
+                if next_t1 is None:
+                    logger.warning(
+                        "No candidate pairs available. Retrying in %s seconds.",
+                        STRATEGY_REFRESH_SLEEP_SECONDS,
+                    )
+                    logger.info(
+                        "Sleeping for %s before retrying pair search.",
+                        _format_uptime(STRATEGY_REFRESH_SLEEP_SECONDS),
+                    )
+                    _sleep_with_progress(STRATEGY_REFRESH_SLEEP_SECONDS, label="Sleeping")
+                continue
+
+            next_t1, next_t2 = _find_next_pair(pairs)
+            if next_t1 is None:
+                refreshed = _run_strategy_refresh()
+                if refreshed:
+                    pairs = _read_pairs()
+                    if pairs:
+                        next_t1, next_t2 = _find_next_pair(pairs)
+                if next_t1 is None:
+                    logger.error(
+                        "No suitable replacement pair found. Retrying in %s seconds.",
+                        STRATEGY_REFRESH_SLEEP_SECONDS,
+                    )
+                    logger.info(
+                        "Sleeping for %s before retrying pair search.",
+                        _format_uptime(STRATEGY_REFRESH_SLEEP_SECONDS),
+                    )
+                    _sleep_with_progress(STRATEGY_REFRESH_SLEEP_SECONDS, label="Sleeping")
+
+        curr_t1 = ticker_1
+        curr_t2 = ticker_2
+        # Commit graveyard only after a replacement is found.
+        if switch_reason != "min_capital":
+            add_to_graveyard(curr_t1, curr_t2, reason=switch_reason)
+
+        msg = f"Switching from {curr_t1}/{curr_t2} to {next_t1}/{next_t2}"
         print(msg)
         logger.info(msg)
-        
+
         if save_active_pair(next_t1, next_t2):
             logger.info("New pair saved to active_pair.json")
-            set_last_switch_time() # Update switch timestamp
-            return True
-        else:
-            logger.error("Failed to save new pair to active_pair.json")
-            return False
+            set_last_switch_time()
+            return SWITCH_RESULT_SWITCHED
+
+        logger.error("Failed to save new pair to active_pair.json")
+        return SWITCH_RESULT_HARD_STOP
     except Exception as e:
         logger.error(f"Error switching pair: {e}")
-        return False
+        return SWITCH_RESULT_HARD_STOP
 
 
 def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=None):
@@ -586,11 +687,12 @@ if __name__ == "__main__":
         if lock_on_pair:
             logger.warning("lock_on_pair enabled; staying on current pair despite min-capital failure.")
         else:
-            if _switch_to_next_pair(health_score=0, switch_reason="min_capital"):
+            switch_result = _switch_to_next_pair(health_score=0, switch_reason="min_capital")
+            if switch_result == SWITCH_RESULT_SWITCHED:
                 logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                 print("Restarting to apply new pair...")
                 sys.exit(3)
-            logger.error("No suitable replacement pair found for min-capital filter.")
+            logger.error("No suitable replacement pair found for min-capital filter. Hard stop.")
             sys.exit(1)
     
     # Run the bot
@@ -656,12 +758,15 @@ if __name__ == "__main__":
                 )
             else:
                 set_last_switch_reason("settle_ccy_filter")
-                if _switch_to_next_pair(health_score=0, switch_reason="settle_ccy_filter"):
+                switch_result = _switch_to_next_pair(health_score=0, switch_reason="settle_ccy_filter")
+                if switch_result == SWITCH_RESULT_SWITCHED:
                     logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                     print("Restarting to apply new pair...")
                     sys.exit(3)
-                else:
-                    logger.error("Pair switch failed. Will retry next cycle.")
+                if switch_result == SWITCH_RESULT_HARD_STOP:
+                    logger.critical("No replacement pairs available for settleCcy filter. Hard stop.")
+                    sys.exit(1)
+                logger.error("Pair switch blocked. Will retry next cycle.")
     except Exception as exc:
         logger.warning("SettleCcy filter check failed at startup: %s", exc)
 
@@ -730,12 +835,17 @@ if __name__ == "__main__":
                         status_dict["message"] = "Compliance restricted; switching pair..."
                         save_status(status_dict)
                         set_last_switch_reason("compliance_restricted")
-                        if _switch_to_next_pair(health_score=0, switch_reason="compliance_restricted"):
+                        switch_result = _switch_to_next_pair(health_score=0, switch_reason="compliance_restricted")
+                        if switch_result == SWITCH_RESULT_SWITCHED:
                             logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                             print("Restarting to apply new pair...")
                             sys.exit(3)
-                        else:
-                            logger.error("Pair switch failed. Will retry next cycle.")
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after compliance restriction. Hard stop.")
+                            sys.exit(1)
+                        logger.error("Pair switch blocked. Will retry next cycle.")
                     else:
                         logger.warning(
                             "Compliance restricted ticker in active pair, but positions/orders are open. "
@@ -773,12 +883,17 @@ if __name__ == "__main__":
 
                     health_score = 0  # Force emergency override
                     set_last_switch_reason("orderbook_dead")
-                    if _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead"):
+                    switch_result = _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead")
+                    if switch_result == SWITCH_RESULT_SWITCHED:
                         logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                         print("Restarting to apply new pair...")
                         sys.exit(3)
-                    else:
-                        logger.error("Pair switch failed. Will retry next cycle.")
+                    if switch_result == SWITCH_RESULT_HARD_STOP:
+                        status_dict["message"] = "Hard stop: no replacement pairs available"
+                        save_status(status_dict)
+                        logger.critical("No replacement pairs available after orderbook dead. Hard stop.")
+                        sys.exit(1)
+                    logger.error("Pair switch blocked. Will retry next cycle.")
 
             # 3. CIRCUIT BREAKER: Check cumulative P&L
             total_pnl, pnl_pct = _calculate_cumulative_pnl(
@@ -903,16 +1018,24 @@ if __name__ == "__main__":
                     health_score = get_last_health_score()
                     switch_reason = get_last_switch_reason() or "health"
 
-                    if _switch_to_next_pair(health_score=health_score, switch_reason=switch_reason):
+                    switch_result = _switch_to_next_pair(
+                        health_score=health_score,
+                        switch_reason=switch_reason,
+                    )
+                    if switch_result == SWITCH_RESULT_SWITCHED:
                         logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                         print("Restarting to apply new pair...")
                         # Exit with code 3 to signal the manager to restart
                         sys.exit(3)
-                    else:
-                        logger.error("Pair switch failed. Resetting kill_switch to 0.")
-                        # If switch failed, reset kill_switch and wait before trying again
-                        kill_switch = 0
-                        time.sleep(10)
+                    if switch_result == SWITCH_RESULT_HARD_STOP:
+                        status_dict["message"] = "Hard stop: no replacement pairs available"
+                        save_status(status_dict)
+                        logger.critical("No replacement pairs available after health switch. Hard stop.")
+                        sys.exit(1)
+                    logger.error("Pair switch blocked. Resetting kill_switch to 0.")
+                    # If switch failed, reset kill_switch and wait before trying again
+                    kill_switch = 0
+                    time.sleep(10)
 
 
             # Close all active orders and positions

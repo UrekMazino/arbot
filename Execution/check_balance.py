@@ -3,7 +3,8 @@ Diagnostic script to check OKX account balances and configuration.
 Run this to see where your USDT is located and how much is available for trading.
 """
 
-from config_execution_api import account_session, td_mode, pos_mode
+from config_execution_api import account_session, td_mode, pos_mode, ticker_1, ticker_2, tradeable_capital_usdt
+from func_execution_calls import get_min_capital_requirements
 from okx.Funding import FundingAPI
 from okx import consts as okx_consts
 import os
@@ -23,6 +24,21 @@ def check_all_balances():
     print("\n" + "="*60)
     print("OKX ACCOUNT DIAGNOSTICS")
     print("="*60)
+
+    min_pair_equity = None
+    required_equity = tradeable_capital_usdt
+    try:
+        req_1 = get_min_capital_requirements(ticker_1)
+        req_2 = get_min_capital_requirements(ticker_2)
+        min_1 = float(req_1.get("min_capital") or 0)
+        min_2 = float(req_2.get("min_capital") or 0)
+        if req_1.get("ok") and req_2.get("ok") and min_1 > 0 and min_2 > 0:
+            min_pair_equity = max(min_1, min_2) * 2
+    except Exception:
+        min_pair_equity = None
+
+    if min_pair_equity and min_pair_equity > required_equity:
+        required_equity = min_pair_equity
 
     # 1. Trading Account Balance
     print("\n[1] TRADING ACCOUNT (for opening positions)")
@@ -47,9 +63,12 @@ def check_all_balances():
                         print(f"  Frozen: {frozen:.2f} USDT (in open orders)")
                         print(f"  Cash Balance: {cash_bal:.2f} USDT")
 
-                        if avail_bal < 1000:
-                            print(f"  WARNING: Available balance ({avail_bal:.2f}) < 1000 USDT")
-                            print(f"     Bot needs ~2000 USDT available for isolated positions")
+                        if min_pair_equity:
+                            print(f"  Recommended min equity for {ticker_1}/{ticker_2}: {min_pair_equity:.2f} USDT")
+
+                        if avail_bal < required_equity:
+                            print(f"  WARNING: Available balance ({avail_bal:.2f}) < {required_equity:.2f} USDT")
+                            print(f"     Configured tradeable capital: {tradeable_capital_usdt:.2f} USDT")
         else:
             print(f"❌ Error: {balance_res.get('msg')}")
     except Exception as e:
@@ -91,9 +110,10 @@ def check_all_balances():
     if td_mode == "isolated":
         print("\nISOLATED MODE REQUIREMENTS:")
         print("  - Each position needs separate margin/collateral")
-        print("  - Long position needs ~1000 USDT margin")
-        print("  - Short position needs ~1000 USDT margin")
-        print("  - Total required: ~2000 USDT available in Trading Account")
+        if min_pair_equity:
+            print(f"  - Recommended equity for {ticker_1}/{ticker_2}: {min_pair_equity:.2f} USDT")
+        print(f"  - Configured tradeable capital: {tradeable_capital_usdt:.2f} USDT")
+        print(f"  - Suggested available balance: {required_equity:.2f} USDT")
     else:
         print("\nCROSS MODE:")
         print("  - All positions share account margin")

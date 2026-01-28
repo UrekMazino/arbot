@@ -993,39 +993,6 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     from func_pair_state import add_to_z_history
     add_to_z_history(latest_zscore)
 
-    # 0. FUNDING BLEED GUARD - Exit when fees erode profits
-    # CRITICAL: Prevent funding/fees from eating unrealized gains
-    from func_position_calls import get_account_state
-    from func_pair_state import get_entry_time
-    
-    state = get_account_state()
-    total_unrealized_pnl = 0.0
-    total_funding_cost = 0.0
-    
-    for pos in state.get("positions", []):
-        # Get unrealized PnL and funding fee from position data
-        upl = float(pos.get("upl", 0))  # Unrealized profit/loss
-        funding = float(pos.get("fundingFee", 0))  # Funding fee (negative = cost)
-        total_unrealized_pnl += upl
-        total_funding_cost += abs(funding) if funding < 0 else 0
-    
-    entry_time = get_entry_time()
-    time_in_trade = (time.time() - entry_time) / 60 if entry_time else 0
-    
-    # Guard: Exit if profitable but funding is bleeding it away
-    # Thresholds:
-    # - Unrealized PnL > $5 (profitable position)
-    # - Funding cost > $2 (significant bleed)
-    # - Funding cost > 30% of unrealized PnL (high ratio)
-    if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:
-        funding_ratio = (total_funding_cost / total_unrealized_pnl) * 100
-        if funding_ratio > 30:
-            msg = f"💸 KILL-SWITCH TRIGGERED: Funding bleed - UPnL: +${total_unrealized_pnl:.2f}, Funding cost: ${total_funding_cost:.2f} ({funding_ratio:.1f}% of profit)"
-            logger.warning(msg)
-            print(msg)
-            _close_trade_manager()
-            return 2
-
     # 1. Periodic Health Check - ONLY FOR LOGGING, NOT IMMEDIATE EXIT
     # CRITICAL: Health checks are regime-level diagnostics for pair selection
     # They are NOT price-based risk controls and should NEVER force immediate exit
@@ -1039,15 +1006,7 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             # Mark pair for graveyard after position closes
             # (main_execution will handle this after normal exit)
             
-    # 2. EXIT LOGIC: Mean Reversion
-    if abs(latest_zscore) <= EXIT_Z:
-        msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit - Z={latest_zscore:.4f} reverted within EXIT_Z={EXIT_Z}"
-        logger.info(msg)
-        print(msg)
-        _close_trade_manager()
-        return 2
-
-    # 3. Advanced trade manager exit logic
+    # 2. Advanced trade manager exit logic
     from func_pair_state import get_entry_z_score, get_entry_time
     entry_z = get_entry_z_score()
     entry_time = get_entry_time()
@@ -1093,6 +1052,37 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         else:
             logger.info(f"Holding position (no entry context). Will close on mean reversion only.")
         
-    # 4. MONITORING: Hold position
+    # 3. FUNDING BLEED GUARD (lowest priority)
+    from func_position_calls import get_account_state
+    state = get_account_state()
+    total_unrealized_pnl = 0.0
+    total_funding_cost = 0.0
+
+    for pos in state.get("positions", []):
+        upl = float(pos.get("upl", 0))
+        funding = float(pos.get("fundingFee", 0))
+        total_unrealized_pnl += upl
+        total_funding_cost += abs(funding) if funding < 0 else 0
+
+    if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:
+        funding_ratio = (total_funding_cost / total_unrealized_pnl) * 100
+        if funding_ratio > 30:
+            msg = (
+                "KILL-SWITCH TRIGGERED: Funding bleed - UPnL: +%.2f, Funding cost: %.2f (%.1f%% of profit)"
+                % (total_unrealized_pnl, total_funding_cost, funding_ratio)
+            )
+            logger.warning(msg)
+            print(msg)
+            _close_trade_manager()
+            return 2
+
+    # 4. MEAN REVERSION (no entry context)
+    if entry_z is None and abs(latest_zscore) <= EXIT_Z:
+        msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit (no entry context) - Z={latest_zscore:.4f}"
+        logger.info(msg)
+        print(msg)
+        return 2
+
+    # 5. MONITORING: Hold position
     logger.info(f"Hold position - Z={latest_zscore:.4f} still beyond EXIT_Z ({EXIT_Z})")
     return kill_switch

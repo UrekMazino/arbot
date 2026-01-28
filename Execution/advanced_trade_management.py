@@ -179,7 +179,17 @@ class AdvancedTradeManager:
         if regime_result['action'] == 'EXIT':
             return regime_result
         
-        # 3. TAKE PROFIT (full exit)
+        # 3. TRAILING STOP
+        trailing_result = self._check_trailing_stop(current_z)
+        if trailing_result['action'] == 'EXIT':
+            return trailing_result
+        
+        # 4. PARTIAL EXIT
+        partial_result = self._check_partial_exit(current_z)
+        if partial_result['action'] == 'PARTIAL_EXIT':
+            return partial_result
+        
+        # 5. TAKE PROFIT (full exit)
         if abs(current_z) < self.config['take_profit_z']:
             return self._create_exit_result(
                 action='EXIT',
@@ -187,16 +197,6 @@ class AdvancedTradeManager:
                 message=f"Take profit: Z={current_z:+.2f} sigma (target: {self.config['take_profit_z']:.2f} sigma)",
                 percentage=1.0
             )
-        
-        # 4. TRAILING STOP
-        trailing_result = self._check_trailing_stop(current_z)
-        if trailing_result['action'] == 'EXIT':
-            return trailing_result
-        
-        # 5. PARTIAL EXIT
-        partial_result = self._check_partial_exit(current_z)
-        if partial_result['action'] == 'PARTIAL_EXIT':
-            return partial_result
         
         # 6. STALL DETECTION (dynamic)
         stall_result = self._check_stall_dynamic(current_z)

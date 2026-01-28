@@ -88,14 +88,13 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry context and recent Z-history to avoid false exits.
 
 **Exit conditions (priority order):**
-1. **Mean Reversion**: `|Z| <= EXIT_Z`.
-2. **Sustained Sign Flip**: Opposite-zone persistence for ~5 minutes and still moving away.
-3. **Divergence**: `|Z|` worsens by > 1.5 sigma from entry.
-4. **Dynamic Stall**: Adaptive window (30-120 min) and epsilon (0.2-0.5 sigma); warns above 1.0 and exits above 1.5 when improvement is insufficient.
-5. **Trailing Stop**: Activates near the mean and trails by 0.5 sigma.
-6. **Partial Exit**: Default 50% when `|Z| < 1.0` (skips if below min/lot size).
-7. **Max Hold**: Default 6 hours (warning at 4 hours).
-8. **Funding Bleed Guard**: Exits when funding costs materially erode unrealized gains.
+1. **Max Hold**: Default 6 hours (warning at 4 hours).
+2. **Regime Break**: Sustained sign flip or divergence > 1.5 sigma from entry.
+3. **Trailing Stop**: Activates near the mean and trails by 0.5 sigma.
+4. **Partial Exit**: Default 50% when `|Z| < 1.0` (skips if below min/lot size).
+5. **Mean Reversion**: `|Z| <= EXIT_Z`.
+6. **Dynamic Stall**: Adaptive window (30-120 min) and epsilon (0.2-0.5 sigma); warns above 1.0 and exits above 1.5 when improvement is insufficient.
+7. **Funding Bleed Guard**: Exits when funding costs materially erode unrealized gains.
 
 **Not exits:**
 - Z oscillating near entry or improving toward the mean.

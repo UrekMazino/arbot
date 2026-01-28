@@ -2,6 +2,7 @@
 import os
 import warnings
 import logging
+import math
 import time
 import sys
 import subprocess
@@ -140,6 +141,30 @@ def _get_available_usdt():
     except Exception as exc:
         logger.warning("Failed to fetch available USDT: %s", exc)
     return 0.0
+
+
+def _get_equity_usdt():
+    try:
+        balance_res = account_session.get_account_balance()
+        if balance_res.get("code") != "0":
+            return 0.0
+        details = balance_res.get("data", [{}])[0].get("details", [])
+        for det in details:
+            if det.get("ccy") == "USDT":
+                return float(det.get("eq", 0))
+    except Exception as exc:
+        logger.warning("Failed to fetch equity USDT: %s", exc)
+    return 0.0
+
+
+def _parse_min_equity(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    return parsed
 
 
 def _get_per_leg_allocation():
@@ -328,24 +353,50 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             logger.error(f"CSV missing sym_1 or sym_2 columns. Columns found: {df.columns.tolist()}")
             return False
             
-        pairs = list(zip(df['sym_1'], df['sym_2']))
+        pairs = []
+        for _, row in df.iterrows():
+            sym_1 = row.get("sym_1")
+            sym_2 = row.get("sym_2")
+            if not sym_1 or not sym_2:
+                continue
+            min_equity = _parse_min_equity(row.get("min_equity_recommended"))
+            pairs.append({"sym_1": sym_1, "sym_2": sym_2, "min_equity": min_equity})
         logger.info(f"Found {len(pairs)} pairs in CSV.")
         
         # Find current pair index
         curr_idx = -1
-        for i, (s1, s2) in enumerate(pairs):
+        for i, pair in enumerate(pairs):
+            s1 = pair["sym_1"]
+            s2 = pair["sym_2"]
             if (s1 == curr_t1 and s2 == curr_t2) or (s1 == curr_t2 and s2 == curr_t1):
                 curr_idx = i
                 break
         
         # Search for next healthy pair (not in graveyard)
         next_t1, next_t2 = None, None
+        equity_usdt = _get_equity_usdt()
+        if equity_usdt > 0:
+            logger.info("Equity for min-equity filter: %.2f USDT", equity_usdt)
+        else:
+            logger.warning("Equity unavailable; skipping min-equity filter.")
+
         for i in range(1, len(pairs)):
             idx = (curr_idx + i) % len(pairs)
-            t1, t2 = pairs[idx]
+            pair = pairs[idx]
+            t1, t2 = pair["sym_1"], pair["sym_2"]
             if is_in_graveyard(t1, t2):
                 continue
             if not _pair_meets_min_capital(t1, t2, per_leg_capital):
+                continue
+            min_equity = pair.get("min_equity")
+            if equity_usdt > 0 and min_equity and min_equity > equity_usdt:
+                logger.info(
+                    "Skipping pair %s/%s: min_equity_recommended %.2f exceeds equity %.2f",
+                    t1,
+                    t2,
+                    min_equity,
+                    equity_usdt,
+                )
                 continue
             next_t1, next_t2 = t1, t2
             logger.info(f"Found healthy replacement at index {idx}: {next_t1}/{next_t2}")

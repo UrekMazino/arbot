@@ -1,4 +1,4 @@
-from config_strategy_api import z_score_window
+from config_strategy_api import z_score_window, min_equity_filter_usdt
 from statsmodels.tsa.stattools import coint
 import statsmodels.api as sm
 import pandas as pd
@@ -255,6 +255,19 @@ def get_cointegrated_pairs(json_symbols):
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
     df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
+    filtered_count = 0
+    if (
+        min_equity_filter_usdt
+        and min_equity_filter_usdt > 0
+        and not df_coint.empty
+        and "min_equity_recommended" in df_coint.columns
+    ):
+        before = len(df_coint)
+        mask = df_coint["min_equity_recommended"].isna() | (
+            df_coint["min_equity_recommended"] <= min_equity_filter_usdt
+        )
+        df_coint = df_coint[mask].copy()
+        filtered_count = before - len(df_coint)
     df_coint.to_csv('2_cointegrated_pairs.csv', index=False)
 
     # Print statistics
@@ -265,6 +278,8 @@ def get_cointegrated_pairs(json_symbols):
     print(f"Cointegrated pairs found:    {len(coint_pair_list):,}")
     print(f"Pairs with crossings (>0):   {pairs_with_crossings:,}")
     print(f"Pairs without crossings:     {len(coint_pair_list) - pairs_with_crossings:,}")
+    if filtered_count:
+        print(f"Pairs filtered by min equity: {filtered_count:,} (threshold: {min_equity_filter_usdt:.2f} USDT)")
 
     if len(df_coint) > 0:
         print(f"\nZero Crossings Statistics:")

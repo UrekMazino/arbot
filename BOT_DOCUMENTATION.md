@@ -178,6 +178,16 @@ STATBOT_LOG_BACKUPS=2
 This keeps the current log up to ~4 MB plus 2 rotated backups (total ~12 MB).  
 Optional: `STATBOT_LOG_LEVEL=INFO|WARNING|ERROR` to control verbosity.
 
+### Min Equity Filtering (Strategy + Execution)
+Strategy can auto-filter expensive pairs before writing `2_cointegrated_pairs.csv`:
+```
+STATBOT_STRATEGY_MIN_EQUITY=170
+```
+Pairs with `min_equity_recommended` above this threshold are removed.
+
+Execution also reads `min_equity_recommended` and skips pairs during pair switching if
+your current account equity is below the requirement.
+
 ---
 
 ## 7. Technical Stack

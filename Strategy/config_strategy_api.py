@@ -20,6 +20,10 @@ mode = "demo"  # "demo" or "live"
 time_frame = "1m"  # Timeframe for klines (1m, 5m, 15m, 1H, 1D, etc.)
 kline_limit = 200  # Number of candles to fetch
 z_score_window = 21  # Z-score calculation window
+try:
+    min_equity_filter_usdt = float(os.getenv("STATBOT_STRATEGY_MIN_EQUITY", "0") or 0)
+except (TypeError, ValueError):
+    min_equity_filter_usdt = 0.0
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")
@@ -67,4 +71,6 @@ print(f"Mode: {'DEMO/Simulated Trading' if is_demo else 'LIVE Trading'}")
 print(f"Timeframe: {time_frame}")
 print(f"Kline Limit: {kline_limit}")
 print(f"Z-Score Window: {z_score_window}")
+if min_equity_filter_usdt > 0:
+    print(f"Min Equity Filter: {min_equity_filter_usdt:.2f} USDT")
 print(f"{'='*60}\n")

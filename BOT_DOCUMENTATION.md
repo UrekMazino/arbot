@@ -176,6 +176,7 @@ StatBot can generate a per-run report pack that captures effectiveness data:
 - `summary.txt` (human-readable summary)
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `trades.csv` (trade closes with PnL and hold time)
+- `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)
 - `alerts.txt` (errors, PNL alerts, critical events)
 - `config_snapshot.json` (redacted .env snapshot)
 

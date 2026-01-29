@@ -1,15 +1,35 @@
 {
-    "last_switch_time": 1769682849.050294,
+    "last_switch_time": 1769702978.1757545,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
             "reason": "orderbook_dead",
             "ttl_days": 30
+        },
+        "CFX-USDT-SWAP/INJ-USDT-SWAP": {
+            "ts": 1769702887.132305,
+            "reason": "cointegration_lost",
+            "ttl_days": 0.003472222222222222
+        },
+        "CFX-USDT-SWAP/KSM-USDT-SWAP": {
+            "ts": 1769702942.5331702,
+            "reason": "cointegration_lost",
+            "ttl_days": 0.003472222222222222
+        },
+        "CFX-USDT-SWAP/LPT-USDT-SWAP": {
+            "ts": 1769702952.2774348,
+            "reason": "cointegration_lost",
+            "ttl_days": 0.003472222222222222
+        },
+        "CFX-USDT-SWAP/LTC-USDT-SWAP": {
+            "ts": 1769702978.1747482,
+            "reason": "cointegration_lost",
+            "ttl_days": 0.003472222222222222
         }
     },
     "restricted_tickers": {},
-    "consecutive_losses": 0,
-    "last_health_score": 85,
+    "consecutive_losses": 1,
+    "last_health_score": 45,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -18,13 +38,7 @@
     "last_switch_reason": "cointegration_lost",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
-    "persistence_history": [
-        -1.590096812656447,
-        -0.9260661935157223,
-        -0.9276702090829206,
-        -0.31213056815189333,
-        -0.31373470312077917
-    ],
-    "last_exit_time": 1769694945.8782022,
+    "persistence_history": [],
+    "last_exit_time": 1769703596.1403928,
     "z_history": []
 }

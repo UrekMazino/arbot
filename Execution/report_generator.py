@@ -28,6 +28,10 @@ TRADE_CLOSED_RE = re.compile(
     r"\| Equity (?P<equity>\d+\.\d+) USDT \| Session (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\)"
 )
 POSITION_OPEN_RE = re.compile(r"Position opened: entry_z=(?P<entry_z>[-+]?\d+\.\d+)")
+LIQUIDITY_RE = re.compile(
+    r"Liquidity check: long_target=(?P<long_target>[-+]?\d+\.\d+) short_target=(?P<short_target>[-+]?\d+\.\d+) "
+    r"liquidity_long=(?P<liquidity_long>[-+]?\d+\.\d+) liquidity_short=(?P<liquidity_short>[-+]?\d+\.\d+)"
+)
 
 ALERT_PATTERNS = [
     re.compile(r"\bERROR\b", re.IGNORECASE),
@@ -132,6 +136,7 @@ def generate_report(log_path, output_dir, env_path=None):
     equity_curve = []
     trades = []
     alerts = []
+    liquidity_checks = []
     open_positions = []
 
     start_ts = None
@@ -145,6 +150,11 @@ def generate_report(log_path, output_dir, env_path=None):
     last_total_pnl_pct = None
     td_mode = None
     pos_mode = None
+    liquidity_high = 0
+    liquidity_low = 0
+    liquidity_unknown = 0
+    long_ratios = []
+    short_ratios = []
 
     with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
         for raw in handle:
@@ -232,6 +242,44 @@ def generate_report(log_path, output_dir, env_path=None):
                     }
                 )
 
+            liq_match = LIQUIDITY_RE.search(clean_msg)
+            if liq_match and ts:
+                long_target = _safe_float(liq_match.group("long_target"))
+                short_target = _safe_float(liq_match.group("short_target"))
+                liquidity_long = _safe_float(liq_match.group("liquidity_long"))
+                liquidity_short = _safe_float(liq_match.group("liquidity_short"))
+                long_ratio = None
+                short_ratio = None
+                if liquidity_long and liquidity_long > 0 and long_target is not None:
+                    long_ratio = long_target / liquidity_long
+                    long_ratios.append(long_ratio)
+                if liquidity_short and liquidity_short > 0 and short_target is not None:
+                    short_ratio = short_target / liquidity_short
+                    short_ratios.append(short_ratio)
+
+                if long_ratio is None or short_ratio is None:
+                    status = "unknown"
+                    liquidity_unknown += 1
+                elif long_ratio <= 1.0 and short_ratio <= 1.0:
+                    status = "high"
+                    liquidity_high += 1
+                else:
+                    status = "low"
+                    liquidity_low += 1
+
+                liquidity_checks.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "long_target": long_target,
+                        "short_target": short_target,
+                        "liquidity_long": liquidity_long,
+                        "liquidity_short": liquidity_short,
+                        "long_ratio": round(long_ratio, 4) if long_ratio is not None else None,
+                        "short_ratio": round(short_ratio, 4) if short_ratio is not None else None,
+                        "status": status,
+                    }
+                )
+
             if any(pat.search(clean_msg) for pat in ALERT_PATTERNS):
                 alerts.append(f"{match.group('ts')} {level} {clean_msg}")
 
@@ -286,6 +334,16 @@ def generate_report(log_path, output_dir, env_path=None):
     if hold_times:
         avg_hold = round(sum(hold_times) / len(hold_times), 2)
 
+    liquidity_samples = len(liquidity_checks)
+    liquidity_pct_low = None
+    if liquidity_high + liquidity_low > 0:
+        liquidity_pct_low = round((liquidity_low / (liquidity_high + liquidity_low)) * 100, 2)
+
+    max_long_ratio = round(max(long_ratios), 4) if long_ratios else None
+    max_short_ratio = round(max(short_ratios), 4) if short_ratios else None
+    avg_long_ratio = round(sum(long_ratios) / len(long_ratios), 4) if long_ratios else None
+    avg_short_ratio = round(sum(short_ratios) / len(short_ratios), 4) if short_ratios else None
+
     repo_root = Path(__file__).resolve().parents[1]
     version = _read_version(repo_root)
     git_sha = _git_sha(repo_root)
@@ -321,17 +379,28 @@ def generate_report(log_path, output_dir, env_path=None):
         "avg_hold_minutes": avg_hold,
         "alerts_total": len(alerts),
         "errors_total": sum(1 for line in alerts if "ERROR" in line),
+        "liquidity_samples": liquidity_samples,
+        "liquidity_high_samples": liquidity_high,
+        "liquidity_low_samples": liquidity_low,
+        "liquidity_unknown_samples": liquidity_unknown,
+        "liquidity_low_pct": liquidity_pct_low,
+        "liquidity_max_long_ratio": max_long_ratio,
+        "liquidity_max_short_ratio": max_short_ratio,
+        "liquidity_avg_long_ratio": avg_long_ratio,
+        "liquidity_avg_short_ratio": avg_short_ratio,
     }
 
     summary_path = output_dir / "summary.json"
     summary_txt_path = output_dir / "summary.txt"
     equity_path = output_dir / "equity_curve.csv"
     trades_path = output_dir / "trades.csv"
+    liquidity_path = output_dir / "liquidity_checks.csv"
     alerts_path = output_dir / "alerts.txt"
     config_path = output_dir / "config_snapshot.json"
 
     summary["equity_curve_path"] = str(equity_path)
     summary["trades_path"] = str(trades_path)
+    summary["liquidity_checks_path"] = str(liquidity_path)
     summary["alerts_path"] = str(alerts_path)
     summary["config_snapshot_path"] = str(config_path)
 
@@ -381,6 +450,20 @@ def generate_report(log_path, output_dir, env_path=None):
             "session_pnl_pct",
             "hold_minutes",
             "entry_z",
+        ],
+    )
+    _write_csv(
+        liquidity_path,
+        liquidity_checks,
+        [
+            "timestamp",
+            "long_target",
+            "short_target",
+            "liquidity_long",
+            "liquidity_short",
+            "long_ratio",
+            "short_ratio",
+            "status",
         ],
     )
 

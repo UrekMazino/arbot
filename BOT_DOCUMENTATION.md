@@ -170,6 +170,24 @@ STATBOT_LOG_PATH=OKXStatBot/Logs/log_01_012926_161128.log
 This keeps the current log up to ~4 MB plus 2 rotated backups (total ~12 MB).  
 Optional: `STATBOT_LOG_LEVEL=INFO|WARNING|ERROR` to control verbosity.
 
+### Reports (V1 Evidence Pack)
+StatBot can generate a per-run report pack that captures effectiveness data:
+- `summary.json` (run metadata, PnL, drawdown, win rate)
+- `summary.txt` (human-readable summary)
+- `equity_curve.csv` (equity/session/PNL timeline)
+- `trades.csv` (trade closes with PnL and hold time)
+- `alerts.txt` (errors, PNL alerts, critical events)
+- `config_snapshot.json` (redacted .env snapshot)
+
+Enable/disable:
+```
+STATBOT_REPORT_ENABLE=1
+```
+Optional uptime trigger:
+```
+STATBOT_REPORT_UPTIME_HOURS=24
+```
+
 ### Molt Monitoring (Optional)
 Stream StatBot alerts into Molt/Clawdbot using the monitor:
 ```

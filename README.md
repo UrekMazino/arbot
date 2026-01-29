@@ -52,6 +52,19 @@ python func_get_symbols.py
 For a detailed explanation of the bot's architecture, trading logic, risk management, and computations, please see:
 - **[BOT_DOCUMENTATION.md](BOT_DOCUMENTATION.md)**: Comprehensive guide to the Execution system.
 - **[KILL_SWITCH_STATE_MACHINE.md](KILL_SWITCH_STATE_MACHINE.md)**: Detailed state machine transitions.
+- **[CHANGELOG.md](CHANGELOG.md)**: Release notes.
+- **[VERSION](VERSION)**: Current version tag.
+
+## Release Status (v1.0)
+
+StatBot v1.0 is considered stable after a staged rollout:
+- 24-72 hours demo soak, then 5-10 trading days small live.
+
+### V1 Checklist
+- Phase 0 (Smoke, 15-30 min): startup logs OK, availEq/availBal snapshot printed, !status replies, Molt alert sends, no API errors.
+- Phase 1 (Entry/Exit, 2-6h): at least one full entry/exit, contract value log present, no 51008 margin errors.
+- Phase 2 (Soak, 24-72h demo): >=2 funding windows, one restart, one health check, log rotation OK, no crashes.
+- Phase 3 (Limited live, 5-10d): small cap, PNL alerts appear, equity drift reasonable, no repeated order failures.
 
 ## Logging & Alerts
 
@@ -62,6 +75,24 @@ For a detailed explanation of the bot's architecture, trading logic, risk manage
 STATBOT_LOG_MAX_MB=4
 STATBOT_LOG_BACKUPS=2
 STATBOT_LOG_LEVEL=INFO
+```
+
+### Reports (v1 evidence packs)
+After each run, StatBot can generate a report pack under `OKXStatBot/Reports/run_YYYYMMDD_HHMMSS`:
+- `summary.json` (run metadata + performance summary)
+- `summary.txt` (human-readable summary)
+- `equity_curve.csv` (equity/session/PNL timeline)
+- `trades.csv` (trade closes with PnL and hold time)
+- `alerts.txt` (errors, PNL alerts, critical events)
+- `config_snapshot.json` (redacted .env snapshot)
+
+Enable/disable:
+```env
+STATBOT_REPORT_ENABLE=1
+```
+Optional uptime trigger:
+```env
+STATBOT_REPORT_UPTIME_HOURS=24
 ```
 
 ### Molt/Clawdbot alerts (optional)

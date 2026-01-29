@@ -1,11 +1,13 @@
 # Remove Pandas Future Warnings
 import os
+import json
 import warnings
 import logging
 import math
 import time
 import sys
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from func_log_setup import get_logger
 
@@ -83,6 +85,7 @@ _PNL_ALERT_INTERVAL_SECONDS = None
 _LAST_PNL_ALERT_TS = 0.0
 _LAST_PNL_ALERT_VAL = None
 _LAST_PNL_ALERT_SIGN = 0
+_REPORT_UPTIME_TRIGGERED = False
 
 
 def _should_log_pnl(total_pnl):
@@ -241,6 +244,87 @@ def _start_command_listener():
     os.environ["STATBOT_COMMAND_LISTENER_STARTED"] = "1"
     logger.info("Started command listener (pid=%s).", proc.pid)
     return proc
+
+
+def _run_report_generator():
+    disable = str(os.getenv("STATBOT_REPORT_ENABLE", "1")).strip().lower()
+    if disable in ("0", "false", "no", "off"):
+        logger.info("Report generator disabled via STATBOT_REPORT_ENABLE.")
+        return False
+
+    report_script = Path(__file__).resolve().parent / "report_generator.py"
+    if not report_script.exists():
+        logger.warning("Report generator script missing: %s", report_script)
+        return False
+
+    try:
+        ret = subprocess.call([sys.executable, str(report_script)], env=os.environ.copy())
+    except Exception as exc:
+        logger.warning("Report generator failed to run: %s", exc)
+        return False
+
+    if ret != 0:
+        logger.warning("Report generator returned non-zero exit code: %s", ret)
+        return False
+
+    logger.info("Report generator completed.")
+    return True
+
+
+def _get_report_uptime_hours():
+    raw = os.getenv("STATBOT_REPORT_UPTIME_HOURS", "0")
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if hours <= 0:
+        return 0.0
+    return hours
+
+
+def _report_state_path():
+    return Path(__file__).resolve().parents[1] / "Reports" / "report_state.json"
+
+
+def _load_report_state(path):
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_report_state(path, data):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Failed to persist report state: %s", exc)
+
+
+def _maybe_run_uptime_report(current_time, bot_start_time):
+    global _REPORT_UPTIME_TRIGGERED
+    hours = _get_report_uptime_hours()
+    if hours <= 0:
+        return
+    if _REPORT_UPTIME_TRIGGERED:
+        return
+    state_path = _report_state_path()
+    state = _load_report_state(state_path)
+    if state.get("uptime_hours") == hours and state.get("triggered_at"):
+        _REPORT_UPTIME_TRIGGERED = True
+        return
+    uptime_hours = (current_time - bot_start_time) / 3600.0
+    if uptime_hours < hours:
+        return
+    if _run_report_generator():
+        _REPORT_UPTIME_TRIGGERED = True
+        _save_report_state(
+            state_path,
+            {"uptime_hours": hours, "triggered_at": datetime.utcnow().isoformat() + "Z"},
+        )
+        logger.info("Uptime report generated at %.2f hours.", uptime_hours)
 
 
 def _validate_ticker_configuration():
@@ -837,12 +921,14 @@ if __name__ == "__main__":
                     monitor_proc.terminate()
                 if command_proc and command_proc.poll() is None:
                     command_proc.terminate()
+                _run_report_generator()
                 sys.exit(0)
             
             if ret == 3:
                 # Code 3 signals a pair switch and restart
                 print("\n--- Restarting StatBot for New Pair ---\n")
                 continue
+            _run_report_generator()
             if monitor_proc and monitor_proc.poll() is None:
                 monitor_proc.terminate()
             if command_proc and command_proc.poll() is None:
@@ -1018,6 +1104,8 @@ if __name__ == "__main__":
             
             # Pause - protect API
             time.sleep(3)
+            current_time = time.time()
+            _maybe_run_uptime_report(current_time, bot_start_time)
 
             # 1. Consolidated API Fetch (Position/Order Status)
             acc_state = get_account_state()

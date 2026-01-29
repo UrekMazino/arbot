@@ -16,6 +16,7 @@ from config_execution_api import (
     TREND_CRITICAL,
     Z_SCORE_CRITICAL,
     lock_on_pair,
+    td_mode,
 )
 
 from func_pair_state import (
@@ -40,6 +41,15 @@ Z_STALL_LATE_STRICT_MINUTES = 120
 Z_STALL_TRIGGER_ABS = 1.5
 Z_STALL_WARN_ABS = 1.0
 COMPLIANCE_RESTRICTION_CODE = "51155"
+_ENTRY_BALANCE_SNAPSHOT_LOGGED = False
+_ZSCORE_LOG_INTERVAL_SECONDS = 60
+_WAITING_LOG_INTERVAL_SECONDS = 60
+_HOLD_LOG_INTERVAL_SECONDS = 60
+_LAST_ZSCORE_STATUS = None
+_LAST_ZSCORE_LOG_TS = 0.0
+_LAST_WAITING_LOG_TS = 0.0
+_LAST_WAITING_MSG = ""
+_LAST_HOLD_LOG_TS = 0.0
 
 """
 MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
@@ -490,17 +500,52 @@ def _log_zscore_status(zscore):
     """
     Log Z-score status with descriptive labels and emojis.
     """
+    global _LAST_ZSCORE_STATUS
+    global _LAST_ZSCORE_LOG_TS
     if abs(zscore) < 1.0:
+        bucket = "quiet"
         status = "😴 Very quiet (|Z| < 1.0)"
     elif abs(zscore) < 2.0:
+        bucket = "waiting"
         status = "⏳ Waiting (1.0 < |Z| < 2.0)"
     elif abs(zscore) < 3.0:
+        bucket = "tradeable"
         status = "🎯 TRADEABLE (|Z| > 2.0)"
     else:
+        bucket = "extreme"
         status = "🚨 Extreme (|Z| > 3.0)"
     
     msg = f"Current Z-Score: {zscore:+.2f} - {status}"
-    logger.info(msg)
+    now = time.time()
+    if bucket != _LAST_ZSCORE_STATUS or (now - _LAST_ZSCORE_LOG_TS) >= _ZSCORE_LOG_INTERVAL_SECONDS:
+        logger.info(msg)
+        _LAST_ZSCORE_STATUS = bucket
+        _LAST_ZSCORE_LOG_TS = now
+    else:
+        logger.debug(msg)
+
+
+def _log_waiting(message):
+    global _LAST_WAITING_LOG_TS
+    global _LAST_WAITING_MSG
+    now = time.time()
+    if message != _LAST_WAITING_MSG or (now - _LAST_WAITING_LOG_TS) >= _WAITING_LOG_INTERVAL_SECONDS:
+        logger.info(message)
+        _LAST_WAITING_LOG_TS = now
+        _LAST_WAITING_MSG = message
+    else:
+        logger.debug(message)
+
+
+def _log_hold_position(zscore):
+    global _LAST_HOLD_LOG_TS
+    now = time.time()
+    msg = f"Hold position - Z={zscore:.4f} still beyond EXIT_Z ({EXIT_Z})"
+    if (now - _LAST_HOLD_LOG_TS) >= _HOLD_LOG_INTERVAL_SECONDS:
+        logger.info(msg)
+        _LAST_HOLD_LOG_TS = now
+    else:
+        logger.debug(msg)
 
 
 # Manage new trade assessment and order placing
@@ -563,13 +608,35 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         print(msg)
         logger.info(msg)
         logger.info(f"Reason: {reason}")
+        global _ENTRY_BALANCE_SNAPSHOT_LOGGED
+        if not _ENTRY_BALANCE_SNAPSHOT_LOGGED:
+            try:
+                balance_res = account_session.get_account_balance()
+                avail_bal = 0.0
+                avail_eq = 0.0
+                if balance_res.get("code") == "0":
+                    details = balance_res.get("data", [{}])[0].get("details", [])
+                    for det in details:
+                        if det.get("ccy") == "USDT":
+                            avail_bal = float(det.get("availBal", 0))
+                            avail_eq = float(det.get("availEq", 0))
+                            break
+                logger.info(
+                    "💰 Pre-trade balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s",
+                    avail_bal,
+                    avail_eq,
+                    td_mode,
+                )
+            except Exception as exc:
+                logger.warning("Failed to log pre-trade balance snapshot: %s", exc)
+            _ENTRY_BALANCE_SNAPSHOT_LOGGED = True
     else:
         # Log waiting status
         if abs(latest_zscore) < ENTRY_Z:
-            logger.info("⏳ WAITING: Not at entry threshold yet")
+            _log_waiting("⏳ WAITING: Not at entry threshold yet")
         else:
             # It's beyond threshold but not persistent yet
-            logger.info(f"⏳ WAITING: Z-score extreme ({latest_zscore:+.2f}) but not persistent yet")
+            _log_waiting(f"⏳ WAITING: Z-score extreme ({latest_zscore:+.2f}) but not persistent yet")
 
     # Place and manage trades
     if hot and kill_switch == 0:
@@ -627,28 +694,47 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
 
         # Fill targets
         # POSITION SIZING (2% Risk Rule)
-        # Check actual available balance first
+        # Check available funds (cross margin requires availEq, isolated uses availBal)
+        use_avail_eq = str(td_mode or "").strip().lower() == "cross"
+        available_label = "availEq" if use_avail_eq else "availBal"
+        available_usdt = 0.0
         try:
             balance_res = account_session.get_account_balance()
-            available_usdt = 0.0
+            available_bal = 0.0
+            available_eq = 0.0
             if balance_res.get("code") == "0":
                 details = balance_res.get("data", [{}])[0].get("details", [])
                 for det in details:
                     if det.get("ccy") == "USDT":
-                        available_usdt = float(det.get("availBal", 0))
+                        available_bal = float(det.get("availBal", 0))
+                        available_eq = float(det.get("availEq", 0))
                         break
             
+            logger.info(
+                "💰 Available balance (availBal): %.2f USDT | Available equity (availEq): %.2f USDT",
+                available_bal,
+                available_eq,
+            )
+
+            available_usdt = available_eq if use_avail_eq else available_bal
+
             if available_usdt <= 0:
-                logger.error(f"❌ No available USDT balance: {available_usdt}")
+                logger.error(f"❌ No available USDT margin ({available_label}): {available_usdt}")
                 return kill_switch, signal_detected, trade_placed
-            
-            logger.info(f"💰 Available balance: {available_usdt:.2f} USDT")
-            
-            # Use the lower of configured capital or available balance
+
+            # Use the lower of configured capital or available funds
             effective_capital = min(tradeable_capital_usdt, available_usdt * 0.95)  # 95% to leave buffer
-            logger.info(f"📊 Effective capital: {effective_capital:.2f} USDT (config: {tradeable_capital_usdt:.2f}, available: {available_usdt:.2f})")
+            logger.info(
+                "📊 Effective capital: %.2f USDT (config: %.2f, available %s: %.2f)",
+                effective_capital,
+                tradeable_capital_usdt,
+                available_label,
+                available_usdt,
+            )
         except Exception as e:
             logger.error(f"Failed to check balance: {e}. Using configured capital.")
+            available_usdt = tradeable_capital_usdt
+            available_label = "configured"
             effective_capital = tradeable_capital_usdt
         
         # Risk per trade = 2% of effective capital
@@ -794,6 +880,56 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             print(msg)
             logger.error(msg)
             return kill_switch, signal_detected, trade_placed
+
+        long_contract_value = preflight_long.get("contract_value_quote") or 0.0
+        short_contract_value = preflight_short.get("contract_value_quote") or 0.0
+        if long_contract_value <= 0 or short_contract_value <= 0:
+            msg = "ERROR: Contract value unavailable for sizing; skipping entry."
+            print(msg)
+            logger.error(msg)
+            return kill_switch, signal_detected, trade_placed
+
+        long_info = preflight_long.get("instrument_info") or {}
+        short_info = preflight_short.get("instrument_info") or {}
+        logger.info(
+            "Contract value long %s: ctVal=%s ctMult=%s ctValCcy=%s quote_per_contract=%.6f",
+            long_ticker,
+            long_info.get("ctVal"),
+            long_info.get("ctMult"),
+            long_info.get("ctValCcy") or "n/a",
+            long_contract_value,
+        )
+        logger.info(
+            "Contract value short %s: ctVal=%s ctMult=%s ctValCcy=%s quote_per_contract=%.6f",
+            short_ticker,
+            short_info.get("ctVal"),
+            short_info.get("ctMult"),
+            short_info.get("ctValCcy") or "n/a",
+            short_contract_value,
+        )
+
+        long_notional = preflight_long.get("notional_usdt") or 0.0
+        short_notional = preflight_short.get("notional_usdt") or 0.0
+        total_notional = long_notional + short_notional
+        if available_usdt > 0:
+            max_notional = available_usdt * 0.95
+            if total_notional > max_notional or long_notional > max_notional or short_notional > max_notional:
+                msg = (
+                    "ERROR: Pre-trade notional exceeds available "
+                    f"{available_label}: long={long_notional:.2f} short={short_notional:.2f} "
+                    f"total={total_notional:.2f} avail={available_usdt:.2f}"
+                )
+                print(msg)
+                logger.error(msg)
+                return kill_switch, signal_detected, trade_placed
+            logger.info(
+                "Pre-trade notional check: long=%.2f short=%.2f total=%.2f %s=%.2f",
+                long_notional,
+                short_notional,
+                total_notional,
+                available_label,
+                available_usdt,
+            )
 
         # Trade until filled or signal is false
         order_status_long = ""
@@ -1158,5 +1294,5 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
         return 2
 
     # 5. MONITORING: Hold position
-    logger.info(f"Hold position - Z={latest_zscore:.4f} still beyond EXIT_Z ({EXIT_Z})")
+    _log_hold_position(latest_zscore)
     return kill_switch

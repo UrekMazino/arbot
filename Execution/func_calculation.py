@@ -56,7 +56,44 @@ def _extract_prices(levels):
     return prices
 
 
-def get_trade_details(orderbook_data, direction="Long", capital=0.0):
+def _parse_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_quote_ccy(inst_id):
+    if not inst_id:
+        return ""
+    parts = str(inst_id).split("-")
+    if len(parts) >= 2:
+        return parts[1].upper()
+    return ""
+
+
+def _resolve_contract_value_quote(entry_price, instrument_info=None, inst_id=""):
+    if not instrument_info:
+        return 0.0
+    ct_val = _parse_float(instrument_info.get("ctVal"), 0.0)
+    ct_mult = _parse_float(instrument_info.get("ctMult"), 1.0)
+    if ct_mult == 0:
+        ct_mult = 1.0
+    if ct_val <= 0 or entry_price <= 0:
+        return 0.0
+    ct_val_ccy = str(instrument_info.get("ctValCcy") or "").upper()
+    quote_ccy = _parse_quote_ccy(inst_id or instrument_info.get("instId", ""))
+    contract_units = ct_val * ct_mult
+    if ct_val_ccy and quote_ccy and ct_val_ccy == quote_ccy:
+        return contract_units
+    return entry_price * contract_units
+
+
+def get_contract_value_quote(entry_price, instrument_info=None, inst_id=""):
+    return _resolve_contract_value_quote(entry_price, instrument_info, inst_id)
+
+
+def get_trade_details(orderbook_data, direction="Long", capital=0.0, instrument_info=None):
     """
     Calculate trade details from OKX orderbook data.
 
@@ -64,6 +101,7 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
         orderbook_data (dict): OKX WS payload or dict with bids/asks.
         direction (str): "Long" or "Short".
         capital (float): USDT amount to trade.
+        instrument_info (dict): OKX instrument details for contract sizing.
 
     Returns:
         tuple: (entry_price, quantity, stop_loss)
@@ -80,6 +118,8 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
         return entry_price, quantity, stop_loss
 
     symbol = _extract_symbol(orderbook_data)
+    if instrument_info and not symbol:
+        symbol = instrument_info.get("instId") or ""
     
     # Logic: determine rounding parameters
     if symbol == ticker_1:
@@ -111,18 +151,35 @@ def get_trade_details(orderbook_data, direction="Long", capital=0.0):
         # This accounts for taker fee (0.05%) + slippage (0.02%) = 0.07%
         entry_price = best_bid * (1 + FEE_SLIPPAGE_BUFFER_PCT)
         stop_loss = round(entry_price * (1 - stop_loss_fail_safe), price_roundings)
-        logger.info(f"Long entry fee buffer applied: {best_bid:.2f} -> {entry_price:.2f} (+{FEE_SLIPPAGE_BUFFER_PCT*100:.3f}%)")
+        logger.debug(
+            "Long entry fee buffer applied: %.2f -> %.2f (+%.3f%%)",
+            best_bid,
+            entry_price,
+            FEE_SLIPPAGE_BUFFER_PCT * 100,
+        )
     else:
         # For SHORT: subtract fee buffer from entry price (worse entry, better safety)
         entry_price = best_ask * (1 - FEE_SLIPPAGE_BUFFER_PCT)
         stop_loss = round(entry_price * (1 + stop_loss_fail_safe), price_roundings)
-        logger.info(f"Short entry fee buffer applied: {best_ask:.2f} -> {entry_price:.2f} (-{FEE_SLIPPAGE_BUFFER_PCT*100:.3f}%)")
+        logger.debug(
+            "Short entry fee buffer applied: %.2f -> %.2f (-%.3f%%)",
+            best_ask,
+            entry_price,
+            FEE_SLIPPAGE_BUFFER_PCT * 100,
+        )
 
     if entry_price > 0:
-        # Note: For OKX SWAP, sz is usually number of contracts. 
-        # If capital is in USDT, quantity should be: capital / (entry_price * contract_value)
-        # This implementation assumes capital / entry_price is the desired unit.
-        raw_quantity = capital / entry_price
+        contract_value_quote = _resolve_contract_value_quote(entry_price, instrument_info, symbol)
+        if contract_value_quote > 0:
+            raw_quantity = capital / contract_value_quote
+        else:
+            if instrument_info:
+                logger.warning(
+                    "Contract value unavailable for sizing: symbol=%s entry_price=%.6f",
+                    symbol,
+                    entry_price,
+                )
+            raw_quantity = capital / entry_price
         quantity = round(raw_quantity, quantity_roundings)
         
         # Best Practice: For Swaps, quantity must often be an integer.

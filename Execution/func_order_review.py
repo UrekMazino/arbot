@@ -1,5 +1,6 @@
 # Check order items
 from func_position_calls import query_existing_order, get_open_positions, get_active_positions
+from func_fill_logging import log_order_fills
 
 
 def _safe_float(value):
@@ -40,10 +41,12 @@ def check_order(ticker, order_id, remaining_capital, direction="Long", remaining
     if remaining_val is not None and position_qty_val is not None:
         if remaining_unit_norm in ("base", "qty", "quantity"):
             if position_qty_val >= remaining_val and position_qty_val > 0:
+                log_order_fills(order_id, ticker)
                 return "Trade Complete"
         elif remaining_unit_norm in ("quote", "notional", "usdt", "usd"):
             if position_price_val is not None:
                 if position_qty_val * position_price_val >= remaining_val and position_qty_val > 0:
+                    log_order_fills(order_id, ticker)
                     return "Trade Complete"
 
     # Normalize status for OKX values
@@ -51,6 +54,7 @@ def check_order(ticker, order_id, remaining_capital, direction="Long", remaining
 
     # Determine action - position filled - buy more
     if status_norm == "filled":
+        log_order_fills(order_id, ticker)
         return "Position Filled"
 
     # Determine action - order active - do nothing

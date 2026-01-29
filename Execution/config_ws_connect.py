@@ -2,20 +2,12 @@ from config_execution_api import ticker_1, ticker_2, mode, depth as default_dept
 from okx.websocket.WsPublicAsync import WsPublicAsync
 import asyncio
 import json
-import logging
-import os
 from datetime import datetime
+from func_log_setup import get_logger, get_log_path
 
 # WEB SOCKET ACTIVATION
-log_path = os.path.join(os.path.dirname(__file__), "logfile_okx.log")
-logging.basicConfig(
-    filename=log_path,
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    filemode="a",
-)
-logger = logging.getLogger(__name__)
-logger.info("Logging initialized in config_ws_connect.py")
+logger = get_logger(__name__)
+logger.info("Logging initialized in config_ws_connect.py (file: %s)", get_log_path())
 
 HEARTBEAT_INTERVAL = 20  # seconds
 

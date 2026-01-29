@@ -1,9 +1,11 @@
 import logging
 import os
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _LOG_SETUP_DONE = False
+_LOG_FILE_PATH = None
 
 
 def _int_env(name, default):
@@ -16,12 +18,32 @@ def _int_env(name, default):
         return default
 
 
+def _build_log_path():
+    env_path = os.getenv("STATBOT_LOG_PATH")
+    if env_path:
+        resolved = Path(env_path).expanduser()
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
+    logs_dir = Path(__file__).resolve().parents[1] / "Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%m_%m%d%y_%H%M%S")
+    return logs_dir / f"log_{timestamp}.log"
+
+
+def get_log_path():
+    global _LOG_FILE_PATH
+    if _LOG_FILE_PATH is None:
+        _LOG_FILE_PATH = _build_log_path()
+        os.environ.setdefault("STATBOT_LOG_PATH", str(_LOG_FILE_PATH))
+    return _LOG_FILE_PATH
+
+
 def setup_logging():
     global _LOG_SETUP_DONE
     if _LOG_SETUP_DONE:
         return
 
-    log_path = Path(__file__).resolve().parent / "logfile_okx.log"
+    log_path = get_log_path()
     log_file = str(log_path)
     max_mb = _int_env("STATBOT_LOG_MAX_MB", 5)
     backups = _int_env("STATBOT_LOG_BACKUPS", 3)

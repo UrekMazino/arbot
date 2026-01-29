@@ -26,6 +26,7 @@ from config_execution_api import (
     save_active_pair,
     STATUS_UPDATE_INTERVAL,
     HEALTH_CHECK_INTERVAL,
+    td_mode,
     account_session,
     lock_on_pair,
     allowed_settle_ccy
@@ -61,7 +62,8 @@ from func_pair_state import (
     set_entry_equity,
     get_entry_equity,
     get_entry_notional,
-    is_restricted_ticker
+    is_restricted_ticker,
+    cleanup_expired_graveyard
 )
 
 # Setup logging
@@ -71,6 +73,174 @@ SWITCH_RESULT_SWITCHED = "switched"
 SWITCH_RESULT_BLOCKED = "blocked"
 SWITCH_RESULT_HARD_STOP = "hard_stop"
 STRATEGY_REFRESH_SLEEP_SECONDS = 300
+_PNL_LOG_INTERVAL_SECONDS = 60
+_PNL_LOG_DELTA_THRESHOLD = 0.5
+_LAST_PNL_LOG_TS = 0.0
+_LAST_PNL_LOG_VAL = None
+_PNL_ALERT_USDT = None
+_PNL_ALERT_PCT = None
+_PNL_ALERT_INTERVAL_SECONDS = None
+_LAST_PNL_ALERT_TS = 0.0
+_LAST_PNL_ALERT_VAL = None
+_LAST_PNL_ALERT_SIGN = 0
+
+
+def _should_log_pnl(total_pnl):
+    global _LAST_PNL_LOG_TS
+    global _LAST_PNL_LOG_VAL
+    now = time.time()
+    delta = None
+    if _LAST_PNL_LOG_VAL is not None:
+        delta = abs(total_pnl - _LAST_PNL_LOG_VAL)
+    if _LAST_PNL_LOG_VAL is None or (delta is not None and delta >= _PNL_LOG_DELTA_THRESHOLD):
+        _LAST_PNL_LOG_TS = now
+        _LAST_PNL_LOG_VAL = total_pnl
+        return True
+    if (now - _LAST_PNL_LOG_TS) >= _PNL_LOG_INTERVAL_SECONDS:
+        _LAST_PNL_LOG_TS = now
+        _LAST_PNL_LOG_VAL = total_pnl
+        return True
+    return False
+
+
+def _get_pnl_alert_thresholds():
+    global _PNL_ALERT_USDT
+    global _PNL_ALERT_PCT
+    global _PNL_ALERT_INTERVAL_SECONDS
+    if _PNL_ALERT_USDT is None:
+        try:
+            _PNL_ALERT_USDT = float(os.getenv("STATBOT_PNL_ALERT_USDT", "10"))
+        except (TypeError, ValueError):
+            _PNL_ALERT_USDT = 10.0
+    if _PNL_ALERT_PCT is None:
+        try:
+            _PNL_ALERT_PCT = float(os.getenv("STATBOT_PNL_ALERT_PCT", "0.5"))
+        except (TypeError, ValueError):
+            _PNL_ALERT_PCT = 0.5
+    if _PNL_ALERT_INTERVAL_SECONDS is None:
+        try:
+            _PNL_ALERT_INTERVAL_SECONDS = int(os.getenv("STATBOT_PNL_ALERT_INTERVAL_SECONDS", "600"))
+        except (TypeError, ValueError):
+            _PNL_ALERT_INTERVAL_SECONDS = 600
+    return _PNL_ALERT_USDT, _PNL_ALERT_PCT, _PNL_ALERT_INTERVAL_SECONDS
+
+
+def _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt):
+    global _LAST_PNL_ALERT_TS
+    global _LAST_PNL_ALERT_VAL
+    global _LAST_PNL_ALERT_SIGN
+
+    threshold_usdt, threshold_pct, min_interval = _get_pnl_alert_thresholds()
+    if threshold_usdt <= 0 and threshold_pct <= 0:
+        return
+
+    if abs(session_pnl) < threshold_usdt and abs(session_pnl_pct) < threshold_pct:
+        return
+
+    now = time.time()
+    sign = 1 if session_pnl > 0 else -1 if session_pnl < 0 else 0
+    should_alert = False
+    if _LAST_PNL_ALERT_VAL is None:
+        should_alert = True
+    else:
+        delta = abs(session_pnl - _LAST_PNL_ALERT_VAL)
+        if sign != _LAST_PNL_ALERT_SIGN:
+            should_alert = True
+        elif threshold_usdt > 0 and delta >= threshold_usdt:
+            should_alert = True
+
+    if not should_alert and (now - _LAST_PNL_ALERT_TS) < min_interval:
+        return
+
+    _LAST_PNL_ALERT_TS = now
+    _LAST_PNL_ALERT_VAL = session_pnl
+    _LAST_PNL_ALERT_SIGN = sign
+    logger.warning(
+        "PNL_ALERT: Session PnL %+0.2f USDT (%+0.2f%%) | Total PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT",
+        session_pnl,
+        session_pnl_pct,
+        total_pnl,
+        pnl_pct,
+        equity_usdt,
+    )
+
+
+def _start_molt_monitor():
+    disable = str(os.getenv("STATBOT_MOLT_MONITOR", "")).strip().lower()
+    if disable in ("0", "false", "no", "off"):
+        logger.info("Molt monitor disabled via STATBOT_MOLT_MONITOR.")
+        return None
+    if os.getenv("STATBOT_MOLT_MONITOR_STARTED") == "1":
+        return None
+
+    monitor_script = Path(__file__).resolve().parent / "molt_monitor.py"
+    if not monitor_script.exists():
+        logger.warning("Molt monitor script missing: %s", monitor_script)
+        return None
+
+    env = os.environ.copy()
+    env["STATBOT_MOLT_MONITOR_STARTED"] = "1"
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(monitor_script)],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+    except Exception as exc:
+        logger.warning("Failed to start Molt monitor: %s", exc)
+        return None
+
+    os.environ["STATBOT_MOLT_MONITOR_STARTED"] = "1"
+    logger.info("Started Molt monitor (pid=%s).", proc.pid)
+    return proc
+
+
+def _start_command_listener():
+    disable = str(os.getenv("STATBOT_COMMAND_LISTENER", "")).strip().lower()
+    if disable in ("0", "false", "no", "off"):
+        logger.info("Command listener disabled via STATBOT_COMMAND_LISTENER.")
+        return None
+    if os.getenv("STATBOT_COMMAND_LISTENER_STARTED") == "1":
+        return None
+
+    listener_script = Path(__file__).resolve().parent / "command_listener.py"
+    if not listener_script.exists():
+        logger.warning("Command listener script missing: %s", listener_script)
+        return None
+
+    env = os.environ.copy()
+    env["STATBOT_COMMAND_LISTENER_STARTED"] = "1"
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(listener_script)],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+    except Exception as exc:
+        logger.warning("Failed to start command listener: %s", exc)
+        return None
+
+    os.environ["STATBOT_COMMAND_LISTENER_STARTED"] = "1"
+    logger.info("Started command listener (pid=%s).", proc.pid)
+    return proc
 
 
 def _validate_ticker_configuration():
@@ -595,7 +765,7 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
 
     if used_positions > 0:
         pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
-        if total_pnl != 0.0:
+        if total_pnl != 0.0 and _should_log_pnl(total_pnl):
             logger.info(
                 "Cumulative P&L: %.2f USDT (%.2f%%) | Threshold: %.2f USDT",
                 total_pnl,
@@ -632,7 +802,7 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
                         )
 
         pnl_pct = (total_pnl / tradeable_capital_usdt * 100) if tradeable_capital_usdt > 0 else 0.0
-        if total_pnl != 0.0:
+        if total_pnl != 0.0 and _should_log_pnl(total_pnl):
             logger.info(
                 "Cumulative P&L: %.2f USDT (%.2f%%) | Threshold: %.2f USDT",
                 total_pnl,
@@ -649,6 +819,8 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
 if __name__ == "__main__":
     # Manager process to handle restarts (especially on Windows)
     if os.getenv("STATBOT_MANAGED") != "1":
+        monitor_proc = _start_molt_monitor()
+        command_proc = _start_command_listener()
         start_ts = os.getenv("STATBOT_START_TS")
         if not start_ts:
             start_ts = str(time.time())
@@ -661,13 +833,24 @@ if __name__ == "__main__":
                 ret = subprocess.call([sys.executable] + sys.argv, env=env)
             except KeyboardInterrupt:
                 # Handle Ctrl+C in the manager
+                if monitor_proc and monitor_proc.poll() is None:
+                    monitor_proc.terminate()
+                if command_proc and command_proc.poll() is None:
+                    command_proc.terminate()
                 sys.exit(0)
             
             if ret == 3:
                 # Code 3 signals a pair switch and restart
                 print("\n--- Restarting StatBot for New Pair ---\n")
                 continue
+            if monitor_proc and monitor_proc.poll() is None:
+                monitor_proc.terminate()
+            if command_proc and command_proc.poll() is None:
+                command_proc.terminate()
             sys.exit(ret)
+
+    _start_molt_monitor()
+    _start_command_listener()
 
     # Validate ticker configuration at startup
     try:
@@ -676,6 +859,13 @@ if __name__ == "__main__":
         logger.critical(str(e))
         print(str(e))
         exit(1)
+
+    try:
+        removed = cleanup_expired_graveyard()
+        if removed:
+            logger.info("Cleaned %d expired graveyard entries.", removed)
+    except Exception as exc:
+        logger.warning("Failed to cleanup graveyard entries: %s", exc)
 
     per_leg_capital = _get_per_leg_allocation()
     if not _pair_meets_min_capital(ticker_1, ticker_2, per_leg_capital):
@@ -734,6 +924,27 @@ if __name__ == "__main__":
         logger.info(f"📊 Starting equity: {starting_equity:.2f} USDT")
     except Exception as e:
         logger.warning(f"Failed to capture starting equity: {e}")
+
+    # One-time balance snapshot for cross vs isolated margin checks
+    try:
+        avail_bal = 0.0
+        avail_eq = 0.0
+        if balance_res and balance_res.get("code") == "0":
+            details = balance_res.get("data", [{}])[0].get("details", [])
+            for det in details:
+                if det.get("ccy") == "USDT":
+                    avail_bal = float(det.get("availBal", 0))
+                    avail_eq = float(det.get("availEq", 0))
+                    break
+        logger.info(
+            "💰 Balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s | pos_mode=%s",
+            avail_bal,
+            avail_eq,
+            td_mode,
+            pos_mode,
+        )
+    except Exception as exc:
+        logger.warning("Failed to log balance snapshot: %s", exc)
 
     # Save status
     save_status(status_dict)
@@ -867,7 +1078,12 @@ if __name__ == "__main__":
 
             # 2. Market Data Fetch
             zscore_results = get_latest_zscore()
-            _, _, metrics = zscore_results
+            zscore_series, _, metrics = zscore_results
+            latest_zscore = None
+            for z_val in reversed(zscore_series or []):
+                if isinstance(z_val, (int, float)) and math.isfinite(z_val):
+                    latest_zscore = float(z_val)
+                    break
             price_p, price_n = metrics.get("price_1"), metrics.get("price_2")
 
             # 2a. ORDERBOOK DEAD CHECK: Switch if tickers are delisted/illiquid
@@ -918,11 +1134,27 @@ if __name__ == "__main__":
             session_pnl = equity_usdt - starting_equity if starting_equity > 0 else 0.0
             session_pnl_pct = (session_pnl / starting_equity * 100) if starting_equity > 0 else 0.0
 
+            _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
+
             # Log cycle with PnL, equity, and session performance
             pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
             session_emoji = "🟢" if session_pnl >= 0 else "🔴"
             uptime = _format_uptime(current_time - bot_start_time)
-            logger.info(f"--- Cycle {cycles_run} | {ticker_1}/{ticker_2} | Uptime: {uptime} | {pnl_emoji} PnL: {total_pnl:+.2f} USDT ({pnl_pct:+.2f}%) | Equity: {equity_usdt:.2f} USDT | {session_emoji} Session: {session_pnl:+.2f} USDT ({session_pnl_pct:+.2f}%) ---")
+            logger.debug(
+                "--- Cycle %s | %s/%s | Uptime: %s | %s PnL: %+0.2f USDT (%+0.2f%%) | "
+                "Equity: %.2f USDT | %s Session: %+0.2f USDT (%+0.2f%%) ---",
+                cycles_run,
+                ticker_1,
+                ticker_2,
+                uptime,
+                pnl_emoji,
+                total_pnl,
+                pnl_pct,
+                equity_usdt,
+                session_emoji,
+                session_pnl,
+                session_pnl_pct,
+            )
 
             if prev_equity_usdt is not None and prev_total_pnl is not None:
                 equity_delta = equity_usdt - prev_equity_usdt
@@ -967,6 +1199,16 @@ if __name__ == "__main__":
                 logger.info(f"Uptime: {uptime}")
                 logger.info(f"Time in pair: {time_in_pair_min:.1f} min")
                 logger.info(f"Signals seen: {signals_seen} | Trades: {trades_executed}")
+                logger.info(
+                    "PnL: %+0.2f USDT (%+0.2f%%) | Equity: %.2f USDT | Session: %+0.2f USDT (%+0.2f%%)",
+                    total_pnl,
+                    pnl_pct,
+                    equity_usdt,
+                    session_pnl,
+                    session_pnl_pct,
+                )
+                if latest_zscore is not None:
+                    logger.info("Z-Score: %+0.2f", latest_zscore)
                 print(_green(f"Uptime: {uptime}"))
                 last_status_update = current_time
             max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
@@ -1071,9 +1313,52 @@ if __name__ == "__main__":
                         reconciliation["unexplained"],
                     )
                 record_trade_result(is_win)
-                logger.info(f"Trade result recorded: {'WIN' if is_win else 'LOSS'} (PNL: {total_pnl:.2f} USDT)")
-                
+                result_label = "WIN" if is_win else "LOSS"
+                logger.info(f"Trade result recorded: {result_label} (PNL: {total_pnl:.2f} USDT)")
+
+                alert_pnl = total_pnl
+                alert_pnl_pct = pnl_pct
+                alert_equity = equity_usdt
+                alert_session_pnl = session_pnl
+                alert_session_pnl_pct = session_pnl_pct
+                if entry_equity is not None and equity_usdt is not None:
+                    alert_pnl = equity_usdt - entry_equity
+                    if tradeable_capital_usdt > 0:
+                        alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
+
                 kill_switch = close_all_positions(kill_switch)
+
+                post_equity_usdt = None
+                try:
+                    balance_res = account_session.get_account_balance()
+                    if balance_res.get("code") == "0":
+                        details = balance_res.get("data", [{}])[0].get("details", [])
+                        for det in details:
+                            if det.get("ccy") == "USDT":
+                                post_equity_usdt = float(det.get("eq", 0))
+                                break
+                except Exception:
+                    post_equity_usdt = None
+
+                if post_equity_usdt is not None:
+                    alert_equity = post_equity_usdt
+                    if starting_equity > 0:
+                        alert_session_pnl = post_equity_usdt - starting_equity
+                        alert_session_pnl_pct = (alert_session_pnl / starting_equity) * 100
+                    if entry_equity is not None:
+                        alert_pnl = post_equity_usdt - entry_equity
+                        if tradeable_capital_usdt > 0:
+                            alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
+
+                logger.warning(
+                    "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%)",
+                    result_label,
+                    alert_pnl,
+                    alert_pnl_pct,
+                    alert_equity,
+                    alert_session_pnl,
+                    alert_session_pnl_pct,
+                )
 
                 # Sleep for 5 seconds
                 time.sleep(5)

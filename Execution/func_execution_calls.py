@@ -9,7 +9,7 @@ from config_execution_api import (
     dry_run,
     depth,
 )
-from func_calculation import get_trade_details
+from func_calculation import get_trade_details, get_contract_value_quote
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 
@@ -190,7 +190,12 @@ def _calculate_min_capital(entry_price, instrument_info):
     min_qty = _get_min_order_qty(instrument_info)
     if min_qty <= 0:
         return 0.0, 0.0
-    min_capital = float(min_qty) * entry_price
+    inst_id = instrument_info.get("instId") if instrument_info else ""
+    contract_value_quote = get_contract_value_quote(entry_price, instrument_info, inst_id=inst_id)
+    if contract_value_quote <= 0:
+        min_capital = float(min_qty) * entry_price
+    else:
+        min_capital = float(min_qty) * contract_value_quote
     return float(min_qty), min_capital
 
 
@@ -204,8 +209,18 @@ def get_min_capital_requirements(inst_id, orderbook_payload=None, instrument_inf
         if not orderbook_payload:
             return {"ok": False, "error": err}
 
-    entry_long, _, _ = get_trade_details(orderbook_payload, direction="long", capital=1.0)
-    entry_short, _, _ = get_trade_details(orderbook_payload, direction="short", capital=1.0)
+    entry_long, _, _ = get_trade_details(
+        orderbook_payload,
+        direction="long",
+        capital=1.0,
+        instrument_info=info,
+    )
+    entry_short, _, _ = get_trade_details(
+        orderbook_payload,
+        direction="short",
+        capital=1.0,
+        instrument_info=info,
+    )
 
     min_qty_long, min_cap_long = _calculate_min_capital(entry_long, info)
     min_qty_short, min_cap_short = _calculate_min_capital(entry_short, info)
@@ -235,18 +250,19 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         if not orderbook_payload:
             return {"ok": False, "error": err}
 
+    info = instrument_info
+    if info is None:
+        info = _fetch_instrument_info(inst_id)
+
     entry_price, quantity, stop_price = get_trade_details(
         orderbook_payload,
         direction="long" if entry_side == "buy" else "short",
         capital=capital,
+        instrument_info=info,
     )
 
-    info = instrument_info
-    if enforce_lot_size:
-        if info is None:
-            info = _fetch_instrument_info(inst_id)
-        if info:
-            quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=info)
+    if enforce_lot_size and info:
+        quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=info)
 
     ok = entry_price > 0 and quantity > 0 and stop_price > 0
     error = ""
@@ -254,6 +270,10 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         error = f"entry={entry_price} qty={quantity} stop={stop_price} capital={capital}"
 
     min_qty, min_capital = _calculate_min_capital(entry_price, info)
+    contract_value_quote = get_contract_value_quote(entry_price, info, inst_id=inst_id)
+    notional_usdt = 0.0
+    if contract_value_quote > 0 and quantity > 0:
+        notional_usdt = float(quantity) * contract_value_quote
 
     return {
         "ok": ok,
@@ -265,6 +285,8 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         "stop_price": stop_price,
         "min_qty": min_qty,
         "min_capital": min_capital,
+        "contract_value_quote": contract_value_quote,
+        "notional_usdt": notional_usdt,
         "orderbook_payload": orderbook_payload,
         "instrument_info": info,
         "error": error,
@@ -328,10 +350,15 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
             print(f"ERROR: {err}")
             return None
 
+    info = instrument_info
+    if info is None:
+        info = _fetch_instrument_info(inst_id)
+
     entry_price, quantity, stop_price = get_trade_details(
         orderbook_payload,
         direction="long" if entry_side == "buy" else "short",
         capital=capital,
+        instrument_info=info,
     )
 
     if size_override is not None:
@@ -341,7 +368,7 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
             pass
 
     if enforce_lot_size:
-        quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=instrument_info)
+        quantity = _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=info)
 
     if entry_price <= 0 or quantity <= 0 or stop_price <= 0:
         print(f"ERROR: Invalid trade details (entry={entry_price}, quantity={quantity}, stop={stop_price}).")

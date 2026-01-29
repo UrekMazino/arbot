@@ -15,11 +15,11 @@ Z_HISTORY_MAX_AGE_SECONDS = 14400
 Z_HISTORY_MAX_LEN = 5000
 GRAVEYARD_DEFAULT_DAYS = 7
 GRAVEYARD_REASON_DAYS = {
-    "cointegration_lost": 10,
+    "cointegration_lost": 5 / (24 * 60),
     "orderbook_dead": 30,
     "compliance_restricted": None,
     "manual": 3,
-    "health": 7,
+    "health": 5 / (24 * 60),
     "settle_ccy_filter": 30,
 }
 
@@ -176,6 +176,40 @@ def is_in_graveyard(t1, t2, lookback_days=7):
     state["graveyard"].pop(entry_key, None)
     save_pair_state(state)
     return False
+
+
+def cleanup_expired_graveyard(lookback_days=7):
+    state = load_pair_state()
+    graveyard = state.get("graveyard", {})
+    now = time.time()
+    removed = 0
+
+    for pair_key in list(graveyard.keys()):
+        entry = graveyard.get(pair_key)
+        if isinstance(entry, dict):
+            fail_time = entry.get("ts") or 0
+            ttl_days = entry.get("ttl_days")
+            if ttl_days is None:
+                continue
+            if ttl_days <= 0:
+                ttl_days = _graveyard_days_for_reason(entry.get("reason") or "")
+        else:
+            fail_time = entry
+            ttl_days = lookback_days
+
+        if not fail_time:
+            graveyard.pop(pair_key, None)
+            removed += 1
+            continue
+
+        if now - fail_time >= (ttl_days * 24 * 60 * 60):
+            graveyard.pop(pair_key, None)
+            removed += 1
+
+    if removed:
+        state["graveyard"] = graveyard
+        save_pair_state(state)
+    return removed
 
 def get_last_switch_time():
     state = load_pair_state()

@@ -49,9 +49,9 @@ def _env_list(name, default=""):
     return items
 
 kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)
-min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0.0)
+min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 2000)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
-max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 5)
+max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
 min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)
 max_p_value_filter = _env_float("STATBOT_STRATEGY_MAX_P_VALUE", 0.02)
 min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 1)

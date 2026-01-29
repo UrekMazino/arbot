@@ -181,7 +181,7 @@ def get_latest_zscore(
     if not inst_1 or not inst_2:
         return [], False, metrics
 
-    logger.info(f"get_latest_zscore: fetching klines for {inst_1} and {inst_2}")
+    logger.debug(f"get_latest_zscore: fetching klines for {inst_1} and {inst_2}")
     window_val = z_score_window if window is None else window
     try:
         window_val = int(window_val)
@@ -203,7 +203,7 @@ def get_latest_zscore(
         return [], False, metrics
 
     if use_orderbook:
-        logger.info(f"get_latest_zscore: fetching mid prices for {inst_1} and {inst_2}")
+        logger.debug(f"get_latest_zscore: fetching mid prices for {inst_1} and {inst_2}")
         mid_1 = _fetch_mid_price(inst_1, depth_levels=depth_levels, session=session)
         mid_2 = _fetch_mid_price(inst_2, depth_levels=depth_levels, session=session)
         if mid_1 is not None and mid_2 is not None:

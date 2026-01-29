@@ -2,6 +2,7 @@ import logging
 import math
 
 from config_execution_api import account_session, trade_session, inst_type, ticker_1, ticker_2, td_mode
+from func_fill_logging import log_order_fills
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ def place_market_close_order(ticker, size, side):
 
         if code == "0" and ord_id:
             logger.info(f"Successfully placed market close order for {ticker}: {size} {order_side}. Order ID: {ord_id}")
+            log_order_fills(ord_id, ticker)
             return response
         
         # Detailed error extraction

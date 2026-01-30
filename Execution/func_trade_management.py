@@ -41,6 +41,7 @@ Z_STALL_EARLY_GRACE_MINUTES = 30
 Z_STALL_LATE_STRICT_MINUTES = 120
 Z_STALL_TRIGGER_ABS = 1.5
 Z_STALL_WARN_ABS = 1.0
+DEFAULT_LIQUIDITY_RATIO_STEPS = [3.0, 2.5, 2.0, 1.5, 1.0]
 COMPLIANCE_RESTRICTION_CODE = "51155"
 _ENTRY_BALANCE_SNAPSHOT_LOGGED = False
 _ZSCORE_LOG_INTERVAL_SECONDS = 60
@@ -87,6 +88,7 @@ from func_execution_calls import (
 )
 from func_close_positions import close_all_positions, get_position_info, place_market_close_order
 from func_order_review import check_order
+from func_fill_logging import log_order_fills
 import time
 import math
 import logging
@@ -138,6 +140,31 @@ def _ensure_trade_manager_state(entry_z, entry_time):
 def _close_trade_manager():
     if trade_manager.trade_state is not None:
         trade_manager.close_position()
+
+
+def _format_fill_summary(summary):
+    if not summary:
+        return "none"
+    return (
+        "ticker={ticker} avg_px={avg_px:.6f} qty={qty:.6f} fee={fee:.6f} pnl={pnl:.6f}"
+    ).format(
+        ticker=summary.get("inst_id") or "n/a",
+        avg_px=summary.get("avg_px") or 0.0,
+        qty=summary.get("qty") or 0.0,
+        fee=summary.get("fee") or 0.0,
+        pnl=summary.get("pnl") or 0.0,
+    )
+
+
+def _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker):
+    long_summary = log_order_fills(order_long_id, long_ticker, max_wait_seconds=5.0)
+    short_summary = log_order_fills(order_short_id, short_ticker, max_wait_seconds=5.0)
+    if long_summary or short_summary:
+        logger.info(
+            "ENTRY_FILL_SUMMARY: long(%s) | short(%s)",
+            _format_fill_summary(long_summary),
+            _format_fill_summary(short_summary),
+        )
 
 
 def _execute_partial_exit(percentage):
@@ -258,6 +285,33 @@ def _handle_compliance_restriction(entry_result, ticker):
     set_last_switch_reason("compliance_restricted")
     set_last_health_score(0)
     return not lock_on_pair
+
+
+def _build_liquidity_ratio_steps(base_ratio):
+    try:
+        base_ratio = float(base_ratio)
+    except (TypeError, ValueError):
+        base_ratio = 0.0
+
+    if base_ratio <= 0:
+        return [0.0]
+
+    steps = []
+
+    def _add_step(value):
+        if value <= 0:
+            return
+        for existing in steps:
+            if abs(existing - value) < 1e-9:
+                return
+        steps.append(value)
+
+    _add_step(base_ratio)
+    for value in DEFAULT_LIQUIDITY_RATIO_STEPS:
+        if value < base_ratio - 1e-9:
+            _add_step(value)
+
+    return steps or [base_ratio]
 
 def _z_history_values(z_history):
     values = []
@@ -860,6 +914,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         else:
             initial_capital_usdt = capital_long
 
+        base_target_usdt = initial_capital_usdt
         min_liquidity_ratio = 0.0
         ratio_env = os.getenv("STATBOT_MIN_LIQUIDITY_RATIO")
         if ratio_env is None or str(ratio_env).strip() == "":
@@ -876,17 +931,103 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 return 0.0
             return liquidity_usdt / target_usdt
 
-        ratio_long = _liq_ratio(liquidity_long_usdt, initial_capital_usdt)
-        ratio_short = _liq_ratio(liquidity_short_usdt, initial_capital_usdt)
-        if min_liquidity_ratio > 0 and (ratio_long < min_liquidity_ratio or ratio_short < min_liquidity_ratio):
-            worst_liquidity = min(liquidity_long_usdt, liquidity_short_usdt)
-            adjusted_target = (worst_liquidity / min_liquidity_ratio) if worst_liquidity > 0 else 0.0
-            if adjusted_target <= 0:
+        ratio_steps = _build_liquidity_ratio_steps(min_liquidity_ratio)
+        selected_ratio = min_liquidity_ratio
+        selected_target_usdt = base_target_usdt
+        liquidity_ok = True
+
+        if ratio_steps and ratio_steps[0] > 0:
+            liquidity_ok = False
+            for attempt, ratio_threshold in enumerate(ratio_steps, start=1):
+                if ratio_threshold != min_liquidity_ratio:
+                    logger.warning(
+                        "Execution liquidity fallback attempt %d/%d: min_ratio=%.2fx",
+                        attempt,
+                        len(ratio_steps),
+                        ratio_threshold,
+                    )
+                else:
+                    logger.info(
+                        "Execution liquidity attempt %d/%d: min_ratio=%.2fx",
+                        attempt,
+                        len(ratio_steps),
+                        ratio_threshold,
+                    )
+
+                attempt_target = base_target_usdt
+                ratio_long = _liq_ratio(liquidity_long_usdt, attempt_target)
+                ratio_short = _liq_ratio(liquidity_short_usdt, attempt_target)
+
+                if ratio_long < ratio_threshold or ratio_short < ratio_threshold:
+                    worst_liquidity = min(liquidity_long_usdt, liquidity_short_usdt)
+                    adjusted_target = (worst_liquidity / ratio_threshold) if worst_liquidity > 0 else 0.0
+                    if adjusted_target <= 0:
+                        logger.warning(
+                            "Liquidity attempt %d/%d rejected: target=%.2f long_liq=%.2f short_liq=%.2f "
+                            "ratios=%.2fx/%.2fx min=%.2fx.",
+                            attempt,
+                            len(ratio_steps),
+                            attempt_target,
+                            liquidity_long_usdt,
+                            liquidity_short_usdt,
+                            ratio_long,
+                            ratio_short,
+                            ratio_threshold,
+                        )
+                        continue
+                    if required_floor > 0 and adjusted_target < required_floor:
+                        logger.warning(
+                            "Liquidity attempt %d/%d rejected: target=%.2f -> %.2f below min order %.2f "
+                            "(liq min=%.2f, min_ratio=%.2fx).",
+                            attempt,
+                            len(ratio_steps),
+                            attempt_target,
+                            adjusted_target,
+                            required_floor,
+                            worst_liquidity,
+                            ratio_threshold,
+                        )
+                        continue
+                    if adjusted_target < attempt_target:
+                        attempt_target = adjusted_target
+                        ratio_long = _liq_ratio(liquidity_long_usdt, attempt_target)
+                        ratio_short = _liq_ratio(liquidity_short_usdt, attempt_target)
+
+                if ratio_long < ratio_threshold or ratio_short < ratio_threshold:
+                    logger.warning(
+                        "Liquidity attempt %d/%d rejected: ratios below min after adjust "
+                        "(%.2fx/%.2fx < %.2fx).",
+                        attempt,
+                        len(ratio_steps),
+                        ratio_long,
+                        ratio_short,
+                        ratio_threshold,
+                    )
+                    continue
+
+                selected_ratio = ratio_threshold
+                selected_target_usdt = attempt_target
+                if selected_target_usdt < base_target_usdt:
+                    logger.info(
+                        "Liquidity downsize: target=%.2f -> %.2f to meet min ratio %.2fx "
+                        "(liq_long=%.2f liq_short=%.2f).",
+                        base_target_usdt,
+                        selected_target_usdt,
+                        selected_ratio,
+                        liquidity_long_usdt,
+                        liquidity_short_usdt,
+                    )
+                liquidity_ok = True
+                break
+
+            if not liquidity_ok:
+                ratio_long = _liq_ratio(liquidity_long_usdt, base_target_usdt)
+                ratio_short = _liq_ratio(liquidity_short_usdt, base_target_usdt)
                 msg = (
                     "WARNING LIQUIDITY_REJECT: target=%.2f long_liq=%.2f short_liq=%.2f "
                     "ratios(liq/target)=%.2fx/%.2fx min=%.2fx. Skipping entry."
                     % (
-                        initial_capital_usdt,
+                        base_target_usdt,
                         liquidity_long_usdt,
                         liquidity_short_usdt,
                         ratio_long,
@@ -897,36 +1038,13 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 print(msg)
                 logger.warning(msg)
                 return kill_switch, signal_detected, trade_placed
-            if required_floor > 0 and adjusted_target < required_floor:
-                msg = (
-                    "WARNING LIQUIDITY_REJECT: target=%.2f -> %.2f below min order %.2f "
-                    "(liq min=%.2f, min_ratio=%.2fx). Skipping entry."
-                    % (
-                        initial_capital_usdt,
-                        adjusted_target,
-                        required_floor,
-                        worst_liquidity,
-                        min_liquidity_ratio,
-                    )
-                )
-                print(msg)
-                logger.warning(msg)
-                return kill_switch, signal_detected, trade_placed
-            if adjusted_target < initial_capital_usdt:
-                logger.info(
-                    "Liquidity downsize: target=%.2f -> %.2f to meet min ratio %.2fx "
-                    "(liq_long=%.2f liq_short=%.2f).",
-                    initial_capital_usdt,
-                    adjusted_target,
-                    min_liquidity_ratio,
-                    liquidity_long_usdt,
-                    liquidity_short_usdt,
-                )
-                initial_capital_usdt = adjusted_target
-                remaining_capital_long = min(remaining_capital_long, initial_capital_usdt)
-                remaining_capital_short = min(remaining_capital_short, initial_capital_usdt)
-                ratio_long = _liq_ratio(liquidity_long_usdt, initial_capital_usdt)
-                ratio_short = _liq_ratio(liquidity_short_usdt, initial_capital_usdt)
+
+        initial_capital_usdt = selected_target_usdt
+        remaining_capital_long = min(remaining_capital_long, initial_capital_usdt)
+        remaining_capital_short = min(remaining_capital_short, initial_capital_usdt)
+        min_liquidity_ratio = selected_ratio
+        ratio_long = _liq_ratio(liquidity_long_usdt, initial_capital_usdt)
+        ratio_short = _liq_ratio(liquidity_short_usdt, initial_capital_usdt)
 
         logger.info(
             "Liquidity check: long_target=%.2f short_target=%.2f liquidity_long=%.2f liquidity_short=%.2f",
@@ -1168,6 +1286,9 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 if order_long_id and order_short_id:
                     trade_placed = True
 
+                if not limit_order_basis and order_long_id and order_short_id:
+                    _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
+
                 # Record entry Z-score for regime break detection
                 from func_pair_state import set_entry_z_score, clear_persistence_history, get_entry_time, set_entry_notional
                 set_entry_z_score(latest_zscore)
@@ -1274,6 +1395,8 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                         print(msg)
                         logger.info(msg)
                         trade_placed = True
+                        if order_long_id and order_short_id:
+                            _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
                         kill_switch = 1                        
                     # If position filled, place another trade if capital remains
                     if order_status_long == "Position Filled" and order_status_short == "Position Filled":
@@ -1281,6 +1404,8 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                         print(msg)
                         logger.info(msg)
                         trade_placed = True
+                        if order_long_id and order_short_id:
+                            _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
                         if remaining_capital_long > 0 and remaining_capital_short > 0:
                             count_long = 0
                             count_short = 0

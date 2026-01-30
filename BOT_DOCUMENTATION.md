@@ -82,7 +82,7 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 *   **Dynamic Rounding**: Tick size and lot size are fetched dynamically from the OKX API to ensure order precision.
 *   **Contract-Aware Notional**: Swap sizing uses `ctVal` and `ctMult` to compute quote-per-contract for each leg. Contract values are logged at entry for transparency.
 *   **Pre-Trade Balance Gate (USDT)**: On entry signal, the bot logs a USDT balance snapshot (`availBal`/`availEq`) and runs a pre-trade notional check against `availEq`. Orders are skipped if they would exceed available equity.
-*   **Liquidity Guard (Optional)**: If enabled, the bot skips entries when available liquidity / target size is below a configured ratio (`STATBOT_MIN_LIQUIDITY_RATIO`, legacy `STATBOT_LIQUIDITY_MIN_RATIO`). If the ratio fails, it first attempts to downsize per-leg capital to meet the minimum; if the adjusted target falls below the exchange minimum order size, the entry is skipped.
+*   **Liquidity Guard (Optional)**: If enabled, the bot skips entries when available liquidity / target size is below a configured ratio (`STATBOT_MIN_LIQUIDITY_RATIO`, legacy `STATBOT_LIQUIDITY_MIN_RATIO`). If the ratio fails, it first attempts to downsize per-leg capital, then progressively relaxes the minimum ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0). If the adjusted target falls below the exchange minimum order size, the entry is skipped.
 *   **Margin Mode**: Configured for **cross margin** (recommended for pairs trading). In cross mode, all positions share the account's margin pool, making it capital efficient for simultaneous long+short positions. Isolated mode requires separate margin for each position.
 
 ### Safety Exits
@@ -125,7 +125,9 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
 *   **Re-Entry Cooldown**: 5-minute wait after exit before re-entering same pair to prevent clustering at same Z-level.
 *   **Pair Universe Refresh**: If a switch finds no eligible replacement, Execution runs `Strategy/main_strategy.py` to regenerate `Strategy/output/2_cointegrated_pairs.csv` and waits 5 minutes before retrying. The refresh loop continues until a valid pair is available.
 *   **Strategy Outputs**: Strategy writes artifacts to `Strategy/output` (`1_price_list.json`, `2_cointegrated_pairs.csv`, `3_backtest_file.csv`, `4_summary_report.csv`).
-*   **Strategy Liquidity Filter**: Strategy can bias pair selection toward more liquid legs using `STATBOT_STRATEGY_LIQUIDITY_PCT`. If a scan yields zero pairs, it retries once at 0.2 and restores the default 0.3 afterward.
+*   **Strategy Liquidity Filter**: Strategy can bias pair selection toward more liquid legs using `STATBOT_STRATEGY_LIQUIDITY_PCT`. If a scan yields zero pairs, it retries at progressively lower percentiles (0.30, 0.25, 0.20, 0.15, 0.10, 0.00) and restores the base value afterward.
+*   **Strategy Fast Path (Optional)**: When `STATBOT_STRATEGY_FAST_PATH=1`, Strategy uses the kline cache plus a correlation prefilter (`STATBOT_STRATEGY_CORR_MIN`, optional `STATBOT_STRATEGY_CORR_LOOKBACK`) to reduce pair count before running full-length cointegration.
+*   **Strategy Kline Cache (Optional)**: When `STATBOT_STRATEGY_CACHE_KLINES=1`, Strategy reuses `output/1_price_list.json` and only fetches the latest candles if the gap is small (`STATBOT_STRATEGY_CACHE_MAX_GAP_BARS`, `STATBOT_STRATEGY_CACHE_REFRESH_BARS`).
 
 ### Performance Tracking (Per-Cycle Logging)
 Each trading cycle logs comprehensive performance metrics:

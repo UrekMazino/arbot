@@ -8,6 +8,8 @@
 
 import time
 
+from func_strategy_log import get_strategy_logger
+
 from config_strategy_api import market_session, time_frame, kline_limit
 
 
@@ -34,6 +36,7 @@ def get_price_klines(inst_id):
     after = None
     last_oldest = None
 
+    logger = get_strategy_logger()
     try:
         while len(collected) < target:
             batch_limit = min(100, target - len(collected))
@@ -48,7 +51,7 @@ def get_price_klines(inst_id):
             prices = market_session.get_candlesticks(**params)
 
             if prices.get('code') != '0':
-                print(f"  Error getting klines: {prices.get('msg', 'Unknown error')}")
+                logger.warning("Klines error for %s: %s", inst_id, prices.get('msg', 'Unknown error'))
                 return prices
 
             data = prices.get('data') or []
@@ -84,9 +87,44 @@ def get_price_klines(inst_id):
             prices['data'] = collected[:target]
             return prices
 
-        print("  Error getting klines: no data returned")
+        logger.warning("Klines error for %s: no data returned", inst_id)
         return {'code': '1', 'msg': 'Insufficient data', 'data': []}
 
     except Exception as e:
-        print(f"  Exception getting klines: {e}")
+        logger.exception("Klines exception for %s: %s", inst_id, e)
         return {'code': '1', 'msg': str(e), 'data': []}
+
+
+def get_latest_klines(inst_id, limit=100):
+    """
+    Get latest candlesticks without pagination (fast path).
+
+    Args:
+        inst_id: Instrument ID (e.g., 'BTC-USDT-SWAP')
+        limit: Number of candles to fetch (max 100)
+
+    Returns:
+        dict: OKX response payload
+    """
+    logger = get_strategy_logger()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 100
+    if limit <= 0:
+        limit = 1
+    if limit > 100:
+        limit = 100
+
+    try:
+        prices = market_session.get_candlesticks(
+            instId=inst_id,
+            bar=time_frame,
+            limit=str(limit),
+        )
+        if prices.get("code") != "0":
+            logger.warning("Latest klines error for %s: %s", inst_id, prices.get("msg"))
+        return prices
+    except Exception as exc:
+        logger.exception("Latest klines exception for %s: %s", inst_id, exc)
+        return {"code": "1", "msg": str(exc), "data": []}

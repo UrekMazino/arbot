@@ -9,6 +9,8 @@ import json
 import numpy as np
 import pandas as pd
 
+from func_strategy_log import get_strategy_logger
+
 from func_cointegration import extract_close_prices, calculate_spread, calculate_zscore
 
 
@@ -23,10 +25,10 @@ def _load_inputs():
     coint_path = output_dir / "2_cointegrated_pairs.csv"
 
     if not price_path.exists():
-        print(f"Error: Required file not found - {price_path}")
+        print(f"ERROR: Required file not found - {price_path}")
         return None, None
     if not coint_path.exists():
-        print(f"Error: Required file not found - {coint_path}")
+        print(f"ERROR: Required file not found - {coint_path}")
         return None, None
 
     with price_path.open("r", encoding="utf-8") as handle:
@@ -117,16 +119,15 @@ def generate_summary_report(top_n=3):
     Args:
         top_n: Number of top pairs to include (default: 3)
     """
-    print("\n" + "=" * 60)
-    print("STEP 5: Generating Summary Report (CSV)")
-    print("=" * 60)
+    logger = get_strategy_logger()
 
     price_data, df_coint = _load_inputs()
     if price_data is None or df_coint is None:
         return None
 
     if len(df_coint) == 0:
-        print("No cointegrated pairs found. Cannot generate report.")
+        print("Summary report skipped: no cointegrated pairs.")
+        logger.warning("Summary report skipped: no cointegrated pairs")
         return None
 
     first_symbol = next(iter(price_data.values()), {})
@@ -146,7 +147,8 @@ def generate_summary_report(top_n=3):
             rows.append(stats)
 
     if not rows:
-        print("No valid pair stats generated. Report skipped.")
+        print("Summary report skipped: no valid pair stats.")
+        logger.warning("Summary report skipped: no valid pair stats")
         return None
 
     output_dir = _output_dir()
@@ -160,9 +162,8 @@ def generate_summary_report(top_n=3):
     except ValueError:
         rel_path = report_path
 
-    print(f"\nOK: Summary report generated: {rel_path}")
-    print(f"   Rows: {len(df_report)}")
-    print("=" * 60 + "\n")
+    print(f"Summary report saved: {rel_path} (rows {len(df_report)})")
+    logger.info("Summary report saved: %s rows=%d", rel_path, len(df_report))
 
     return str(rel_path)
 

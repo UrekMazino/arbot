@@ -11,6 +11,7 @@ import okx.Account as Account
 import okx.MarketData as MarketData
 import okx.Trade as Trade
 import okx.PublicData as PublicData
+from func_strategy_log import get_strategy_logger
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +49,13 @@ def _env_list(name, default=""):
         return []
     return items
 
+
+def _env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
 kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 1000)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
@@ -65,6 +73,9 @@ if liquidity_pct < 0:
     liquidity_pct = 0.0
 if liquidity_pct > 1:
     liquidity_pct = 1.0
+fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
+corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.2 if fast_path_enabled else 0.0)
+corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")
@@ -104,36 +115,47 @@ trade_session = Trade.TradeAPI(
     debug=False
 )
 
-# Display configuration
-print(f"{'='*60}")
-print(f"OKX API Configuration")
-print(f"{'='*60}")
-print(f"Mode: {'DEMO/Simulated Trading' if is_demo else 'LIVE Trading'}")
-print(f"Timeframe: {time_frame}")
-print(f"Kline Limit: {kline_limit}")
-print(f"Z-Score Window: {z_score_window}")
-if min_equity_filter_usdt > 0:
-    print(f"Min Equity Filter: {min_equity_filter_usdt:.2f} USDT")
-if settle_ccy_filter:
-    print(f"Settle CCY Filter: {', '.join(settle_ccy_filter)}")
-print(
-    "Pair Filters: max_per_ticker={0}, p_value=[{1}, {2}], "
-    "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}".format(
-        max_pairs_per_ticker,
-        min_p_value_filter,
-        max_p_value_filter,
-        min_zero_crossings,
-        min_hedge_ratio,
-        max_hedge_ratio,
-        min_capital_per_leg,
-    )
-)
-if min_avg_quote_volume > 0 or liquidity_pct > 0:
-    print(
-        "Liquidity Filter: window={0} bars, min_avg_quote_vol={1}, percentile={2}".format(
-            liquidity_window,
-            min_avg_quote_volume,
-            liquidity_pct,
+def log_strategy_config(logger=None, to_console=False):
+    logger = logger or get_strategy_logger()
+    lines = [
+        "OKX Strategy Configuration",
+        f"Mode: {'DEMO' if is_demo else 'LIVE'}",
+        f"Timeframe: {time_frame}",
+        f"Kline limit: {kline_limit}",
+        f"Z-score window: {z_score_window}",
+    ]
+    if min_equity_filter_usdt > 0:
+        lines.append(f"Min equity filter: {min_equity_filter_usdt:.2f} USDT")
+    if settle_ccy_filter:
+        lines.append(f"Settle CCY filter: {', '.join(settle_ccy_filter)}")
+    lines.append(
+        "Pair filters: max_per_ticker={0}, p_value=[{1}, {2}], "
+        "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}".format(
+            max_pairs_per_ticker,
+            min_p_value_filter,
+            max_p_value_filter,
+            min_zero_crossings,
+            min_hedge_ratio,
+            max_hedge_ratio,
+            min_capital_per_leg,
         )
     )
-print(f"{'='*60}\n")
+    if min_avg_quote_volume > 0 or liquidity_pct > 0:
+        lines.append(
+            "Liquidity filter: window={0} bars, min_avg_quote_vol={1}, percentile={2}".format(
+                liquidity_window,
+                min_avg_quote_volume,
+                liquidity_pct,
+            )
+        )
+    if fast_path_enabled or corr_min_filter > 0:
+        lines.append(
+            "Fast path: enabled={0}, corr_min={1}, corr_lookback={2}".format(
+                fast_path_enabled,
+                corr_min_filter,
+                corr_lookback,
+            )
+        )
+    logger.info(" | ".join(lines))
+    if to_console:
+        print("Strategy config logged.")

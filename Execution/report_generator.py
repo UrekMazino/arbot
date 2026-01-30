@@ -628,10 +628,25 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
 
     if ending_equity is None and trades:
         ending_equity = trades[-1].get("equity_usdt")
-    if session_pnl is None and ending_equity is not None and starting_equity is not None:
-        session_pnl = ending_equity - starting_equity
+    session_pnl_source = None
+    equity_session_pnl = None
+    equity_session_pct = None
+    if ending_equity is not None and starting_equity is not None:
+        equity_session_pnl = ending_equity - starting_equity
         if starting_equity > 0:
-            session_pct = (session_pnl / starting_equity) * 100
+            equity_session_pct = (equity_session_pnl / starting_equity) * 100
+
+    if session_pnl is None and equity_session_pnl is not None:
+        session_pnl = equity_session_pnl
+        session_pct = equity_session_pct
+        session_pnl_source = "equity"
+    elif session_pnl is not None and equity_session_pnl is not None:
+        if abs(session_pnl - equity_session_pnl) > 0.01:
+            session_pnl = equity_session_pnl
+            session_pct = equity_session_pct
+            session_pnl_source = "equity_override"
+        else:
+            session_pnl_source = "log"
 
     max_drawdown = None
     max_drawdown_pct = None
@@ -730,6 +745,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "ending_equity": ending_equity,
         "session_pnl": session_pnl,
         "session_pnl_pct": session_pct,
+        "session_pnl_source": session_pnl_source,
+        "session_pnl_equity_delta": equity_session_pnl,
         "total_pnl": total_pnl,
         "total_pnl_pct": total_pnl_pct,
         "max_drawdown_usdt": max_drawdown,

@@ -4,6 +4,7 @@
 """
 
 from config_strategy_api import public_session, account_session, time_frame, settle_ccy_filter
+from func_strategy_log import get_strategy_logger
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import time
@@ -57,28 +58,38 @@ def _normalize_ccy(value):
 
 def _get_fee_rates_for_type(inst_type):
     """Get fee rates for an instrument type (OKX has same fees per type, not per instrument)"""
+    logger = get_strategy_logger()
     try:
         # Get fee rates by instrument type only
         fee_response = account_session.get_fee_rates(
             instType=inst_type
         )
 
-        print(f"\nDEBUG: Fetching fee rates for {inst_type}")
-        print(f"  Response code: {fee_response.get('code')}")
-        print(f"  Response msg: {fee_response.get('msg')}")
-        print(f"  Response data: {fee_response.get('data')}")
+        logger.debug(
+            "Fee rates response for %s: code=%s msg=%s data=%s",
+            inst_type,
+            fee_response.get("code"),
+            fee_response.get("msg"),
+            fee_response.get("data"),
+        )
 
         # OKX returns: {'code': '0', 'msg': '', 'data': [...]}
         if fee_response['code'] == '0' and fee_response['data']:
             # OKX returns fee rates by category/level
             return fee_response['data']
         else:
-            print(f"ERROR: Failed to get fee rates for {inst_type}")
-            print(f"  Code: {fee_response.get('code')}, Msg: {fee_response.get('msg')}")
+            logger.error(
+                "Failed to get fee rates for %s: code=%s msg=%s",
+                inst_type,
+                fee_response.get("code"),
+                fee_response.get("msg"),
+            )
+            print(f"ERROR: Failed to get fee rates for {inst_type}.")
             return None
 
     except Exception as e:
-        print(f"EXCEPTION getting fee rates: {e}")
+        logger.exception("Exception getting fee rates for %s: %s", inst_type, e)
+        print(f"ERROR: Exception getting fee rates for {inst_type}.")
         return None
 
 
@@ -102,9 +113,10 @@ def get_symbols_by_maker_fees(
             'negative_fee_symbols': List of symbols with negative maker fees (rebates)
         }
     """
+    logger = get_strategy_logger()
 
     # Step 1: Get all instruments
-    print("Fetching all instruments...")
+    print("Fetching instruments...")
     start_time = time.time()
 
     instruments_response = public_session.get_instruments(
@@ -113,7 +125,8 @@ def get_symbols_by_maker_fees(
 
     # OKX response format: {'code': '0', 'msg': '', 'data': [...]}
     if instruments_response['code'] != '0':
-        print(f"Error: {instruments_response['msg']}")
+        logger.error("Failed to fetch instruments: %s", instruments_response.get("msg"))
+        print("ERROR: Failed to fetch instruments.")
         return {'low_fee_symbols': [], 'negative_fee_symbols': []}
 
     all_instruments = instruments_response['data']
@@ -127,17 +140,32 @@ def get_symbols_by_maker_fees(
             inst for inst in active_instruments
             if _normalize_ccy(inst.get('settleCcy')) in settle_ccy_filter
         ]
-        print(f"Filtered by settleCcy {settle_ccy_filter}: {before} -> {len(active_instruments)}")
+        logger.info(
+            "Filtered by settleCcy %s: %d -> %d",
+            settle_ccy_filter,
+            before,
+            len(active_instruments),
+        )
 
-    print(f"Found {len(all_instruments)} total instruments")
-    print(f"Found {len(active_instruments)} active/live instruments\n")
+    print(
+        "Symbols: total={0} active={1} filtered={2}".format(
+            len(all_instruments),
+            len(active_instruments),
+            len(active_instruments),
+        )
+    )
+    logger.info(
+        "Instruments: total=%d active=%d",
+        len(all_instruments),
+        len(active_instruments),
+    )
 
     # Step 2: Get fee rates for this instrument type (same for all instruments of same type)
     print(f"Fetching fee rates for {inst_type}...")
     fee_data = _get_fee_rates_for_type(inst_type)
 
     if not fee_data:
-        print("ERROR: Could not fetch fee rates")
+        print("ERROR: Could not fetch fee rates.")
         return {'low_fee_symbols': [], 'negative_fee_symbols': [], 'all_fees': []}
 
     # Extract fee rates (usually first entry is the user's fee tier)
@@ -145,12 +173,20 @@ def get_symbols_by_maker_fees(
     maker_fee = float(fee_info.get('maker', 0))
     taker_fee = float(fee_info.get('taker', 0))
 
-    print(f"\n{'=' * 60}")
-    print(f"YOUR FEE RATES for {inst_type}:")
-    print(f"  Maker: {maker_fee * 100:.4f}%")
-    print(f"  Taker: {taker_fee * 100:.4f}%")
-    print(f"  Category: {fee_info.get('category', 'N/A')}")
-    print(f"{'=' * 60}\n")
+    print(
+        "Fee tier: maker={0:.4f}% taker={1:.4f}% category={2}".format(
+            maker_fee * 100,
+            taker_fee * 100,
+            fee_info.get("category", "N/A"),
+        )
+    )
+    logger.info(
+        "Fee tier for %s: maker=%.6f taker=%.6f category=%s",
+        inst_type,
+        maker_fee,
+        taker_fee,
+        fee_info.get("category", "N/A"),
+    )
 
     # Step 3: Apply the same fee to all instruments
     low_fee_symbols = []
@@ -191,24 +227,25 @@ def get_symbols_by_maker_fees(
             low_fee_symbols.append(result)
 
     elapsed = time.time() - start_time
-
-    # Find lowest maker fees
+    # Find lowest maker fees (log only)
     if all_fees:
-        all_fees_sorted = sorted(all_fees, key=lambda x: x[1])  # Sort by maker fee
+        all_fees_sorted = sorted(all_fees, key=lambda x: x[1])
         lowest_10 = all_fees_sorted[:10]
+        logger.info("Lowest 10 maker fees: %s", lowest_10)
 
-        print(f"\n{'=' * 60}")
-        print(f"LOWEST 10 MAKER FEES:")
-        print(f"{'=' * 60}")
-        for symbol, maker, taker in lowest_10:
-            print(f"{symbol:<20} Maker: {maker * 100:.4f}% | Taker: {taker * 100:.4f}%")
-
-    print(f"\n{'=' * 60}")
-    print(f"✅ Completed in {elapsed:.2f} seconds")
-    print(f"📊 Found {len(low_fee_symbols)} symbols with maker fee < {max_maker_fee * 100}%")
-    print(f"💰 Found {len(negative_fee_symbols)} symbols with maker rebates")
-    print(f"{'=' * 60}\n")
-
+    print(
+        "Symbols: low_fee={0} rebates={1} elapsed={2:.2f}s".format(
+            len(low_fee_symbols),
+            len(negative_fee_symbols),
+            elapsed,
+        )
+    )
+    logger.info(
+        "Symbol fee scan done: low_fee=%d rebates=%d elapsed=%.2fs",
+        len(low_fee_symbols),
+        len(negative_fee_symbols),
+        elapsed,
+    )
     return {
         'low_fee_symbols': low_fee_symbols,
         'negative_fee_symbols': negative_fee_symbols,

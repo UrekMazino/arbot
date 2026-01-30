@@ -17,9 +17,9 @@ def _safe_float(value):
 
 def log_order_fills(order_id, inst_id, max_wait_seconds=2.0, poll_interval=0.5):
     if not order_id or not inst_id:
-        return
+        return None
     if order_id in _logged_order_ids:
-        return
+        return None
 
     deadline = time.time() + max_wait_seconds
     fills = []
@@ -33,8 +33,7 @@ def log_order_fills(order_id, inst_id, max_wait_seconds=2.0, poll_interval=0.5):
             )
         except Exception as exc:
             logger.warning("Fill lookup failed for %s ordId=%s: %s", inst_id, order_id, exc)
-            _logged_order_ids.add(order_id)
-            return
+            return None
 
         if response.get("code") == "0":
             fills = response.get("data", [])
@@ -44,8 +43,7 @@ def log_order_fills(order_id, inst_id, max_wait_seconds=2.0, poll_interval=0.5):
 
     if not fills:
         logger.debug("No fills returned yet for %s ordId=%s", inst_id, order_id)
-        _logged_order_ids.add(order_id)
-        return
+        return None
 
     total_qty = sum(_safe_float(fill.get("fillSz")) for fill in fills)
     total_notional = sum(
@@ -83,3 +81,12 @@ def log_order_fills(order_id, inst_id, max_wait_seconds=2.0, poll_interval=0.5):
         )
 
     _logged_order_ids.add(order_id)
+    return {
+        "inst_id": inst_id,
+        "order_id": order_id,
+        "count": len(fills),
+        "qty": total_qty,
+        "avg_px": avg_px,
+        "fee": total_fee,
+        "pnl": total_pnl,
+    }

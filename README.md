@@ -56,7 +56,7 @@ python func_get_symbols.py
 ## Strategy Liquidity Filter
 
 The Strategy can bias pair selection toward more liquid legs using average quote volume from recent klines.
-If a scan yields zero cointegrated pairs, it retries once at a looser percentile and restores the default afterward.
+If a scan yields zero cointegrated pairs, it retries with progressively lower percentiles and restores the base value afterward.
 
 Configure in `OKXStatBot/Strategy/.env`:
 ```env
@@ -65,7 +65,26 @@ STATBOT_STRATEGY_LIQUIDITY_PCT=0.3
 ```
 
 Fallback behavior:
-- If no pairs are found at 0.3, Strategy retries at 0.2 once, then restores 0.3.
+- If no pairs are found at 0.30, Strategy retries at 0.25, 0.20, 0.15, 0.10, then 0.00, and restores the base value after success.
+
+## Strategy Performance Tuning
+
+Enable the fast path for large universes (keeps accuracy by using full-length cointegration after a light prefilter):
+
+```env
+STATBOT_STRATEGY_FAST_PATH=1
+STATBOT_STRATEGY_CORR_MIN=0.2        # correlation prefilter on log returns (set 0 to disable)
+STATBOT_STRATEGY_CORR_LOOKBACK=0     # 0 = full length, or set a bar count for faster prefilter
+```
+
+Enable incremental kline caching to avoid refetching all 1440 candles every run:
+
+```env
+STATBOT_STRATEGY_CACHE_KLINES=1
+STATBOT_STRATEGY_CACHE_MAX_GAP_BARS=120
+STATBOT_STRATEGY_CACHE_REFRESH_BARS=100
+STATBOT_STRATEGY_CACHE_SLEEP=0.05
+```
 
 ## Strategy Outputs
 
@@ -161,6 +180,7 @@ STATBOT_MIN_LIQUIDITY_RATIO=3.0
 ```
 Behavior:
 - If a leg fails the ratio, the bot attempts to downsize per-leg capital to meet the minimum.
+- If the ratio still fails, the bot progressively relaxes the min ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
 - If the adjusted target drops below the exchange min order size, the entry is skipped.
 
 ### Molt/Clawdbot alerts (optional)

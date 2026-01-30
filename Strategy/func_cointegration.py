@@ -11,6 +11,9 @@ from config_strategy_api import (
     liquidity_window,
     min_avg_quote_volume,
     liquidity_pct,
+    fast_path_enabled,
+    corr_min_filter,
+    corr_lookback,
 )
 from pathlib import Path
 import json
@@ -22,9 +25,10 @@ import math
 import warnings
 from decimal import Decimal, ROUND_UP
 from itertools import combinations
+from func_strategy_log import get_strategy_logger
 
 def _load_restricted_tickers():
-    state_path = Path(__file__).resolve().parents[1] / "Execution" / "pair_strategy_state.json"
+    state_path = Path(__file__).resolve().parents[1] / "Execution" / "state" / "pair_strategy_state.json"
     if not state_path.exists():
         return set()
     try:
@@ -166,6 +170,87 @@ def calculate_cointegration(series_1, series_2):
         return 0, None, None, None, None, 0
 
 
+def calculate_cointegration_from_log(series_1_log, series_2_log):
+    """
+    Calculate cointegration using precomputed log prices.
+
+    Args:
+        series_1_log: Log-transformed prices for series 1
+        series_2_log: Log-transformed prices for series 2
+
+    Returns:
+        tuple: (coint_flag, p_value, adf_stat, crit_val, hedge_ratio, zero_crossings)
+    """
+    coint_flag = 0
+
+    series_1_log = np.array(series_1_log, dtype=float)
+    series_2_log = np.array(series_2_log, dtype=float)
+
+    min_len = min(len(series_1_log), len(series_2_log))
+    if min_len < 2:
+        return 0, None, None, None, None, 0
+
+    if len(series_1_log) != len(series_2_log):
+        series_1_log = series_1_log[-min_len:]
+        series_2_log = series_2_log[-min_len:]
+
+    if np.any(np.isnan(series_1_log)) or np.any(np.isnan(series_2_log)):
+        return 0, None, None, None, None, 0
+    if np.std(series_1_log) == 0 or np.std(series_2_log) == 0:
+        return 0, None, None, None, None, 0
+
+    try:
+        adf_statistic, p_value, critical_values = coint(series_1_log, series_2_log)
+
+        series_2_const = sm.add_constant(series_2_log)
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=RuntimeWarning)
+            models = sm.OLS(series_1_log, series_2_const).fit()
+
+        hedge_ratio = float(models.params[1] if len(models.params) > 1 else models.params[0])
+
+        spread = calculate_spread(series_1_log, series_2_log, hedge_ratio)
+        spread = pd.Series(spread)
+
+        zero_crossings = count_zero_crossings(spread)
+
+        if np.isfinite(p_value) and p_value < 0.05 and adf_statistic < critical_values[1]:
+            coint_flag = 1
+
+        return (
+            coint_flag,
+            p_value,
+            adf_statistic,
+            critical_values[1],
+            hedge_ratio,
+            zero_crossings
+        )
+
+    except (ValueError, np.linalg.LinAlgError):
+        return 0, None, None, None, None, 0
+
+
+def _corrcoef_fast(series_a, series_b):
+    if series_a.size < 2 or series_b.size < 2:
+        return None
+    a = series_a.astype(float)
+    b = series_b.astype(float)
+    min_len = min(a.size, b.size)
+    if min_len < 2:
+        return None
+    if a.size != b.size:
+        a = a[-min_len:]
+        b = b[-min_len:]
+    a_mean = a.mean()
+    b_mean = b.mean()
+    a = a - a_mean
+    b = b - b_mean
+    denom = math.sqrt(float((a * a).sum()) * float((b * b).sum()))
+    if denom <= 0:
+        return None
+    return float((a * b).sum() / denom)
+
+
 # Put close prices into a list
 def extract_close_prices(klines):
     close_prices = []
@@ -247,10 +332,16 @@ def _average_quote_volume(klines, window):
 
 
 # Get co-integrated pairs
-def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_quote_volume_override=None):
+def get_cointegrated_pairs(
+    json_symbols,
+    liquidity_pct_override=None,
+    min_avg_quote_volume_override=None,
+    corr_min_override=None,
+):
     """
     Find all cointegrated pairs from symbol data
     """
+    logger = get_strategy_logger()
     coint_pair_list = []
     total_comparisons = 0
     pairs_with_crossings = 0
@@ -258,11 +349,27 @@ def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_qu
     restricted_removed = 0
 
     series_by_symbol = {}
+    log_series_by_symbol = {}
+    returns_by_symbol = {}
     symbol_meta = {}
     for sym, data in json_symbols.items():
         series = extract_close_prices(data['klines'])
-        if series:
-            series_by_symbol[sym] = np.array(series, dtype=float)
+        if not series:
+            continue
+        series = np.array(series, dtype=float)
+        if np.any(np.isnan(series)) or np.any(series <= 0):
+            continue
+        log_series = np.log(series)
+        if np.std(log_series) == 0:
+            continue
+
+        series_by_symbol[sym] = series
+        log_series_by_symbol[sym] = log_series
+        returns = np.diff(log_series)
+        if corr_lookback and corr_lookback > 0 and returns.size > corr_lookback:
+            returns = returns[-corr_lookback:]
+        returns_by_symbol[sym] = returns
+
         info = data.get('symbol_info', {}) if isinstance(data, dict) else {}
         klines = data.get('klines', []) if isinstance(data, dict) else []
         min_sz = info.get('min_sz') if isinstance(info, dict) else None
@@ -271,7 +378,7 @@ def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_qu
             min_sz = info.get('minSz')
         if lot_sz is None and isinstance(info, dict):
             lot_sz = info.get('lotSz')
-        last_close = series[-1] if series else None
+        last_close = series[-1] if series.size else None
         min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz)
         avg_quote_volume = _average_quote_volume(klines, liquidity_window)
         symbol_meta[sym] = {
@@ -287,15 +394,39 @@ def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_qu
         symbols = [sym for sym in symbols if sym not in restricted_tickers]
         restricted_removed = before - len(symbols)
 
-    for sym_1, sym_2 in combinations(symbols, 2):
-        series_1 = series_by_symbol[sym_1]
-        series_2 = series_by_symbol[sym_2]
+    if corr_min_override is not None:
+        try:
+            corr_min = float(corr_min_override)
+        except (TypeError, ValueError):
+            corr_min = 0.0
+    else:
+        corr_min = corr_min_filter if fast_path_enabled else 0.0
 
-        # Check for cointegration
-        coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = calculate_cointegration(
-            series_1, series_2)
+    filtered_breakdown = {}
+
+    for sym_1, sym_2 in combinations(symbols, 2):
+        series_1_log = log_series_by_symbol[sym_1]
+        series_2_log = log_series_by_symbol[sym_2]
 
         total_comparisons += 1
+
+        if corr_min and corr_min > 0:
+            ret_1 = returns_by_symbol.get(sym_1)
+            ret_2 = returns_by_symbol.get(sym_2)
+            if ret_1 is None or ret_2 is None:
+                continue
+            corr_value = _corrcoef_fast(ret_1, ret_2)
+            if corr_value is None or not np.isfinite(corr_value):
+                filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
+                continue
+            if abs(corr_value) < corr_min:
+                filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
+                continue
+
+        # Check for cointegration using precomputed logs
+        coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
+            calculate_cointegration_from_log(series_1_log, series_2_log)
+        )
 
         if coint_flag == 1:
             if zero_crossings > 0:
@@ -332,7 +463,6 @@ def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_qu
     df_coint = pd.DataFrame(coint_pair_list)
     df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
     filtered_count = 0
-    filtered_breakdown = {}
     liquidity_pct_cutoff = None
     active_liquidity_pct = (
         liquidity_pct_override if liquidity_pct_override is not None else liquidity_pct
@@ -414,45 +544,38 @@ def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_qu
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
     df_coint.to_csv(output_path, index=False)
+    summary = {
+        "total_pairs": total_comparisons,
+        "cointegrated_pairs": len(coint_pair_list),
+        "pairs_with_crossings": pairs_with_crossings,
+        "pairs_without_crossings": len(coint_pair_list) - pairs_with_crossings,
+        "filtered_breakdown": filtered_breakdown,
+        "corr_min": corr_min,
+        "corr_lookback": corr_lookback,
+        "corr_filtered": filtered_breakdown.get("corr", 0),
+        "liquidity_pct": active_liquidity_pct,
+        "liquidity_pct_cutoff": liquidity_pct_cutoff,
+        "min_equity_filtered": filtered_count,
+        "restricted_removed": restricted_removed,
+        "pairs_kept": len(df_coint),
+    }
 
-    # Print statistics
-    print(f"\n{'=' * 60}")
-    print(f"COINTEGRATION ANALYSIS RESULTS")
-    print(f"{'=' * 60}")
-    print(f"Total pairs analyzed:        {total_comparisons:,}")
-    print(f"Cointegrated pairs found:    {len(coint_pair_list):,}")
-    print(f"Pairs with crossings (>0):   {pairs_with_crossings:,}")
-    print(f"Pairs without crossings:     {len(coint_pair_list) - pairs_with_crossings:,}")
-    if filtered_breakdown:
-        for key, count in filtered_breakdown.items():
-            if count:
-                print(f"Pairs filtered by {key}: {count:,}")
-    if liquidity_pct_cutoff is not None:
-        print(
-            "Liquidity percentile cutoff: {0:.4f} (pct={1})".format(
-                liquidity_pct_cutoff,
-                active_liquidity_pct,
-            )
-        )
-    if filtered_count:
-        print(f"Pairs filtered by min equity: {filtered_count:,} (threshold: {min_equity_filter_usdt:.2f} USDT)")
-    if restricted_removed:
-        print(f"Symbols filtered by compliance restrictions: {restricted_removed:,}")
+    if len(df_coint) > 0 and "zero_crossing" in df_coint.columns:
+        summary["zero_crossing"] = {
+            "min": float(df_coint["zero_crossing"].min()),
+            "max": float(df_coint["zero_crossing"].max()),
+            "mean": float(df_coint["zero_crossing"].mean()),
+            "median": float(df_coint["zero_crossing"].median()),
+        }
+    if "min_capital_per_leg" in df_coint.columns:
+        min_caps = df_coint["min_capital_per_leg"].dropna().astype(float).tolist()
+        if min_caps:
+            max_per_leg = max(min_caps)
+            summary["min_capital"] = {
+                "max_per_leg": float(max_per_leg),
+                "recommended_equity": float(max_per_leg * 2),
+            }
 
-    if len(df_coint) > 0:
-        print(f"\nZero Crossings Statistics:")
-        print(f"  Min:     {df_coint['zero_crossing'].min()}")
-        print(f"  Max:     {df_coint['zero_crossing'].max()}")
-        print(f"  Mean:    {df_coint['zero_crossing'].mean():.2f}")
-        print(f"  Median:  {df_coint['zero_crossing'].median():.0f}")
+    logger.info("Cointegration summary: %s", summary)
 
-        if "min_capital_per_leg" in df_coint.columns:
-            min_caps = df_coint["min_capital_per_leg"].dropna().astype(float).tolist()
-            if min_caps:
-                max_per_leg = max(min_caps)
-                print("\nMin Capital Summary:")
-                print(f"  Max per-leg min capital: {max_per_leg:.4f} USDT")
-                print(f"  Recommended starting equity: {max_per_leg * 2:.4f} USDT")
-    print(f"{'=' * 60}\n")
-
-    return df_coint
+    return df_coint, summary

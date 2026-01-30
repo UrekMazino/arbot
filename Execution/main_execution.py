@@ -82,7 +82,7 @@ logger = get_logger("main_execution")
 SWITCH_RESULT_SWITCHED = "switched"
 SWITCH_RESULT_BLOCKED = "blocked"
 SWITCH_RESULT_HARD_STOP = "hard_stop"
-STRATEGY_REFRESH_SLEEP_SECONDS = 300
+STRATEGY_REFRESH_SLEEP_SECONDS = 5
 _PNL_LOG_INTERVAL_SECONDS = 60
 _PNL_LOG_DELTA_THRESHOLD = 0.5
 _LAST_PNL_LOG_TS = 0.0
@@ -975,6 +975,12 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
 
     used_positions = 0
     tickers = {ticker_p, ticker_n}
+    pnl_info = {
+        "source": "upl",
+        "used_positions": 0,
+        "fallback_legs": 0,
+        "fallback_basis": "",
+    }
 
     for pos in positions:
         if not isinstance(pos, dict):
@@ -998,16 +1004,21 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
                 pnl_pct,
                 -tradeable_capital_usdt * max_drawdown_pct,
             )
-        return total_pnl, pnl_pct
+        pnl_info["source"] = "upl"
+        pnl_info["used_positions"] = used_positions
+        return total_pnl, pnl_pct, pnl_info
 
     try:
         total_pnl = 0.0
+        fallback_basis = []
+        fallback_legs = 0
         # Fallback to price-based estimate if position UPL is unavailable.
         for ticker, price_override in [(ticker_p, price_p), (ticker_n, price_n)]:
             for direction in ["Long", "Short"]:
                 entry_price, size = get_pos_data_from_state(state, ticker, direction=direction)
                 if entry_price and size and size > 0:
                     current_price = price_override
+                    basis = "override" if current_price else "last_trade"
                     if not current_price:
                         _, current_price = get_ticker_trade_liquidity(ticker, limit=1)
 
@@ -1017,6 +1028,8 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
                         else:
                             pnl = (entry_price - current_price) * size
                         total_pnl += pnl
+                        fallback_legs += 1
+                        fallback_basis.append(f"{ticker}:{basis}")
                         logger.debug(
                             "P&L %s %s: entry=%.4f current=%.4f size=%.6f pnl=%.2f",
                             ticker,
@@ -1035,10 +1048,19 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
                 pnl_pct,
                 -tradeable_capital_usdt * max_drawdown_pct,
             )
-        return total_pnl, pnl_pct
+        pnl_info["source"] = "fallback"
+        pnl_info["fallback_legs"] = fallback_legs
+        pnl_info["fallback_basis"] = ",".join(fallback_basis)
+        logger.info(
+            "PnL fallback used: legs=%d basis=%s",
+            fallback_legs,
+            pnl_info["fallback_basis"] or "last_trade",
+        )
+        return total_pnl, pnl_pct, pnl_info
     except Exception as e:
         logger.error(f"Error calculating P&L: {e}")
-        return 0.0, 0.0
+        pnl_info["source"] = "error"
+        return 0.0, 0.0, pnl_info
 
 
 """ RUN STATBOT """
@@ -1358,7 +1380,7 @@ if __name__ == "__main__":
                     logger.error("Pair switch blocked. Will retry next cycle.")
 
             # 3. CIRCUIT BREAKER: Check cumulative P&L
-            total_pnl, pnl_pct = _calculate_cumulative_pnl(
+            total_pnl, pnl_pct, pnl_info = _calculate_cumulative_pnl(
                 signal_positive_ticker, signal_negative_ticker,
                 acc_state, price_p, price_n
             )
@@ -1421,11 +1443,32 @@ if __name__ == "__main__":
                             continue
                         if abs(pos_val) > 0:
                             other_positions.append(inst_id)
+                    other_orders = []
+                    pair_orders = 0
+                    for ord_item in acc_state.get("orders", []):
+                        if not isinstance(ord_item, dict):
+                            continue
+                        inst_id = ord_item.get("instId")
+                        if not inst_id:
+                            continue
+                        if inst_id in (signal_positive_ticker, signal_negative_ticker):
+                            pair_orders += 1
+                        else:
+                            other_orders.append(inst_id)
                     other_note = ""
                     if other_positions:
                         preview = ", ".join(other_positions[:5])
                         suffix = "..." if len(other_positions) > 5 else ""
                         other_note = f" other_positions={len(other_positions)} [{preview}{suffix}]"
+                    if other_orders:
+                        preview = ", ".join(other_orders[:5])
+                        suffix = "..." if len(other_orders) > 5 else ""
+                        other_note += f" other_orders={len(other_orders)} [{preview}{suffix}]"
+                    if pair_orders:
+                        other_note += f" pair_orders={pair_orders}"
+                    if pnl_info and pnl_info.get("source") == "fallback":
+                        basis = pnl_info.get("fallback_basis") or "last_trade"
+                        other_note += f" pnl_source=fallback basis={basis}"
                     logger.warning(
                         "Equity delta %.2f USDT differs from pair PnL delta %.2f USDT by %.2f USDT.%s",
                         equity_delta,

@@ -1,15 +1,20 @@
 {
-    "last_switch_time": 1769725167.5188959,
+    "last_switch_time": 1769744717.538568,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
             "reason": "orderbook_dead",
             "ttl_days": 30
         },
-        "XRP-USDT-SWAP/KSM-USDT-SWAP": {
-            "ts": 1769725167.5178962,
-            "reason": "cointegration_lost",
-            "ttl_days": 0.003472222222222222
+        "ATOM-USDT-SWAP/LPT-USDT-SWAP": {
+            "ts": 1769735981.841063,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "INJ-USDT-SWAP/KSM-USDT-SWAP": {
+            "ts": 1769744707.6870005,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "restricted_tickers": {},
@@ -23,15 +28,33 @@
     "last_switch_reason": "cointegration_lost",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
-    "persistence_history": [
-        2.1018096161233273,
-        1.500127536141917,
-        1.0278200771136707,
-        0.8014710190495345,
-        0.3345670723326126
-    ],
-    "last_exit_time": 1769723493.783875,
+    "persistence_history": [],
+    "last_exit_time": 1769744640.759171,
     "z_history": [],
-    "hospital": {},
-    "pair_history": {}
+    "hospital": {
+        "LTC-USDT-SWAP/SOL-USDT-SWAP": {
+            "ts": 1769744717.5365672,
+            "cooldown": 300,
+            "reason": "cointegration_lost",
+            "visits": 2
+        }
+    },
+    "pair_history": {
+        "LTC-USDT-SWAP/SOL-USDT-SWAP": {
+            "wins": 5,
+            "losses": 0,
+            "win_usdt": 70.93565014999967,
+            "loss_usdt": 0.0,
+            "trades": 5,
+            "last_trade_ts": 1769743582.171984
+        },
+        "INJ-USDT-SWAP/KSM-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.005769699999746081,
+            "trades": 1,
+            "last_trade_ts": 1769744638.1490858
+        }
+    }
 }

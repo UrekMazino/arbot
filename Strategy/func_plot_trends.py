@@ -2,6 +2,7 @@ from func_cointegration import extract_close_prices
 from func_cointegration import calculate_cointegration
 from func_cointegration import calculate_spread
 from func_cointegration import calculate_zscore
+from func_strategy_log import get_strategy_logger
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -19,6 +20,7 @@ def plot_trends(sym_1, sym_2, price_data):
         price_data: Dictionary containing klines data
     """
 
+    logger = get_strategy_logger()
     # Extract close prices
     prices_1 = extract_close_prices(price_data[sym_1]['klines'])
     prices_2 = extract_close_prices(price_data[sym_2]['klines'])
@@ -29,32 +31,34 @@ def plot_trends(sym_1, sym_2, price_data):
 
     # Check if price extraction was successful
     if len(prices_1) == 0:
-        print(f"\nWARNING: Skipping pair: {sym_1} contains NaN values or was filtered out.")
-        print("   Solution: Choose a different symbol with valid price data.\n")
+        logger.warning("Skipping pair %s: invalid price data", sym_1)
+        print(f"WARNING: Skipping plot for {sym_1} (invalid data).")
         return
     if len(prices_2) == 0:
-        print(f"\nWARNING: Skipping pair: {sym_2} contains NaN values or was filtered out.")
-        print("   Solution: Choose a different symbol with valid price data.\n")
+        logger.warning("Skipping pair %s: invalid price data", sym_2)
+        print(f"WARNING: Skipping plot for {sym_2} (invalid data).")
         return
 
     # Check for zero variance
     if len(set(prices_1)) == 1:
-        print(f"\nWARNING: Skipping pair: {sym_1} has zero price movement (price: {prices_1[0]}).")
-        print(f"   Reason: All {len(prices_1)} candles have identical close prices.")
-        print("   Solution: Choose an actively traded symbol with price volatility.\n")
+        logger.warning("Skipping pair %s: zero variance", sym_1)
+        print(f"WARNING: Skipping plot for {sym_1} (zero variance).")
         return
     if len(set(prices_2)) == 1:
-        print(f"\nWARNING: Skipping pair: {sym_2} has zero price movement (price: {prices_2[0]}).")
-        print(f"   Reason: All {len(prices_2)} candles have identical close prices.")
-        print("   Solution: Choose an actively traded symbol with price volatility.\n")
+        logger.warning("Skipping pair %s: zero variance", sym_2)
+        print(f"WARNING: Skipping plot for {sym_2} (zero variance).")
         return
 
     # Align lengths to avoid broadcast errors when one series has a missing candle
     if len(prices_1) != len(prices_2):
         min_len = min(len(prices_1), len(prices_2))
-        print(
-            f"WARNING: Length mismatch for {sym_1}/{sym_2} "
-            f"({len(prices_1)} vs {len(prices_2)}). Trimming to {min_len}."
+        logger.warning(
+            "Length mismatch for %s/%s (%d vs %d). Trimming to %d.",
+            sym_1,
+            sym_2,
+            len(prices_1),
+            len(prices_2),
+            min_len,
         )
         prices_1 = prices_1[-min_len:]
         prices_2 = prices_2[-min_len:]
@@ -67,21 +71,21 @@ def plot_trends(sym_1, sym_2, price_data):
     coint_flag, p_value, adf_statistic, critical_value, hedge_ratio, zero_crossings = calculate_cointegration(
         prices_1, prices_2
     )
-
-    # Print cointegration results
-    print(f"\n{'=' * 60}")
-    print(f"Cointegration Analysis: {sym_1} / {sym_2}")
-    print(f"{'=' * 60}")
-    print(f"Cointegrated:     {'YES' if coint_flag == 1 else 'NO'}")
-    print(f"P-value:          {p_value}")
-    print(f"ADF Statistic:    {adf_statistic}")
-    print(f"Critical Value:   {critical_value}")
-    print(f"Hedge Ratio:      {hedge_ratio}")
-    print(f"Zero Crossings:   {zero_crossings}")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "Cointegration analysis %s/%s: flag=%s p=%.6f adf=%.6f crit=%.6f hedge=%.6f zero=%s",
+        sym_1,
+        sym_2,
+        coint_flag,
+        p_value if p_value is not None else float("nan"),
+        adf_statistic if adf_statistic is not None else float("nan"),
+        critical_value if critical_value is not None else float("nan"),
+        hedge_ratio if hedge_ratio is not None else float("nan"),
+        zero_crossings,
+    )
 
     if hedge_ratio is None or not np.isfinite(hedge_ratio):
-        print(f"WARNING: Skipping spread/z-score; invalid hedge ratio for {sym_1} / {sym_2}.\n")
+        logger.warning("Skipping spread/zscore for %s/%s: invalid hedge ratio", sym_1, sym_2)
+        print(f"WARNING: Skipping plot for {sym_1}/{sym_2} (invalid hedge ratio).")
         return
 
     # Log transform prices BEFORE calculating spread
@@ -117,24 +121,34 @@ def plot_trends(sym_1, sym_2, price_data):
         rel_path = output_path.relative_to(Path(__file__).resolve().parent)
     except ValueError:
         rel_path = output_path
-    print(f"OK: File for backtesting saved: {rel_path}")
+    print(f"Backtest saved: {rel_path}")
+    logger.info("Backtest file saved: %s", rel_path)
 
-    # Spread statistics
-    print(f"\nSpread Statistics:")
-    print(f"  Mean:    {np.mean(spread):.6f}")
-    print(f"  Std:     {np.std(spread):.6f}")
-    print(f"  Min:     {np.min(spread):.6f}")
-    print(f"  Max:     {np.max(spread):.6f}")
-    print(f"  Current: {spread[-1]:.6f}")
+    # Spread statistics (log only)
+    logger.info(
+        "Spread stats %s/%s: mean=%.6f std=%.6f min=%.6f max=%.6f current=%.6f",
+        sym_1,
+        sym_2,
+        float(np.mean(spread)),
+        float(np.std(spread)),
+        float(np.min(spread)),
+        float(np.max(spread)),
+        float(spread[-1]),
+    )
 
-    print(f"\nZ-Score Statistics:")
+    # Z-score statistics (log only)
     zscore_clean = zscore[~np.isnan(zscore)]
     if len(zscore_clean) > 0:
-        print(f"  Mean:    {np.mean(zscore_clean):.4f}")
-        print(f"  Std:     {np.std(zscore_clean):.4f}")
-        print(f"  Min:     {np.min(zscore_clean):.4f}")
-        print(f"  Max:     {np.max(zscore_clean):.4f}")
-        print(f"  Current: {zscore_clean[-1]:.4f}")
+        logger.info(
+            "Zscore stats %s/%s: mean=%.4f std=%.4f min=%.4f max=%.4f current=%.4f",
+            sym_1,
+            sym_2,
+            float(np.mean(zscore_clean)),
+            float(np.std(zscore_clean)),
+            float(np.min(zscore_clean)),
+            float(np.max(zscore_clean)),
+            float(zscore_clean[-1]),
+        )
 
     # Plot chart
     fig, axs = plt.subplots(3, figsize=(16, 10), sharex=True)
@@ -176,5 +190,4 @@ def plot_trends(sym_1, sym_2, price_data):
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
     plt.show()
-
-    print("\nOK: Plot displayed successfully!\n")
+    print("Plot displayed.")

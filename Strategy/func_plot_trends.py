@@ -2,6 +2,7 @@ from func_cointegration import extract_close_prices
 from func_cointegration import calculate_cointegration
 from func_cointegration import calculate_spread
 from func_cointegration import calculate_zscore
+from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -47,6 +48,16 @@ def plot_trends(sym_1, sym_2, price_data):
         print(f"   Reason: All {len(prices_2)} candles have identical close prices.")
         print("   Solution: Choose an actively traded symbol with price volatility.\n")
         return
+
+    # Align lengths to avoid broadcast errors when one series has a missing candle
+    if len(prices_1) != len(prices_2):
+        min_len = min(len(prices_1), len(prices_2))
+        print(
+            f"WARNING: Length mismatch for {sym_1}/{sym_2} "
+            f"({len(prices_1)} vs {len(prices_2)}). Trimming to {min_len}."
+        )
+        prices_1 = prices_1[-min_len:]
+        prices_2 = prices_2[-min_len:]
 
     # Convert to numpy arrays
     prices_1 = np.array(prices_1, dtype=float)
@@ -98,8 +109,15 @@ def plot_trends(sym_1, sym_2, price_data):
     df_2[f"{sym_2}_log"] = log_prices_2  # Log prices
     df_2["Spread"] = spread
     df_2["ZScore"] = zscore
-    df_2.to_csv('3_backtest_file.csv', index=False)
-    print("OK: File for backtesting saved: 3_backtest_file.csv")
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "3_backtest_file.csv"
+    df_2.to_csv(output_path, index=False)
+    try:
+        rel_path = output_path.relative_to(Path(__file__).resolve().parent)
+    except ValueError:
+        rel_path = output_path
+    print(f"OK: File for backtesting saved: {rel_path}")
 
     # Spread statistics
     print(f"\nSpread Statistics:")

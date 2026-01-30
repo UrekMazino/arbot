@@ -41,11 +41,39 @@ cd Execution
 python main_execution.py
 ```
 
+Pre-live fee/rebate check (prints fee tier and recent bills):
+```bash
+cd Execution
+python pre_live_checklist.py --mode live --inst-type SWAP
+```
+
 Test getting symbols by maker fees:
 ```bash
 cd Strategy
 python func_get_symbols.py
 ```
+
+## Strategy Liquidity Filter
+
+The Strategy can bias pair selection toward more liquid legs using average quote volume from recent klines.
+If a scan yields zero cointegrated pairs, it retries once at a looser percentile and restores the default afterward.
+
+Configure in `OKXStatBot/Strategy/.env`:
+```env
+STATBOT_STRATEGY_LIQUIDITY_WINDOW=60
+STATBOT_STRATEGY_LIQUIDITY_PCT=0.3
+```
+
+Fallback behavior:
+- If no pairs are found at 0.3, Strategy retries at 0.2 once, then restores 0.3.
+
+## Strategy Outputs
+
+Strategy outputs are stored under `OKXStatBot/Strategy/output`:
+- `1_price_list.json`
+- `2_cointegrated_pairs.csv`
+- `3_backtest_file.csv`
+- `4_summary_report.csv` (overwritten each run)
 
 ## Documentation
 
@@ -69,7 +97,7 @@ StatBot v1.0 is considered stable after a staged rollout:
 ## Logging & Alerts
 
 ### Logs
-- Per-run logs live in `OKXStatBot/Logs` as `log_MM_MMDDYY_HHMMSS.log`
+- Per-run logs live in `OKXStatBot/Logs/v1/run_XX_YYYYMMDD_HHMMSS/log_YYYYMMDD_HHMMSS.log`
 - Control size/retention in `Execution/.env`:
 ```env
 STATBOT_LOG_MAX_MB=4
@@ -77,15 +105,33 @@ STATBOT_LOG_BACKUPS=2
 STATBOT_LOG_LEVEL=INFO
 ```
 
+At `OKXStatBot/Logs/v1`, an index is maintained:
+- `index.json` (all runs + key log metadata)
+- `index.csv` (CSV version of the same index)
+
+### Execution State Files
+Runtime state is stored under `OKXStatBot/Execution/state`:
+- `active_pair.json`
+- `status.json`
+- `pair_strategy_state.json`
+
 ### Reports (v1 evidence packs)
-After each run, StatBot can generate a report pack under `OKXStatBot/Reports/run_YYYYMMDD_HHMMSS`:
+After each run, StatBot can generate a report pack under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS`:
 - `summary.json` (run metadata + performance summary)
-- `summary.txt` (human-readable summary)
+- `summary.txt` (executive summary + files list)
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `trades.csv` (trade closes with PnL and hold time)
 - `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)
+- `entry_slippage.csv` (entry fill slippage vs preview price, bps)
 - `alerts.txt` (errors, PNL alerts, critical events)
 - `config_snapshot.json` (redacted .env snapshot)
+
+At `OKXStatBot/Reports/v1`, an index is maintained for quick review:
+- `index.json` (all runs + key metrics)
+- `index.csv` (same, CSV-friendly)
+
+Manual/analysis runs:
+- If you run `report_generator.py --output` with a name starting with `manual` or `analysis`, it will be saved under `run_XX_.../variants/<name>` to keep run numbers aligned.
 
 Enable/disable:
 ```env
@@ -95,6 +141,27 @@ Optional uptime trigger:
 ```env
 STATBOT_REPORT_UPTIME_HOURS=24
 ```
+
+Run end tracking:
+- Logs emit `RUN_END: reason=... detail=... exit_code=...`
+- Reports capture `run_end_reason`, `run_end_detail`, `run_end_time`
+- Reasons: `manual_stop`, `error`, `max_uptime`, `max_cycles`, `circuit_breaker`
+
+Max uptime (optional):
+```env
+STATBOT_MAX_UPTIME_HOURS=24
+```
+
+### Liquidity guard (optional)
+Skip entries when available liquidity is too thin for the target size (liquidity/target):
+```env
+STATBOT_MIN_LIQUIDITY_RATIO=3.0
+# Legacy name (same meaning):
+# STATBOT_LIQUIDITY_MIN_RATIO=3.0
+```
+Behavior:
+- If a leg fails the ratio, the bot attempts to downsize per-leg capital to meet the minimum.
+- If the adjusted target drops below the exchange min order size, the entry is skipped.
 
 ### Molt/Clawdbot alerts (optional)
 Monitor logs and push executive alerts (errors, circuit breaks, PNL alerts) to Discord:

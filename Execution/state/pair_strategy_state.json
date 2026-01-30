@@ -1,0 +1,37 @@
+{
+    "last_switch_time": 1769725167.5188959,
+    "graveyard": {
+        "ARB-USDT-SWAP/FIL-USDT-SWAP": {
+            "ts": 1769680855.9268842,
+            "reason": "orderbook_dead",
+            "ttl_days": 30
+        },
+        "XRP-USDT-SWAP/KSM-USDT-SWAP": {
+            "ts": 1769725167.5178962,
+            "reason": "cointegration_lost",
+            "ttl_days": 0.003472222222222222
+        }
+    },
+    "restricted_tickers": {},
+    "consecutive_losses": 0,
+    "last_health_score": 35,
+    "price_fetch_failures": 0,
+    "entry_z_score": null,
+    "entry_time": null,
+    "entry_equity": null,
+    "entry_notional": null,
+    "last_switch_reason": "cointegration_lost",
+    "min_capital_cooldowns": {},
+    "stall_warning_marks": [],
+    "persistence_history": [
+        2.1018096161233273,
+        1.500127536141917,
+        1.0278200771136707,
+        0.8014710190495345,
+        0.3345670723326126
+    ],
+    "last_exit_time": 1769723493.783875,
+    "z_history": [],
+    "hospital": {},
+    "pair_history": {}
+}

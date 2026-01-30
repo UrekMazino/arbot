@@ -49,7 +49,7 @@ def _env_list(name, default=""):
     return items
 
 kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)
-min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 2000)
+min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 1000)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
 min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)
@@ -58,6 +58,13 @@ min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 1)
 min_hedge_ratio = _env_float("STATBOT_STRATEGY_MIN_HEDGE_RATIO", 0.3)
 max_hedge_ratio = _env_float("STATBOT_STRATEGY_MAX_HEDGE_RATIO", 3.0)
 min_capital_per_leg = _env_float("STATBOT_STRATEGY_MIN_CAPITAL_PER_LEG", 1.0)
+liquidity_window = _env_int("STATBOT_STRATEGY_LIQUIDITY_WINDOW", 60)
+min_avg_quote_volume = _env_float("STATBOT_STRATEGY_MIN_AVG_QUOTE_VOL", 0)
+liquidity_pct = _env_float("STATBOT_STRATEGY_LIQUIDITY_PCT", 0)
+if liquidity_pct < 0:
+    liquidity_pct = 0.0
+if liquidity_pct > 1:
+    liquidity_pct = 1.0
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")
@@ -121,4 +128,12 @@ print(
         min_capital_per_leg,
     )
 )
+if min_avg_quote_volume > 0 or liquidity_pct > 0:
+    print(
+        "Liquidity Filter: window={0} bars, min_avg_quote_vol={1}, percentile={2}".format(
+            liquidity_window,
+            min_avg_quote_volume,
+            liquidity_pct,
+        )
+    )
 print(f"{'='*60}\n")

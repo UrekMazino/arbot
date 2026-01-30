@@ -5,7 +5,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -32,6 +32,18 @@ LIQUIDITY_RE = re.compile(
     r"Liquidity check: long_target=(?P<long_target>[-+]?\d+\.\d+) short_target=(?P<short_target>[-+]?\d+\.\d+) "
     r"liquidity_long=(?P<liquidity_long>[-+]?\d+\.\d+) liquidity_short=(?P<liquidity_short>[-+]?\d+\.\d+)"
 )
+ENTRY_SIGNAL_RE = re.compile(r"ENTRY SIGNAL DETECTED", re.IGNORECASE)
+LIQUIDITY_REJECT_RE = re.compile(r"LIQUIDITY_REJECT", re.IGNORECASE)
+POSITION_OPENED_RE = re.compile(r"Position opened:", re.IGNORECASE)
+ENTRY_PLACED_RE = re.compile(
+    r"Placed (?P<side>long|short) entry: ticker=(?P<ticker>[^ ]+) id=(?P<ord_id>\d+) entry_price=(?P<entry_price>[-+]?\d+\.\d+)"
+)
+FILL_RE = re.compile(
+    r"Fills for (?P<ticker>[^ ]+) ordId=(?P<ord_id>\d+): .* avg_px=(?P<avg_px>[-+]?\d+\.\d+)"
+)
+RUN_END_RE = re.compile(
+    r"RUN_END: reason=(?P<reason>[A-Za-z0-9_\-]+)(?: detail=(?P<detail>.*))?$"
+)
 
 ALERT_PATTERNS = [
     re.compile(r"\bERROR\b", re.IGNORECASE),
@@ -42,6 +54,46 @@ ALERT_PATTERNS = [
     re.compile(r"ORDERBOOK DEAD", re.IGNORECASE),
     re.compile(r"PNL_ALERT", re.IGNORECASE),
 ]
+
+RUN_DIR_RE = re.compile(r"^run_(?P<seq>\d+)_\d{8}_\d{6}$")
+INDEX_FIELDS = [
+    "run_sequence",
+    "run_id",
+    "start_time",
+    "end_time",
+    "duration_seconds",
+    "duration_human",
+    "pair",
+    "run_end_reason",
+    "run_end_detail",
+    "run_end_time",
+    "starting_equity",
+    "ending_equity",
+    "session_pnl",
+    "session_pnl_pct",
+    "total_pnl",
+    "total_pnl_pct",
+    "trades_total",
+    "wins",
+    "losses",
+    "win_rate_pct",
+    "max_drawdown_usdt",
+    "max_drawdown_pct",
+    "signals_total",
+    "entries_total",
+    "liquidity_rejects",
+    "liquidity_reject_rate_pct",
+    "slippage_avg_abs_bps",
+    "slippage_max_abs_bps",
+    "alerts_total",
+    "errors_total",
+    "version",
+    "git_sha",
+    "report_folder",
+    "report_root",
+    "report_created_at",
+]
+VARIANT_NAME_RE = re.compile(r"^(analysis|manual)([_-].*)?$", re.IGNORECASE)
 
 
 def _strip_non_ascii(text):
@@ -58,8 +110,16 @@ def _parse_ts(value):
 
 
 def _find_latest_log(log_dir):
-    candidates = sorted(log_dir.glob("log_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
+    candidates = []
+    if log_dir.exists():
+        candidates.extend(list(log_dir.glob("log_*.log")))
+        v1_dir = log_dir / "v1"
+        if v1_dir.exists():
+            candidates.extend(list(v1_dir.rglob("log_*.log")))
+    if not candidates:
+        return None
+    candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def _load_env_file(path):
@@ -110,6 +170,140 @@ def _read_version(repo_root):
         return version_path.read_text(encoding="utf-8").strip()
     return ""
 
+def _format_duration(seconds):
+    if seconds is None:
+        return "n/a"
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        return "n/a"
+    if seconds < 0:
+        return "n/a"
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h {minutes}m {sec}s"
+    if hours:
+        return f"{hours}h {minutes}m {sec}s"
+    if minutes:
+        return f"{minutes}m {sec}s"
+    return f"{sec}s"
+
+
+def _report_root(repo_root):
+    return repo_root / "Reports" / "v1"
+
+
+def _next_run_sequence(report_root):
+    if not report_root.exists():
+        return 1
+    max_seq = 0
+    for entry in report_root.iterdir():
+        if not entry.is_dir():
+            continue
+        match = RUN_DIR_RE.match(entry.name)
+        if not match:
+            continue
+        try:
+            seq = int(match.group("seq"))
+        except (TypeError, ValueError):
+            continue
+        if seq > max_seq:
+            max_seq = seq
+    return max_seq + 1
+
+
+def _parse_run_sequence(run_dir):
+    if not run_dir:
+        return None
+    match = RUN_DIR_RE.match(run_dir.name)
+    if not match:
+        return None
+    try:
+        return int(match.group("seq"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_info_from_log_path(log_path):
+    if not log_path:
+        return None, None
+    try:
+        log_path = Path(log_path).resolve()
+    except Exception:
+        return None, None
+    run_dir = log_path.parent
+    match = RUN_DIR_RE.match(run_dir.name)
+    if not match:
+        return None, None
+    try:
+        run_seq = int(match.group("seq"))
+    except (TypeError, ValueError):
+        run_seq = None
+    run_id = run_dir.name.split("_", 2)[-1] if "_" in run_dir.name else ""
+    return run_seq, run_id or None
+
+
+def _find_run_dir(report_root, run_id):
+    if not run_id:
+        return None
+    candidate = report_root / f"run_*_{run_id}"
+    matches = list(report_root.glob(candidate.name))
+    if matches:
+        return matches[0]
+    return None
+
+
+def _find_parent_run_dir(path, report_root):
+    try:
+        path = path.resolve()
+        report_root = report_root.resolve()
+    except Exception:
+        return None
+    for parent in [path] + list(path.parents):
+        if parent == report_root:
+            break
+        if RUN_DIR_RE.match(parent.name) and report_root in parent.parents:
+            return parent
+    return None
+
+
+def _is_variant_name(name):
+    if not name:
+        return False
+    return VARIANT_NAME_RE.match(name.strip()) is not None
+
+
+def _resolve_output_dir(repo_root, run_id, output_arg):
+    report_root = _report_root(repo_root)
+    report_version = "v1"
+    if not output_arg:
+        run_sequence = _next_run_sequence(report_root)
+        run_folder = f"run_{run_sequence:02d}_{run_id}"
+        return report_root / run_folder, run_sequence, report_version
+
+    output_dir = Path(output_arg)
+    if not output_dir.is_absolute():
+        output_dir = (repo_root / output_dir).resolve()
+
+    parent_run_dir = _find_parent_run_dir(output_dir, report_root)
+    if parent_run_dir:
+        run_sequence = _parse_run_sequence(parent_run_dir)
+        return output_dir, run_sequence, report_version
+
+    if _is_variant_name(output_dir.name):
+        run_dir = _find_run_dir(report_root, run_id)
+        if run_dir is None:
+            run_sequence = _next_run_sequence(report_root)
+            run_dir = report_root / f"run_{run_sequence:02d}_{run_id}"
+        else:
+            run_sequence = _parse_run_sequence(run_dir)
+        output_dir = run_dir / "variants" / output_dir.name
+        return output_dir, run_sequence, report_version
+
+    return output_dir, None, report_version
+
 
 def _write_csv(path, rows, fieldnames):
     if not rows:
@@ -128,16 +322,84 @@ def _safe_float(value):
         return None
 
 
-def generate_report(log_path, output_dir, env_path=None):
+def _collect_report_summaries(report_root):
+    summaries = []
+    if not report_root.exists():
+        return summaries
+    for entry in report_root.iterdir():
+        if not entry.is_dir():
+            continue
+        if not RUN_DIR_RE.match(entry.name):
+            continue
+        summary_path = entry / "summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            data = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            summaries.append(data)
+    return summaries
+
+
+def _sort_summaries(summaries):
+    def _key(item):
+        seq = item.get("run_sequence")
+        if isinstance(seq, int):
+            return (0, seq)
+        if isinstance(seq, str) and seq.isdigit():
+            return (0, int(seq))
+        start = item.get("start_time") or ""
+        return (1, start)
+
+    return sorted(summaries, key=_key)
+
+
+def _write_report_index(report_root):
+    summaries = _collect_report_summaries(report_root)
+    summaries = _sort_summaries(summaries)
+    rows = []
+    for summary in summaries:
+        row = {}
+        duration_seconds = summary.get("duration_seconds")
+        row["duration_human"] = _format_duration(duration_seconds)
+        for field in INDEX_FIELDS:
+            if field == "duration_human":
+                continue
+            row[field] = summary.get(field)
+        row["duration_human"] = row.get("duration_human")
+        rows.append(row)
+
+    index_payload = {
+        "report_version": "v1",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "run_count": len(rows),
+        "runs": rows,
+    }
+
+    index_json = report_root / "index.json"
+    index_csv = report_root / "index.csv"
+    index_json.write_text(json.dumps(index_payload, indent=2), encoding="utf-8")
+    _write_csv(index_csv, rows, INDEX_FIELDS)
+
+
+def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequence=None, report_version="v1"):
     log_path = Path(log_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    env_values = _load_env_file(env_path) if env_path else {}
+    ratio_env = env_values.get("STATBOT_MIN_LIQUIDITY_RATIO") or env_values.get("STATBOT_LIQUIDITY_MIN_RATIO") or ""
+    min_liquidity_ratio = _safe_float(ratio_env) if ratio_env else 0.0
+    ratio_threshold = min_liquidity_ratio if min_liquidity_ratio and min_liquidity_ratio > 0 else 1.0
 
     equity_curve = []
     trades = []
     alerts = []
     liquidity_checks = []
+    entry_slippage = []
     open_positions = []
+    entry_order_map = {}
 
     start_ts = None
     end_ts = None
@@ -153,8 +415,14 @@ def generate_report(log_path, output_dir, env_path=None):
     liquidity_high = 0
     liquidity_low = 0
     liquidity_unknown = 0
+    signals_total = 0
+    entries_total = 0
+    liquidity_rejects = 0
     long_ratios = []
     short_ratios = []
+    run_end_reason = None
+    run_end_detail = None
+    run_end_time = None
 
     with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
         for raw in handle:
@@ -242,6 +510,52 @@ def generate_report(log_path, output_dir, env_path=None):
                     }
                 )
 
+            if ENTRY_SIGNAL_RE.search(clean_msg):
+                signals_total += 1
+            if POSITION_OPENED_RE.search(clean_msg):
+                entries_total += 1
+            if LIQUIDITY_REJECT_RE.search(clean_msg):
+                liquidity_rejects += 1
+
+            entry_match = ENTRY_PLACED_RE.search(clean_msg)
+            if entry_match and ts:
+                ord_id = entry_match.group("ord_id")
+                entry_order_map[ord_id] = {
+                    "ticker": entry_match.group("ticker"),
+                    "side": entry_match.group("side"),
+                    "entry_price": _safe_float(entry_match.group("entry_price")),
+                    "timestamp": ts.isoformat(),
+                }
+
+            fill_match = FILL_RE.search(clean_msg)
+            if fill_match and ts:
+                ord_id = fill_match.group("ord_id")
+                avg_px = _safe_float(fill_match.group("avg_px"))
+                entry_data = entry_order_map.pop(ord_id, None)
+                if entry_data and avg_px is not None:
+                    entry_price = entry_data.get("entry_price")
+                    side = entry_data.get("side")
+                    slippage_bps = None
+                    abs_slippage_bps = None
+                    if entry_price and entry_price > 0:
+                        if side == "short":
+                            slippage_bps = (entry_price - avg_px) / entry_price * 10000
+                        else:
+                            slippage_bps = (avg_px - entry_price) / entry_price * 10000
+                        abs_slippage_bps = abs(slippage_bps)
+                    entry_slippage.append(
+                        {
+                            "timestamp": ts.isoformat(),
+                            "ticker": entry_data.get("ticker") or fill_match.group("ticker"),
+                            "side": side,
+                            "order_id": ord_id,
+                            "entry_price": entry_price,
+                            "fill_price": avg_px,
+                            "slippage_bps": round(slippage_bps, 4) if slippage_bps is not None else None,
+                            "abs_slippage_bps": round(abs_slippage_bps, 4) if abs_slippage_bps is not None else None,
+                        }
+                    )
+
             liq_match = LIQUIDITY_RE.search(clean_msg)
             if liq_match and ts:
                 long_target = _safe_float(liq_match.group("long_target"))
@@ -250,17 +564,27 @@ def generate_report(log_path, output_dir, env_path=None):
                 liquidity_short = _safe_float(liq_match.group("liquidity_short"))
                 long_ratio = None
                 short_ratio = None
-                if liquidity_long and liquidity_long > 0 and long_target is not None:
-                    long_ratio = long_target / liquidity_long
+                if (
+                    liquidity_long is not None
+                    and liquidity_long > 0
+                    and long_target is not None
+                    and long_target > 0
+                ):
+                    long_ratio = liquidity_long / long_target
                     long_ratios.append(long_ratio)
-                if liquidity_short and liquidity_short > 0 and short_target is not None:
-                    short_ratio = short_target / liquidity_short
+                if (
+                    liquidity_short is not None
+                    and liquidity_short > 0
+                    and short_target is not None
+                    and short_target > 0
+                ):
+                    short_ratio = liquidity_short / short_target
                     short_ratios.append(short_ratio)
 
                 if long_ratio is None or short_ratio is None:
                     status = "unknown"
                     liquidity_unknown += 1
-                elif long_ratio <= 1.0 and short_ratio <= 1.0:
+                elif long_ratio >= ratio_threshold and short_ratio >= ratio_threshold:
                     status = "high"
                     liquidity_high += 1
                 else:
@@ -282,6 +606,15 @@ def generate_report(log_path, output_dir, env_path=None):
 
             if any(pat.search(clean_msg) for pat in ALERT_PATTERNS):
                 alerts.append(f"{match.group('ts')} {level} {clean_msg}")
+
+            run_end_match = RUN_END_RE.search(clean_msg)
+            if run_end_match and ts:
+                run_end_reason = run_end_match.group("reason")
+                detail = (run_end_match.group("detail") or "").strip()
+                if detail and " exit_code=" in detail:
+                    detail = detail.split(" exit_code=", 1)[0].strip()
+                run_end_detail = detail if detail else None
+                run_end_time = ts.isoformat()
 
     duration_seconds = None
     if start_ts and end_ts:
@@ -334,6 +667,21 @@ def generate_report(log_path, output_dir, env_path=None):
     if hold_times:
         avg_hold = round(sum(hold_times) / len(hold_times), 2)
 
+    slippage_samples = len(entry_slippage)
+    avg_slippage_bps = None
+    avg_slippage_abs_bps = None
+    max_slippage_abs_bps = None
+    if entry_slippage:
+        slippage_vals = [row.get("slippage_bps") for row in entry_slippage if row.get("slippage_bps") is not None]
+        slippage_abs_vals = [
+            row.get("abs_slippage_bps") for row in entry_slippage if row.get("abs_slippage_bps") is not None
+        ]
+        if slippage_vals:
+            avg_slippage_bps = round(sum(slippage_vals) / len(slippage_vals), 4)
+        if slippage_abs_vals:
+            avg_slippage_abs_bps = round(sum(slippage_abs_vals) / len(slippage_abs_vals), 4)
+            max_slippage_abs_bps = round(max(slippage_abs_vals), 4)
+
     liquidity_samples = len(liquidity_checks)
     liquidity_pct_low = None
     if liquidity_high + liquidity_low > 0:
@@ -347,13 +695,25 @@ def generate_report(log_path, output_dir, env_path=None):
     repo_root = Path(__file__).resolve().parents[1]
     version = _read_version(repo_root)
     git_sha = _git_sha(repo_root)
-    env_values = _load_env_file(env_path) if env_path else {}
     config_snapshot = _redact_config(env_values)
 
-    run_id = start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
+    if run_id is None:
+        run_id = start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    report_folder = output_dir.name
+    report_root_path = str(output_dir)
+    variant_of = None
+    if output_dir.parent.name == "variants" and RUN_DIR_RE.match(output_dir.parent.parent.name):
+        report_folder = f"variants/{output_dir.name}"
+        variant_of = output_dir.parent.parent.name
 
     summary = {
+        "report_version": report_version,
+        "run_sequence": run_sequence,
         "run_id": run_id,
+        "report_folder": report_folder,
+        "report_root": report_root_path,
+        "report_created_at": datetime.now(timezone.utc).isoformat(),
         "version": version or "",
         "git_sha": git_sha,
         "log_path": str(log_path),
@@ -361,6 +721,9 @@ def generate_report(log_path, output_dir, env_path=None):
         "end_time": end_ts.isoformat() if end_ts else "",
         "duration_seconds": duration_seconds,
         "pair": pair or "",
+        "run_end_reason": run_end_reason,
+        "run_end_detail": run_end_detail,
+        "run_end_time": run_end_time,
         "td_mode": td_mode or "",
         "pos_mode": pos_mode or "",
         "starting_equity": starting_equity,
@@ -377,6 +740,12 @@ def generate_report(log_path, output_dir, env_path=None):
         "win_rate_pct": win_rate,
         "avg_trade_pnl_usdt": avg_trade_pnl,
         "avg_hold_minutes": avg_hold,
+        "signals_total": signals_total,
+        "entries_total": entries_total,
+        "liquidity_rejects": liquidity_rejects,
+        "liquidity_reject_rate_pct": round((liquidity_rejects / signals_total) * 100, 2)
+        if signals_total
+        else None,
         "alerts_total": len(alerts),
         "errors_total": sum(1 for line in alerts if "ERROR" in line),
         "liquidity_samples": liquidity_samples,
@@ -384,10 +753,15 @@ def generate_report(log_path, output_dir, env_path=None):
         "liquidity_low_samples": liquidity_low,
         "liquidity_unknown_samples": liquidity_unknown,
         "liquidity_low_pct": liquidity_pct_low,
+        "liquidity_min_ratio": ratio_threshold,
         "liquidity_max_long_ratio": max_long_ratio,
         "liquidity_max_short_ratio": max_short_ratio,
         "liquidity_avg_long_ratio": avg_long_ratio,
         "liquidity_avg_short_ratio": avg_short_ratio,
+        "slippage_samples": slippage_samples,
+        "slippage_avg_bps": avg_slippage_bps,
+        "slippage_avg_abs_bps": avg_slippage_abs_bps,
+        "slippage_max_abs_bps": max_slippage_abs_bps,
     }
 
     summary_path = output_dir / "summary.json"
@@ -395,42 +769,19 @@ def generate_report(log_path, output_dir, env_path=None):
     equity_path = output_dir / "equity_curve.csv"
     trades_path = output_dir / "trades.csv"
     liquidity_path = output_dir / "liquidity_checks.csv"
+    slippage_path = output_dir / "entry_slippage.csv"
     alerts_path = output_dir / "alerts.txt"
     config_path = output_dir / "config_snapshot.json"
 
     summary["equity_curve_path"] = str(equity_path)
     summary["trades_path"] = str(trades_path)
     summary["liquidity_checks_path"] = str(liquidity_path)
+    summary["entry_slippage_path"] = str(slippage_path)
     summary["alerts_path"] = str(alerts_path)
     summary["config_snapshot_path"] = str(config_path)
-
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    config_path.write_text(json.dumps(config_snapshot, indent=2), encoding="utf-8")
-
-    summary_txt_path.write_text(
-        "\n".join(
-            [
-                f"Run ID: {summary['run_id']}",
-                f"Version: {summary['version'] or 'n/a'}",
-                f"Git SHA: {summary['git_sha'] or 'n/a'}",
-                f"Pair: {summary['pair'] or 'n/a'}",
-                f"Start: {summary['start_time'] or 'n/a'}",
-                f"End: {summary['end_time'] or 'n/a'}",
-                f"Duration: {summary['duration_seconds'] or 'n/a'} sec",
-                f"Starting equity: {summary['starting_equity']}",
-                f"Ending equity: {summary['ending_equity']}",
-                f"Session PnL: {summary['session_pnl']} ({summary['session_pnl_pct']}%)",
-                f"Total PnL: {summary['total_pnl']} ({summary['total_pnl_pct']}%)",
-                f"Max drawdown: {summary['max_drawdown_usdt']} ({summary['max_drawdown_pct']}%)",
-                f"Trades: {summary['trades_total']} | Wins: {summary['wins']} | Losses: {summary['losses']} | Win rate: {summary['win_rate_pct']}",
-                f"Avg trade PnL: {summary['avg_trade_pnl_usdt']}",
-                f"Avg hold minutes: {summary['avg_hold_minutes']}",
-                f"Alerts: {summary['alerts_total']} | Errors: {summary['errors_total']}",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    summary["duration_human"] = _format_duration(duration_seconds)
+    if variant_of:
+        summary["variant_of"] = variant_of
 
     _write_csv(
         equity_path,
@@ -466,9 +817,97 @@ def generate_report(log_path, output_dir, env_path=None):
             "status",
         ],
     )
+    _write_csv(
+        slippage_path,
+        entry_slippage,
+        [
+            "timestamp",
+            "ticker",
+            "side",
+            "order_id",
+            "entry_price",
+            "fill_price",
+            "slippage_bps",
+            "abs_slippage_bps",
+        ],
+    )
 
     if alerts:
         alerts_path.write_text("\n".join(alerts) + "\n", encoding="utf-8")
+
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    config_path.write_text(json.dumps(config_snapshot, indent=2), encoding="utf-8")
+
+    files_list = [
+        summary_path.name,
+        summary_txt_path.name,
+        config_path.name,
+    ]
+    for path in [
+        equity_path,
+        trades_path,
+        liquidity_path,
+        slippage_path,
+        alerts_path,
+    ]:
+        if path.exists():
+            files_list.append(path.name)
+
+    summary_txt_path.write_text(
+        "\n".join(
+            [
+                "REPORT OVERVIEW",
+                f"Run: {summary['run_sequence'] or 'n/a'} ({summary['run_id']})",
+                f"Version: {summary['version'] or 'n/a'} | Git: {summary['git_sha'] or 'n/a'}",
+                f"Pair: {summary['pair'] or 'n/a'} | td_mode={summary['td_mode'] or 'n/a'} | pos_mode={summary['pos_mode'] or 'n/a'}",
+                f"Run end: {summary.get('run_end_reason') or 'n/a'}",
+                f"Run end detail: {summary.get('run_end_detail') or 'n/a'}",
+                f"Start: {summary['start_time'] or 'n/a'}",
+                f"End: {summary['end_time'] or 'n/a'}",
+                f"Duration: {_format_duration(summary['duration_seconds'])}",
+                "",
+                "PERFORMANCE",
+                f"Starting equity: {summary['starting_equity']}",
+                f"Ending equity: {summary['ending_equity']}",
+                f"Session PnL: {summary['session_pnl']} ({summary['session_pnl_pct']}%)",
+                f"Total PnL: {summary['total_pnl']} ({summary['total_pnl_pct']}%)",
+                f"Max drawdown: {summary['max_drawdown_usdt']} ({summary['max_drawdown_pct']}%)",
+                f"Trades: {summary['trades_total']} | Wins: {summary['wins']} | Losses: {summary['losses']} | Win rate: {summary['win_rate_pct']}",
+                f"Avg trade PnL: {summary['avg_trade_pnl_usdt']} | Avg hold (min): {summary['avg_hold_minutes']}",
+                "",
+                "EXECUTION QUALITY",
+                f"Signals: {summary['signals_total']} | Entries: {summary['entries_total']}",
+                f"Liquidity rejects: {summary['liquidity_rejects']} ({summary['liquidity_reject_rate_pct']}%)",
+                f"Liquidity low pct: {summary['liquidity_low_pct']}",
+                f"Liquidity ratio avg (long/short): {summary['liquidity_avg_long_ratio']} / {summary['liquidity_avg_short_ratio']}",
+                f"Slippage samples: {summary['slippage_samples']}",
+                f"Slippage avg bps (signed/abs): {summary['slippage_avg_bps']} / {summary['slippage_avg_abs_bps']}",
+                f"Slippage max abs bps: {summary['slippage_max_abs_bps']}",
+                "",
+                "ALERTS",
+                f"Alerts: {summary['alerts_total']} | Errors: {summary['errors_total']}",
+                "",
+                "FILES",
+                *[f"- {name}" for name in files_list],
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    report_root = _report_root(repo_root)
+    try:
+        if output_dir.resolve().parent == report_root.resolve():
+            _write_report_index(report_root)
+    except Exception:
+        pass
+    try:
+        from log_indexer import write_log_index
+        log_root = repo_root / "Logs" / "v1"
+        write_log_index(log_root)
+    except Exception:
+        pass
 
     return summary_path
 
@@ -505,11 +944,28 @@ def main():
                 start_ts = ts
                 break
 
-    run_id = start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path(args.output_dir) if args.output_dir else repo_root / "Reports" / f"run_{run_id}"
+    log_run_sequence, log_run_id = _run_info_from_log_path(log_path)
+    run_id = log_run_id or (
+        start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
+    )
+
+    report_root = _report_root(repo_root)
+    if not args.output_dir and log_run_sequence and log_run_id:
+        output_dir = report_root / f"run_{log_run_sequence:02d}_{log_run_id}"
+        run_sequence = log_run_sequence
+        report_version = "v1"
+    else:
+        output_dir, run_sequence, report_version = _resolve_output_dir(repo_root, run_id, args.output_dir)
     env_path = Path(args.env_path) if args.env_path else repo_root / "Execution" / ".env"
 
-    summary_path = generate_report(log_path, output_dir, env_path=env_path)
+    summary_path = generate_report(
+        log_path,
+        output_dir,
+        env_path=env_path,
+        run_id=run_id,
+        run_sequence=run_sequence,
+        report_version=report_version,
+    )
     print(f"report_generator: wrote {summary_path}")
     return 0
 

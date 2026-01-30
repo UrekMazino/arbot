@@ -5,6 +5,7 @@
 
 import os
 import json
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -45,7 +46,9 @@ def save_active_pair(t1, t2):
     """Save the current active pair to active_pair.json."""
     data = {"ticker_1": t1, "ticker_2": t2}
     try:
-        with open(active_pair_file, "w") as f:
+        active_pair_path = Path(active_pair_file)
+        active_pair_path.parent.mkdir(parents=True, exist_ok=True)
+        with active_pair_path.open("w") as f:
             json.dump(data, f)
         return True
     except Exception as e:
@@ -66,7 +69,7 @@ lock_on_pair = _env_flag("STATBOT_LOCK_ON_PAIR", False)
 allowed_settle_ccy = _env_list("STATBOT_EXECUTION_SETTLE_CCY", "USDT")
 
 # Try to load active pair from JSON if it exists (unless locked in env)
-active_pair_file = os.path.join(os.path.dirname(__file__), "active_pair.json")
+active_pair_file = str(Path(__file__).resolve().parent / "state" / "active_pair.json")
 lock_pair_raw = os.getenv("STATBOT_LOCK_PAIR", "").strip()
 lock_pair_active = False
 if lock_on_pair and lock_pair_raw:

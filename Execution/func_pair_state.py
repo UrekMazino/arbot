@@ -3,7 +3,14 @@ import os
 import time
 from pathlib import Path
 
-STATE_FILE = Path(__file__).resolve().parent / "pair_strategy_state.json"
+_STATE_DIR = Path(__file__).resolve().parent / "state"
+STATE_FILE = _STATE_DIR / "pair_strategy_state.json"
+
+# Pair history/hospital defaults
+DEFAULT_HISTORY_MIN_TRADES = 1
+DEFAULT_HISTORY_MIN_WIN_RATE = 0.50
+DEFAULT_HISTORY_REQUIRE_PROFIT = True
+DEFAULT_HOSPITAL_COOLDOWN_SECONDS = 300
 
 # Min-capital cooldown defaults (seconds)
 MIN_CAPITAL_COOLDOWN_SHORT = 180
@@ -16,18 +23,63 @@ Z_HISTORY_MAX_LEN = 5000
 GRAVEYARD_DEFAULT_DAYS = 7
 GRAVEYARD_REASON_DAYS = {
     "cointegration_lost": 5 / (24 * 60),
+    "cointegration_lost_bad_history": 7,
     "orderbook_dead": 30,
     "compliance_restricted": None,
     "manual": 3,
     "health": 5 / (24 * 60),
+    "health_bad_history": 7,
     "settle_ccy_filter": 30,
 }
+
+
+def _env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+def _env_int(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+PAIR_HISTORY_MIN_TRADES = _env_int("STATBOT_HISTORY_MIN_TRADES", DEFAULT_HISTORY_MIN_TRADES)
+PAIR_HISTORY_MIN_WIN_RATE = _env_float("STATBOT_HISTORY_MIN_WIN_RATE", DEFAULT_HISTORY_MIN_WIN_RATE)
+PAIR_HISTORY_REQUIRE_PROFIT = _env_flag("STATBOT_HISTORY_REQUIRE_PROFIT", DEFAULT_HISTORY_REQUIRE_PROFIT)
+HOSPITAL_DEFAULT_COOLDOWN_SECONDS = _env_int(
+    "STATBOT_HOSPITAL_COOLDOWN_SECONDS",
+    DEFAULT_HOSPITAL_COOLDOWN_SECONDS,
+)
 
 def load_pair_state():
     if not STATE_FILE.exists():
         return {
             "last_switch_time": 0,
             "graveyard": {}, # { "ticker_1/ticker_2": fail_timestamp }
+            "hospital": {}, # { "ticker_1/ticker_2": {"ts": float, "cooldown": int, "reason": str} }
+            "pair_history": {}, # { "ticker_1/ticker_2": {wins, losses, win_usdt, loss_usdt, trades} }
             "restricted_tickers": {}, # { "TICKER": {"ts": float, "code": str, "msg": str} }
             "consecutive_losses": 0,
             "last_health_score": None,
@@ -48,6 +100,10 @@ def load_pair_state():
                 state["consecutive_losses"] = 0
             if "restricted_tickers" not in state:
                 state["restricted_tickers"] = {}
+            if "hospital" not in state:
+                state["hospital"] = {}
+            if "pair_history" not in state:
+                state["pair_history"] = {}
             # Ensure last_health_score exists
             if "last_health_score" not in state:
                 state["last_health_score"] = None
@@ -71,14 +127,175 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
+        return {"last_switch_time": 0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
 
 def save_pair_state(state):
     try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, indent=4)
     except Exception as e:
         print(f"Error saving pair state: {e}")
+
+def normalize_pair_key(t1, t2):
+    if not t1 or not t2:
+        return ""
+    return "/".join(sorted([str(t1), str(t2)]))
+
+def _get_pair_history_entry(history, key):
+    entry = history.get(key)
+    if not isinstance(entry, dict):
+        entry = {}
+    return {
+        "wins": int(entry.get("wins", 0) or 0),
+        "losses": int(entry.get("losses", 0) or 0),
+        "win_usdt": float(entry.get("win_usdt", 0.0) or 0.0),
+        "loss_usdt": float(entry.get("loss_usdt", 0.0) or 0.0),
+        "trades": int(entry.get("trades", 0) or 0),
+        "last_trade_ts": float(entry.get("last_trade_ts", 0.0) or 0.0),
+    }
+
+def record_pair_trade_result(t1, t2, pnl_usdt):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return False
+    try:
+        pnl_val = float(pnl_usdt)
+    except (TypeError, ValueError):
+        return False
+
+    state = load_pair_state()
+    history = state.get("pair_history", {})
+    entry = _get_pair_history_entry(history, key)
+
+    entry["trades"] += 1
+    if pnl_val > 0:
+        entry["wins"] += 1
+        entry["win_usdt"] += pnl_val
+    else:
+        entry["losses"] += 1
+        entry["loss_usdt"] += abs(pnl_val)
+    entry["last_trade_ts"] = time.time()
+
+    history[key] = entry
+    state["pair_history"] = history
+    save_pair_state(state)
+    return True
+
+def get_pair_history_stats(t1, t2):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return None
+    state = load_pair_state()
+    history = state.get("pair_history", {})
+    entry = _get_pair_history_entry(history, key)
+    trades = entry["trades"]
+    win_rate = (entry["wins"] / trades) if trades > 0 else 0.0
+    entry["win_rate"] = win_rate
+    entry["pair_key"] = key
+    return entry
+
+def is_good_pair_history(
+    t1,
+    t2,
+    min_trades=None,
+    min_win_rate=None,
+    require_profit=None,
+):
+    stats = get_pair_history_stats(t1, t2)
+    if not stats:
+        return False
+    if min_trades is None:
+        min_trades = PAIR_HISTORY_MIN_TRADES
+    if min_win_rate is None:
+        min_win_rate = PAIR_HISTORY_MIN_WIN_RATE
+    if require_profit is None:
+        require_profit = PAIR_HISTORY_REQUIRE_PROFIT
+
+    if stats["trades"] < min_trades:
+        return False
+    if stats["win_rate"] <= min_win_rate:
+        return False
+    if require_profit and stats["win_usdt"] <= stats["loss_usdt"]:
+        return False
+    return True
+
+def add_to_hospital(t1, t2, reason="", cooldown_seconds=None):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return False
+    if cooldown_seconds is None:
+        cooldown_seconds = HOSPITAL_DEFAULT_COOLDOWN_SECONDS
+    try:
+        cooldown_seconds = int(float(cooldown_seconds))
+    except (TypeError, ValueError):
+        cooldown_seconds = HOSPITAL_DEFAULT_COOLDOWN_SECONDS
+
+    state = load_pair_state()
+    hospital = state.get("hospital", {})
+    entry = hospital.get(key)
+    visits = 0
+    if isinstance(entry, dict):
+        visits = int(entry.get("visits", 0) or 0)
+    hospital[key] = {
+        "ts": time.time(),
+        "cooldown": cooldown_seconds,
+        "reason": str(reason or ""),
+        "visits": visits + 1,
+    }
+    state["hospital"] = hospital
+    save_pair_state(state)
+    return True
+
+def remove_from_hospital(t1, t2):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return False
+    state = load_pair_state()
+    hospital = state.get("hospital", {})
+    if key in hospital:
+        hospital.pop(key, None)
+        state["hospital"] = hospital
+        save_pair_state(state)
+        return True
+    return False
+
+def get_hospital_entries():
+    state = load_pair_state()
+    entries = state.get("hospital", {})
+    if not isinstance(entries, dict):
+        return {}
+    return entries
+
+def get_hospital_remaining(t1, t2):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return 0.0
+    state = load_pair_state()
+    hospital = state.get("hospital", {})
+    entry = hospital.get(key)
+    if not isinstance(entry, dict):
+        return 0.0
+    ts = entry.get("ts") or 0
+    cooldown = entry.get("cooldown") or HOSPITAL_DEFAULT_COOLDOWN_SECONDS
+    if not ts or cooldown <= 0:
+        return 0.0
+    elapsed = time.time() - ts
+    remaining = cooldown - elapsed
+    if remaining <= 0:
+        return 0.0
+    return float(remaining)
+
+def is_in_hospital(t1, t2):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return False
+    state = load_pair_state()
+    hospital = state.get("hospital", {})
+    return key in hospital
+
+def is_hospital_ready(t1, t2):
+    return get_hospital_remaining(t1, t2) <= 0.0
 
 def record_trade_result(is_win):
     state = load_pair_state()
@@ -109,6 +326,11 @@ def add_to_graveyard(t1, t2, reason=""):
         "reason": str(reason or ""),
         "ttl_days": ttl_days,
     }
+    hospital = state.get("hospital", {})
+    hospital_key = normalize_pair_key(t1, t2)
+    if hospital_key in hospital:
+        hospital.pop(hospital_key, None)
+        state["hospital"] = hospital
     state["consecutive_losses"] = 0 # Reset losses when switching
     save_pair_state(state)
 

@@ -1,0 +1,2 @@
+generated_at,rank,sym_1,sym_2,zero_crossings,p_value,adf_stat,hedge_ratio,zscore_current,overbought_signals,oversold_signals,spread_mean,spread_std,price_1_current,price_2_current,total_symbols,total_cointegrated_pairs,analysis_candles
+2026-01-30 08:08:27,1,LPT-USDT-SWAP,NEO-USDT-SWAP,2.0,2.5460272537010077e-05,-5.423665017533132,0.8278538341929307,-2.3774079125576706,39,78,0.09773705068823454,0.013517249308525724,2.988,3.349,98,1,1440

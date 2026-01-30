@@ -11,6 +11,7 @@ import requests
 
 
 DEFAULT_LOG_DIR = Path(__file__).resolve().parents[1] / "Logs"
+DEFAULT_LOG_V1_DIR = DEFAULT_LOG_DIR / "v1"
 DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "logfile_okx.log"
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:18789"
 DEFAULT_ALERT_COOLDOWN = 60
@@ -294,8 +295,12 @@ def _resolve_log_path():
     if env_path:
         return Path(env_path)
 
-    candidates = sorted(DEFAULT_LOG_DIR.glob("log_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = []
+    if DEFAULT_LOG_V1_DIR.exists():
+        candidates.extend(list(DEFAULT_LOG_V1_DIR.rglob("log_*.log")))
+    candidates.extend(list(DEFAULT_LOG_DIR.glob("log_*.log")))
     if candidates:
+        candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
         return candidates[0]
 
     return DEFAULT_LOG_PATH

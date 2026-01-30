@@ -49,11 +49,19 @@ from func_save_status import save_status
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
+    add_to_hospital,
     is_in_graveyard,
+    is_in_hospital,
+    is_good_pair_history,
     can_switch,
     set_last_switch_time,
     get_last_switch_time,
     record_trade_result,
+    record_pair_trade_result,
+    get_pair_history_stats,
+    get_hospital_entries,
+    get_hospital_remaining,
+    normalize_pair_key,
     get_last_health_score,
     get_last_switch_reason,
     set_last_switch_reason,
@@ -86,6 +94,7 @@ _LAST_PNL_ALERT_TS = 0.0
 _LAST_PNL_ALERT_VAL = None
 _LAST_PNL_ALERT_SIGN = 0
 _REPORT_UPTIME_TRIGGERED = False
+_RUN_END_LOGGED = False
 
 
 def _should_log_pnl(total_pnl):
@@ -126,6 +135,30 @@ def _get_pnl_alert_thresholds():
         except (TypeError, ValueError):
             _PNL_ALERT_INTERVAL_SECONDS = 600
     return _PNL_ALERT_USDT, _PNL_ALERT_PCT, _PNL_ALERT_INTERVAL_SECONDS
+
+
+def _sanitize_run_end_detail(detail, max_len=300):
+    if detail is None:
+        return ""
+    text = str(detail).replace("\n", " ").replace("\r", " ").strip()
+    if max_len and len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
+
+
+def _log_run_end(reason, detail="", exit_code=None):
+    global _RUN_END_LOGGED
+    if _RUN_END_LOGGED:
+        return
+    _RUN_END_LOGGED = True
+    reason = str(reason or "").strip() or "unknown"
+    detail = _sanitize_run_end_detail(detail)
+    msg = f"RUN_END: reason={reason}"
+    if detail:
+        msg += f" detail={detail}"
+    if exit_code is not None:
+        msg += f" exit_code={exit_code}"
+    logger.warning(msg)
 
 
 def _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt):
@@ -273,6 +306,17 @@ def _run_report_generator():
 
 def _get_report_uptime_hours():
     raw = os.getenv("STATBOT_REPORT_UPTIME_HOURS", "0")
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if hours <= 0:
+        return 0.0
+    return hours
+
+
+def _get_max_uptime_hours():
+    raw = os.getenv("STATBOT_MAX_UPTIME_HOURS", "0")
     try:
         hours = float(raw)
     except (TypeError, ValueError):
@@ -676,7 +720,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         logger.info("Cooldown bypassed but health not critical: %s/100", health_score)
 
     logger.info("Attempting to switch to next pair (reason=%s)...", switch_reason)
-    csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "2_cointegrated_pairs.csv"
+    csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
 
     per_leg_capital = _get_per_leg_allocation()
     logger.info("Per-leg allocation for min-capital filter: %.8f", per_leg_capital)
@@ -708,7 +752,15 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             if not sym_1 or not sym_2:
                 continue
             min_equity = _parse_min_equity(row.get("min_equity_recommended"))
-            pairs.append({"sym_1": sym_1, "sym_2": sym_2, "min_equity": min_equity})
+            pair_key = normalize_pair_key(sym_1, sym_2)
+            pairs.append(
+                {
+                    "sym_1": sym_1,
+                    "sym_2": sym_2,
+                    "pair_key": pair_key,
+                    "min_equity": min_equity,
+                }
+            )
         logger.info("Found %d pairs in CSV.", len(pairs))
         return pairs
 
@@ -730,12 +782,54 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         else:
             logger.warning("Equity unavailable; skipping min-equity filter.")
 
+        pair_by_key = {pair.get("pair_key"): pair for pair in pairs if pair.get("pair_key")}
+        hospital_entries = get_hospital_entries()
+        ready_hospital = []
+        if hospital_entries:
+            now = time.time()
+            for key, entry in hospital_entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                ts = entry.get("ts") or 0
+                cooldown = entry.get("cooldown") or 0
+                if ts and cooldown >= 0 and (now - ts) >= cooldown:
+                    ready_hospital.append((key, ts))
+
+        if ready_hospital:
+            ready_hospital.sort(key=lambda item: item[1])
+            for key, _ts in ready_hospital:
+                pair = pair_by_key.get(key)
+                if not pair:
+                    continue
+                t1, t2 = pair["sym_1"], pair["sym_2"]
+                if is_in_graveyard(t1, t2):
+                    continue
+                if is_restricted_ticker(t1) or is_restricted_ticker(t2):
+                    continue
+                if not _pair_meets_min_capital(t1, t2, per_leg_capital):
+                    continue
+                min_equity = pair.get("min_equity")
+                if equity_usdt > 0 and min_equity and min_equity > equity_usdt:
+                    continue
+                logger.info("Prioritizing hospital pair %s/%s (cooldown complete).", t1, t2)
+                return t1, t2
+
         for i in range(1, len(pairs)):
             idx = (curr_idx + i) % len(pairs)
             pair = pairs[idx]
             t1, t2 = pair["sym_1"], pair["sym_2"]
             if is_in_graveyard(t1, t2):
                 continue
+            if is_in_hospital(t1, t2):
+                remaining = get_hospital_remaining(t1, t2)
+                if remaining > 0:
+                    logger.debug(
+                        "Skipping pair %s/%s: hospital cooldown %.1f sec remaining.",
+                        t1,
+                        t2,
+                        remaining,
+                    )
+                    continue
             if is_restricted_ticker(t1) or is_restricted_ticker(t2):
                 logger.info(
                     "Skipping pair %s/%s: compliance restricted ticker.",
@@ -804,18 +898,66 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         curr_t2 = ticker_2
         # Commit graveyard only after a replacement is found.
         if switch_reason != "min_capital":
-            add_to_graveyard(curr_t1, curr_t2, reason=switch_reason)
+            if switch_reason in ("health", "cointegration_lost"):
+                stats = get_pair_history_stats(curr_t1, curr_t2)
+                if is_good_pair_history(curr_t1, curr_t2):
+                    add_to_hospital(curr_t1, curr_t2, reason=switch_reason)
+                    if stats:
+                        logger.warning(
+                            "Pair moved to hospital: %s/%s reason=%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            curr_t1,
+                            curr_t2,
+                            switch_reason,
+                            stats["trades"],
+                            stats["wins"],
+                            stats["losses"],
+                            stats["win_rate"] * 100,
+                            stats["win_usdt"],
+                            stats["loss_usdt"],
+                        )
+                    else:
+                        logger.warning(
+                            "Pair moved to hospital: %s/%s reason=%s",
+                            curr_t1,
+                            curr_t2,
+                            switch_reason,
+                        )
+                else:
+                    bad_reason = f"{switch_reason}_bad_history"
+                    add_to_graveyard(curr_t1, curr_t2, reason=bad_reason)
+                    if stats:
+                        logger.warning(
+                            "Pair moved to graveyard: %s/%s reason=%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            curr_t1,
+                            curr_t2,
+                            bad_reason,
+                            stats["trades"],
+                            stats["wins"],
+                            stats["losses"],
+                            stats["win_rate"] * 100,
+                            stats["win_usdt"],
+                            stats["loss_usdt"],
+                        )
+                    else:
+                        logger.warning(
+                            "Pair moved to graveyard: %s/%s reason=%s",
+                            curr_t1,
+                            curr_t2,
+                            bad_reason,
+                        )
+            else:
+                add_to_graveyard(curr_t1, curr_t2, reason=switch_reason)
 
         msg = f"Switching from {curr_t1}/{curr_t2} to {next_t1}/{next_t2}"
         print(msg)
         logger.info(msg)
 
         if save_active_pair(next_t1, next_t2):
-            logger.info("New pair saved to active_pair.json")
+            logger.info("New pair saved to state/active_pair.json")
             set_last_switch_time()
             return SWITCH_RESULT_SWITCHED
 
-        logger.error("Failed to save new pair to active_pair.json")
+        logger.error("Failed to save new pair to state/active_pair.json")
         return SWITCH_RESULT_HARD_STOP
     except Exception as e:
         logger.error(f"Error switching pair: {e}")
@@ -921,6 +1063,8 @@ if __name__ == "__main__":
                     monitor_proc.terminate()
                 if command_proc and command_proc.poll() is None:
                     command_proc.terminate()
+                _log_run_end("manual_stop", "Ended by user", exit_code=0)
+                save_status({"message": "Run ended by user"})
                 _run_report_generator()
                 sys.exit(0)
             
@@ -1095,6 +1239,10 @@ if __name__ == "__main__":
         cycle_limit = max_cycles
     if cycle_limit < 0:
         cycle_limit = 0
+    max_uptime_hours = _get_max_uptime_hours()
+    run_end_reason = None
+    run_end_detail = ""
+    run_end_exit_code = 0
 
     try:
         cycles_run = 0
@@ -1106,6 +1254,16 @@ if __name__ == "__main__":
             time.sleep(3)
             current_time = time.time()
             _maybe_run_uptime_report(current_time, bot_start_time)
+            if max_uptime_hours > 0:
+                uptime_hours = (current_time - bot_start_time) / 3600.0
+                if uptime_hours >= max_uptime_hours:
+                    run_end_reason = "max_uptime"
+                    run_end_detail = (
+                        f"limit_hours={max_uptime_hours:.2f} uptime_hours={uptime_hours:.2f}"
+                    )
+                    status_dict["message"] = "Max uptime reached; exiting."
+                    save_status(status_dict)
+                    break
 
             # 1. Consolidated API Fetch (Position/Order Status)
             acc_state = get_account_state()
@@ -1308,6 +1466,10 @@ if __name__ == "__main__":
                 status_dict["message"] = "Circuit breaker triggered - closing all positions"
                 save_status(status_dict)
                 close_all_positions(0)
+                run_end_reason = "circuit_breaker"
+                run_end_detail = (
+                    f"pnl={total_pnl:.2f} pct={pnl_pct:.2f} max_drawdown_pct={max_drawdown_pct*100:.1f}"
+                )
                 break
 
             # Check if health check is due
@@ -1414,6 +1576,22 @@ if __name__ == "__main__":
                     if tradeable_capital_usdt > 0:
                         alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
 
+                history_pnl = alert_pnl if alert_pnl is not None else total_pnl
+                if record_pair_trade_result(ticker_1, ticker_2, history_pnl):
+                    stats = get_pair_history_stats(ticker_1, ticker_2)
+                    if stats:
+                        logger.info(
+                            "Pair history updated: %s/%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            ticker_1,
+                            ticker_2,
+                            stats["trades"],
+                            stats["wins"],
+                            stats["losses"],
+                            stats["win_rate"] * 100,
+                            stats["win_usdt"],
+                            stats["loss_usdt"],
+                        )
+
                 kill_switch = close_all_positions(kill_switch)
 
                 post_equity_usdt = None
@@ -1454,9 +1632,25 @@ if __name__ == "__main__":
             if cycle_limit and cycles_run >= cycle_limit:
                 status_dict["message"] = "Max cycles reached; exiting."
                 save_status(status_dict)
+                run_end_reason = "max_cycles"
+                run_end_detail = f"cycles={cycles_run}"
                 break
+    except KeyboardInterrupt:
+        run_end_reason = "manual_stop"
+        run_end_detail = "Ended by user"
+        run_end_exit_code = 0
     except Exception as e:
         logger.critical(f"UNHANDLED EXCEPTION in main loop: {e}", exc_info=True)
         print(f"CRITICAL ERROR: {e}")
         status_dict["message"] = f"Crashed: {e}"
         save_status(status_dict)
+        run_end_reason = "error"
+        run_end_detail = str(e)
+        run_end_exit_code = 1
+    if run_end_reason:
+        _log_run_end(run_end_reason, run_end_detail, exit_code=run_end_exit_code)
+        status_dict["message"] = f"Run ended: {run_end_reason}"
+        save_status(status_dict)
+        if os.getenv("STATBOT_MANAGED") != "1":
+            _run_report_generator()
+        sys.exit(run_end_exit_code)

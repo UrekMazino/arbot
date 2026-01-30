@@ -1,11 +1,13 @@
 import logging
 import os
+import re
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _LOG_SETUP_DONE = False
 _LOG_FILE_PATH = None
+_RUN_DIR_RE = re.compile(r"^run_(?P<seq>\d+)_\d{8}_\d{6}$")
 
 
 def _int_env(name, default):
@@ -18,16 +20,38 @@ def _int_env(name, default):
         return default
 
 
+def _next_run_sequence(log_root):
+    if not log_root.exists():
+        return 1
+    max_seq = 0
+    for entry in log_root.iterdir():
+        if not entry.is_dir():
+            continue
+        match = _RUN_DIR_RE.match(entry.name)
+        if not match:
+            continue
+        try:
+            seq = int(match.group("seq"))
+        except (TypeError, ValueError):
+            continue
+        if seq > max_seq:
+            max_seq = seq
+    return max_seq + 1
+
+
 def _build_log_path():
     env_path = os.getenv("STATBOT_LOG_PATH")
     if env_path:
         resolved = Path(env_path).expanduser()
         resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved
-    logs_dir = Path(__file__).resolve().parents[1] / "Logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%m_%m%d%y_%H%M%S")
-    return logs_dir / f"log_{timestamp}.log"
+    logs_root = Path(__file__).resolve().parents[1] / "Logs" / "v1"
+    logs_root.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_seq = _next_run_sequence(logs_root)
+    run_dir = logs_root / f"run_{run_seq:02d}_{run_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir / f"log_{run_id}.log"
 
 
 def get_log_path():

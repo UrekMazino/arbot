@@ -4,6 +4,7 @@
 """
 
 from func_price_klines import get_price_klines
+from pathlib import Path
 import json
 import time
 
@@ -16,7 +17,7 @@ def store_price_history(symbols):
         symbols: List of symbol dictionaries with 'symbol' key
 
     Returns:
-        None (saves to 1_price_list.json)
+        None (saves to output/1_price_list.json)
     """
     # Get prices and store in dictionary
     count = 0
@@ -72,16 +73,23 @@ def store_price_history(symbols):
 
         else:
             print(f"  ✗ Failed: {price_history.get('msg', 'Unknown error')}")
-
     # Output prices to JSON
     if len(price_history_dict) > 0:
-        print(f"\n{'='*60}")
-        print(f"Saving {len(price_history_dict)} symbols to 1_price_list.json...")
-        with open('1_price_list.json', 'w') as fp:
+        base_dir = Path(__file__).resolve().parent
+        output_dir = base_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "1_price_list.json"
+        print("\n" + "=" * 60)
+        try:
+            rel_path = output_path.relative_to(base_dir)
+        except ValueError:
+            rel_path = output_path
+        print(f"Saving {len(price_history_dict)} symbols to {rel_path}...")
+        with output_path.open("w") as fp:
             json.dump(price_history_dict, fp, indent=4)
-        print(f"✓ Prices saved successfully!")
-        print(f"{'='*60}\n")
+        print("Prices saved successfully!")
+        print("=" * 60 + "\n")
     else:
-        print(f"\n⚠️  No price data to save")
+        print("\nNo price data to save")
 
     return

@@ -8,6 +8,9 @@ from config_strategy_api import (
     min_hedge_ratio,
     max_hedge_ratio,
     min_capital_per_leg,
+    liquidity_window,
+    min_avg_quote_volume,
+    liquidity_pct,
 )
 from pathlib import Path
 import json
@@ -215,8 +218,36 @@ def _calculate_min_capital(last_price, min_sz, lot_sz):
     return min_qty, float(min_qty) * float(last_price)
 
 
+def _average_quote_volume(klines, window):
+    if not klines:
+        return None
+    if window and window > 0 and len(klines) > window:
+        data = klines[-window:]
+    else:
+        data = klines
+
+    total = 0.0
+    count = 0
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        close = _safe_float(row.get("close"))
+        if close is None or close <= 0:
+            continue
+        base_vol = _safe_float(row.get("volume_ccy"))
+        if base_vol is None or base_vol <= 0:
+            base_vol = _safe_float(row.get("volume"))
+        if base_vol is None or base_vol <= 0:
+            continue
+        total += base_vol * close
+        count += 1
+    if count == 0:
+        return None
+    return total / count
+
+
 # Get co-integrated pairs
-def get_cointegrated_pairs(json_symbols):
+def get_cointegrated_pairs(json_symbols, liquidity_pct_override=None, min_avg_quote_volume_override=None):
     """
     Find all cointegrated pairs from symbol data
     """
@@ -233,6 +264,7 @@ def get_cointegrated_pairs(json_symbols):
         if series:
             series_by_symbol[sym] = np.array(series, dtype=float)
         info = data.get('symbol_info', {}) if isinstance(data, dict) else {}
+        klines = data.get('klines', []) if isinstance(data, dict) else []
         min_sz = info.get('min_sz') if isinstance(info, dict) else None
         lot_sz = info.get('lot_sz') if isinstance(info, dict) else None
         if min_sz is None and isinstance(info, dict):
@@ -241,10 +273,12 @@ def get_cointegrated_pairs(json_symbols):
             lot_sz = info.get('lotSz')
         last_close = series[-1] if series else None
         min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz)
+        avg_quote_volume = _average_quote_volume(klines, liquidity_window)
         symbol_meta[sym] = {
             "min_qty": min_qty,
             "min_capital": min_capital,
             "last_close": last_close,
+            "avg_quote_volume": avg_quote_volume,
         }
 
     symbols = list(series_by_symbol.keys())
@@ -271,6 +305,11 @@ def get_cointegrated_pairs(json_symbols):
             min_cap_2 = symbol_meta.get(sym_2, {}).get("min_capital", 0.0) or 0.0
             required_floor = max(min_cap_1, min_cap_2) if min_cap_1 > 0 and min_cap_2 > 0 else None
             min_equity = required_floor * 2 if required_floor else None
+            avg_vol_1 = symbol_meta.get(sym_1, {}).get("avg_quote_volume")
+            avg_vol_2 = symbol_meta.get(sym_2, {}).get("avg_quote_volume")
+            pair_liquidity = None
+            if avg_vol_1 is not None and avg_vol_2 is not None:
+                pair_liquidity = min(avg_vol_1, avg_vol_2)
 
             coint_pair_list.append({
                 "sym_1": sym_1,
@@ -284,6 +323,9 @@ def get_cointegrated_pairs(json_symbols):
                 "min_capital_2": min_cap_2 if min_cap_2 > 0 else None,
                 "min_capital_per_leg": required_floor,
                 "min_equity_recommended": min_equity,
+                "avg_quote_volume_1": avg_vol_1,
+                "avg_quote_volume_2": avg_vol_2,
+                "pair_liquidity_min": pair_liquidity,
             })
 
     # Output results
@@ -291,6 +333,13 @@ def get_cointegrated_pairs(json_symbols):
     df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
     filtered_count = 0
     filtered_breakdown = {}
+    liquidity_pct_cutoff = None
+    active_liquidity_pct = (
+        liquidity_pct_override if liquidity_pct_override is not None else liquidity_pct
+    )
+    active_min_avg_quote_volume = (
+        min_avg_quote_volume_override if min_avg_quote_volume_override is not None else min_avg_quote_volume
+    )
 
     if not df_coint.empty:
         if min_p_value_filter is not None and max_p_value_filter is not None:
@@ -321,6 +370,25 @@ def get_cointegrated_pairs(json_symbols):
                 df_coint = df_coint[cap_vals >= min_capital_per_leg].copy()
                 filtered_breakdown["min_capital"] = before - len(df_coint)
 
+        if active_min_avg_quote_volume and active_min_avg_quote_volume > 0:
+            if "avg_quote_volume_1" in df_coint.columns and "avg_quote_volume_2" in df_coint.columns:
+                before = len(df_coint)
+                vol_1 = pd.to_numeric(df_coint["avg_quote_volume_1"], errors="coerce").fillna(0)
+                vol_2 = pd.to_numeric(df_coint["avg_quote_volume_2"], errors="coerce").fillna(0)
+                df_coint = df_coint[
+                    (vol_1 >= active_min_avg_quote_volume) & (vol_2 >= active_min_avg_quote_volume)
+                ].copy()
+                filtered_breakdown["liquidity_min"] = before - len(df_coint)
+
+        if active_liquidity_pct and active_liquidity_pct > 0 and not df_coint.empty:
+            if "pair_liquidity_min" in df_coint.columns:
+                before = len(df_coint)
+                pair_liq = pd.to_numeric(df_coint["pair_liquidity_min"], errors="coerce")
+                if not pair_liq.dropna().empty:
+                    liquidity_pct_cutoff = pair_liq.quantile(active_liquidity_pct)
+                    df_coint = df_coint[pair_liq >= liquidity_pct_cutoff].copy()
+                    filtered_breakdown["liquidity_pct"] = before - len(df_coint)
+
         if max_pairs_per_ticker and max_pairs_per_ticker > 0 and not df_coint.empty:
             before = len(df_coint)
             counts = pd.concat([df_coint["sym_1"], df_coint["sym_2"]]).value_counts()
@@ -342,7 +410,10 @@ def get_cointegrated_pairs(json_symbols):
         df_coint = df_coint[mask].copy()
         filtered_count = before - len(df_coint)
         filtered_breakdown["min_equity"] = filtered_count
-    df_coint.to_csv('2_cointegrated_pairs.csv', index=False)
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "2_cointegrated_pairs.csv"
+    df_coint.to_csv(output_path, index=False)
 
     # Print statistics
     print(f"\n{'=' * 60}")
@@ -356,6 +427,13 @@ def get_cointegrated_pairs(json_symbols):
         for key, count in filtered_breakdown.items():
             if count:
                 print(f"Pairs filtered by {key}: {count:,}")
+    if liquidity_pct_cutoff is not None:
+        print(
+            "Liquidity percentile cutoff: {0:.4f} (pct={1})".format(
+                liquidity_pct_cutoff,
+                active_liquidity_pct,
+            )
+        )
     if filtered_count:
         print(f"Pairs filtered by min equity: {filtered_count:,} (threshold: {min_equity_filter_usdt:.2f} USDT)")
     if restricted_removed:

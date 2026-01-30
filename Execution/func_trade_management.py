@@ -1,3 +1,4 @@
+import os
 from scipy.stats import false_discovery_control
 
 from config_execution_api import (
@@ -75,6 +76,7 @@ All transitions are logged with timestamps and context.
 """
 from advanced_trade_management import AdvancedTradeManager
 from func_price_calls import get_ticker_trade_liquidity, get_ticker_liquidity_analysis
+from func_calculation import get_contract_value_quote
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import (
     initialise_order_execution,
@@ -773,27 +775,6 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             capital_short,
         )
         
-        initial_fill_target_long_usdt = avg_liquidity_long * last_price_long
-        initial_fill_target_short_usdt = avg_liquidity_short * last_price_short
-        initial_capital_injection_usdt = min(initial_fill_target_long_usdt, initial_fill_target_short_usdt)
-
-        # Ensure initial capital injection does not exceed allocated capital
-        if limit_order_basis:
-            if initial_capital_injection_usdt > capital_long:
-                initial_capital_usdt = capital_long
-            else:
-                initial_capital_usdt = initial_capital_injection_usdt
-        else:
-            initial_capital_usdt = capital_long
-
-        logger.info(
-            "Liquidity check: long_target=%.2f short_target=%.2f liquidity_long=%.4f liquidity_short=%.4f",
-            initial_fill_target_long_usdt,
-            initial_fill_target_short_usdt,
-            avg_liquidity_long,
-            avg_liquidity_short,
-        )
-
         # Set the remaining capital
         remaining_capital_long = capital_long
         remaining_capital_short = capital_short
@@ -855,6 +836,128 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             )
             initial_capital_usdt = required_floor
 
+        long_info_req = min_req_long.get("instrument_info") or {}
+        short_info_req = min_req_short.get("instrument_info") or {}
+        long_contract_value_quote = get_contract_value_quote(last_price_long, long_info_req, inst_id=long_ticker)
+        short_contract_value_quote = get_contract_value_quote(last_price_short, short_info_req, inst_id=short_ticker)
+        if long_contract_value_quote <= 0:
+            long_contract_value_quote = last_price_long
+        if short_contract_value_quote <= 0:
+            short_contract_value_quote = last_price_short
+
+        liquidity_long_usdt = avg_liquidity_long * long_contract_value_quote
+        liquidity_short_usdt = avg_liquidity_short * short_contract_value_quote
+        initial_fill_target_long_usdt = liquidity_long_usdt
+        initial_fill_target_short_usdt = liquidity_short_usdt
+        initial_capital_injection_usdt = min(initial_fill_target_long_usdt, initial_fill_target_short_usdt)
+
+        # Ensure initial capital injection does not exceed allocated capital
+        if limit_order_basis:
+            if initial_capital_injection_usdt > capital_long:
+                initial_capital_usdt = capital_long
+            else:
+                initial_capital_usdt = initial_capital_injection_usdt
+        else:
+            initial_capital_usdt = capital_long
+
+        min_liquidity_ratio = 0.0
+        ratio_env = os.getenv("STATBOT_MIN_LIQUIDITY_RATIO")
+        if ratio_env is None or str(ratio_env).strip() == "":
+            ratio_env = os.getenv("STATBOT_LIQUIDITY_MIN_RATIO", "0")
+        try:
+            min_liquidity_ratio = float(ratio_env)
+        except (TypeError, ValueError):
+            min_liquidity_ratio = 0.0
+
+        def _liq_ratio(liquidity_usdt, target_usdt):
+            if target_usdt <= 0:
+                return 0.0
+            if liquidity_usdt is None or liquidity_usdt <= 0:
+                return 0.0
+            return liquidity_usdt / target_usdt
+
+        ratio_long = _liq_ratio(liquidity_long_usdt, initial_capital_usdt)
+        ratio_short = _liq_ratio(liquidity_short_usdt, initial_capital_usdt)
+        if min_liquidity_ratio > 0 and (ratio_long < min_liquidity_ratio or ratio_short < min_liquidity_ratio):
+            worst_liquidity = min(liquidity_long_usdt, liquidity_short_usdt)
+            adjusted_target = (worst_liquidity / min_liquidity_ratio) if worst_liquidity > 0 else 0.0
+            if adjusted_target <= 0:
+                msg = (
+                    "WARNING LIQUIDITY_REJECT: target=%.2f long_liq=%.2f short_liq=%.2f "
+                    "ratios(liq/target)=%.2fx/%.2fx min=%.2fx. Skipping entry."
+                    % (
+                        initial_capital_usdt,
+                        liquidity_long_usdt,
+                        liquidity_short_usdt,
+                        ratio_long,
+                        ratio_short,
+                        min_liquidity_ratio,
+                    )
+                )
+                print(msg)
+                logger.warning(msg)
+                return kill_switch, signal_detected, trade_placed
+            if required_floor > 0 and adjusted_target < required_floor:
+                msg = (
+                    "WARNING LIQUIDITY_REJECT: target=%.2f -> %.2f below min order %.2f "
+                    "(liq min=%.2f, min_ratio=%.2fx). Skipping entry."
+                    % (
+                        initial_capital_usdt,
+                        adjusted_target,
+                        required_floor,
+                        worst_liquidity,
+                        min_liquidity_ratio,
+                    )
+                )
+                print(msg)
+                logger.warning(msg)
+                return kill_switch, signal_detected, trade_placed
+            if adjusted_target < initial_capital_usdt:
+                logger.info(
+                    "Liquidity downsize: target=%.2f -> %.2f to meet min ratio %.2fx "
+                    "(liq_long=%.2f liq_short=%.2f).",
+                    initial_capital_usdt,
+                    adjusted_target,
+                    min_liquidity_ratio,
+                    liquidity_long_usdt,
+                    liquidity_short_usdt,
+                )
+                initial_capital_usdt = adjusted_target
+                remaining_capital_long = min(remaining_capital_long, initial_capital_usdt)
+                remaining_capital_short = min(remaining_capital_short, initial_capital_usdt)
+                ratio_long = _liq_ratio(liquidity_long_usdt, initial_capital_usdt)
+                ratio_short = _liq_ratio(liquidity_short_usdt, initial_capital_usdt)
+
+        logger.info(
+            "Liquidity check: long_target=%.2f short_target=%.2f liquidity_long=%.2f liquidity_short=%.2f",
+            initial_capital_usdt,
+            initial_capital_usdt,
+            liquidity_long_usdt,
+            liquidity_short_usdt,
+        )
+        logger.info(
+            "Liquidity ratios (liq/target): long=%.2fx short=%.2fx (min=%.2fx)",
+            ratio_long,
+            ratio_short,
+            min_liquidity_ratio,
+        )
+        if min_liquidity_ratio > 0 and (ratio_long < min_liquidity_ratio or ratio_short < min_liquidity_ratio):
+            msg = (
+                "WARNING LIQUIDITY_REJECT: target=%.2f long_liq=%.2f short_liq=%.2f "
+                "ratios(liq/target)=%.2fx/%.2fx min=%.2fx. Skipping entry."
+                % (
+                    initial_capital_usdt,
+                    liquidity_long_usdt,
+                    liquidity_short_usdt,
+                    ratio_long,
+                    ratio_short,
+                    min_liquidity_ratio,
+                )
+            )
+            print(msg)
+            logger.warning(msg)
+            return kill_switch, signal_detected, trade_placed
+
         # Preflight both legs to avoid one-sided entries on invalid trade details
         preflight_long = preview_entry_details(
             long_ticker,
@@ -880,6 +983,20 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             print(msg)
             logger.error(msg)
             return kill_switch, signal_detected, trade_placed
+
+        long_entry_price = preflight_long.get("entry_price") or 0.0
+        short_entry_price = preflight_short.get("entry_price") or 0.0
+        long_qty = preflight_long.get("quantity") or 0.0
+        short_qty = preflight_short.get("quantity") or 0.0
+        logger.info(
+            "Entry preview: long=%s price=%.6f qty=%.6f | short=%s price=%.6f qty=%.6f",
+            long_ticker,
+            long_entry_price,
+            long_qty,
+            short_ticker,
+            short_entry_price,
+            short_qty,
+        )
 
         long_contract_value = preflight_long.get("contract_value_quote") or 0.0
         short_contract_value = preflight_short.get("contract_value_quote") or 0.0
@@ -974,8 +1091,10 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                         )
                     else:
                         logger.info(
-                            "Placed long entry: id=%s capital=%.2f remaining=%.2f",
+                            "Placed long entry: ticker=%s id=%s entry_price=%.6f capital=%.2f remaining=%.2f",
+                            long_ticker,
                             order_long_id,
+                            long_entry_price,
                             initial_capital_usdt,
                             remaining_capital_long,
                         )
@@ -1024,8 +1143,10 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                         )
                     else:
                         logger.info(
-                            "Placed short entry: id=%s capital=%.2f remaining=%.2f",
+                            "Placed short entry: ticker=%s id=%s entry_price=%.6f capital=%.2f remaining=%.2f",
+                            short_ticker,
                             order_short_id,
+                            short_entry_price,
                             initial_capital_usdt,
                             remaining_capital_short,
                         )

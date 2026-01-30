@@ -82,6 +82,7 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 *   **Dynamic Rounding**: Tick size and lot size are fetched dynamically from the OKX API to ensure order precision.
 *   **Contract-Aware Notional**: Swap sizing uses `ctVal` and `ctMult` to compute quote-per-contract for each leg. Contract values are logged at entry for transparency.
 *   **Pre-Trade Balance Gate (USDT)**: On entry signal, the bot logs a USDT balance snapshot (`availBal`/`availEq`) and runs a pre-trade notional check against `availEq`. Orders are skipped if they would exceed available equity.
+*   **Liquidity Guard (Optional)**: If enabled, the bot skips entries when available liquidity / target size is below a configured ratio (`STATBOT_MIN_LIQUIDITY_RATIO`, legacy `STATBOT_LIQUIDITY_MIN_RATIO`). If the ratio fails, it first attempts to downsize per-leg capital to meet the minimum; if the adjusted target falls below the exchange minimum order size, the entry is skipped.
 *   **Margin Mode**: Configured for **cross margin** (recommended for pairs trading). In cross mode, all positions share the account's margin pool, making it capital efficient for simultaneous long+short positions. Isolated mode requires separate margin for each position.
 
 ### Safety Exits
@@ -111,17 +112,20 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
+*   **Hospital**: Pairs with good trade history that fail health/cointegration get a 5-minute cooldown, then are prioritized for re-evaluation. When the active pair fails, hospital pairs that have completed cooldown are selected FIFO (oldest ready first). Good history defaults to: min_trades=1, win_rate > 50%, total_win_usdt > total_loss_usdt.
 *   **Graveyard**: Failed pairs are blacklisted using reason-based TTLs:
-    - `cointegration_lost`: 10 days
+    - `cointegration_lost_bad_history`: 7 days
+    - `health_bad_history`: 7 days
     - `orderbook_dead`: 30 days
     - `compliance_restricted`: no expiry
     - `manual`: 3 days
-    - `health`: 7 days
     - `settle_ccy_filter`: 30 days
     - default: 7 days
 *   **Cooldown**: Mandatory **24-hour wait** between pair switches to prevent over-trading and fee erosion.
 *   **Re-Entry Cooldown**: 5-minute wait after exit before re-entering same pair to prevent clustering at same Z-level.
-*   **Pair Universe Refresh**: If a switch finds no eligible replacement, Execution runs `Strategy/main_strategy.py` to regenerate `2_cointegrated_pairs.csv` and waits 5 minutes before retrying. The refresh loop continues until a valid pair is available.
+*   **Pair Universe Refresh**: If a switch finds no eligible replacement, Execution runs `Strategy/main_strategy.py` to regenerate `Strategy/output/2_cointegrated_pairs.csv` and waits 5 minutes before retrying. The refresh loop continues until a valid pair is available.
+*   **Strategy Outputs**: Strategy writes artifacts to `Strategy/output` (`1_price_list.json`, `2_cointegrated_pairs.csv`, `3_backtest_file.csv`, `4_summary_report.csv`).
+*   **Strategy Liquidity Filter**: Strategy can bias pair selection toward more liquid legs using `STATBOT_STRATEGY_LIQUIDITY_PCT`. If a scan yields zero pairs, it retries once at 0.2 and restores the default 0.3 afterward.
 
 ### Performance Tracking (Per-Cycle Logging)
 Each trading cycle logs comprehensive performance metrics:
@@ -154,31 +158,49 @@ Each trading cycle logs comprehensive performance metrics:
 - **Compliance Restricted Ticker Filter**: sCode=51155 marks a ticker as restricted; pairs containing restricted tickers are skipped on future switches
 - **Empty Universe Refresh Loop**: If a switch cannot find a valid replacement, the bot re-runs Strategy and waits 5 minutes between attempts until a pair is available
 - **Concise Logging**: Cycle logs move to DEBUG; periodic status updates summarize PnL, equity, and session performance at INFO
-- **Per-Run Logs Directory**: Logs live in `OKXStatBot/Logs` with per-run filenames like `log_MM_MMDDYY_HHMMSS.log`
+- **Per-Run Logs Directory**: Logs live in `OKXStatBot/Logs/v1/run_XX_YYYYMMDD_HHMMSS/log_YYYYMMDD_HHMMSS.log`
 - **Entry Signal Snapshots**: One-time startup balance snapshot plus pre-trade snapshots (USDT availBal/availEq) at entry signal
 - **PNL Alerts**: `PNL_ALERT` fires on session threshold breaches and trade closes; trade-close alerts log after positions close and equity refresh
 - **Discord Command Listener**: Optional listener answers `!status`, `!pnl`, `!pair`, `!balance`, `!help` via Clawdbot
 
 ### Log Rotation and Retention
-StatBot writes per-run logs to `OKXStatBot/Logs` (or `STATBOT_LOG_PATH` if set) with a timestamped filename.
+StatBot writes per-run logs to `OKXStatBot/Logs/v1` (or `STATBOT_LOG_PATH` if set) with a timestamped filename.
 Rotation prevents indefinite growth. Control it via `.env`:
 ```
 STATBOT_LOG_MAX_MB=4
 STATBOT_LOG_BACKUPS=2
-STATBOT_LOG_PATH=OKXStatBot/Logs/log_01_012926_161128.log
+STATBOT_LOG_PATH=OKXStatBot/Logs/v1/run_01_20260130_161128/log_20260130_161128.log
 ```
 This keeps the current log up to ~4 MB plus 2 rotated backups (total ~12 MB).  
 Optional: `STATBOT_LOG_LEVEL=INFO|WARNING|ERROR` to control verbosity.
 
+`OKXStatBot/Logs/v1` maintains:
+- `index.json` (all runs + key log metadata)
+- `index.csv` (CSV version of the same index)
+
+### Execution State Files
+Runtime state is stored under `OKXStatBot/Execution/state`:
+- `active_pair.json`
+- `status.json`
+- `pair_strategy_state.json`
+
 ### Reports (V1 Evidence Pack)
-StatBot can generate a per-run report pack that captures effectiveness data:
+StatBot can generate a per-run report pack under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS` that captures effectiveness data:
 - `summary.json` (run metadata, PnL, drawdown, win rate)
-- `summary.txt` (human-readable summary)
+- `summary.txt` (executive summary + files list)
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `trades.csv` (trade closes with PnL and hold time)
 - `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)
+- `entry_slippage.csv` (entry fill slippage vs preview price, bps)
 - `alerts.txt` (errors, PNL alerts, critical events)
 - `config_snapshot.json` (redacted .env snapshot)
+
+`OKXStatBot/Reports/v1` maintains:
+- `index.json` (all runs + key metrics)
+- `index.csv` (CSV version of the same index)
+
+Manual/analysis variants:
+- Running `report_generator.py --output manual_*` or `analysis_*` routes the pack into `run_XX_.../variants/<name>` for the matching run timestamp.
 
 Enable/disable:
 ```
@@ -189,13 +211,31 @@ Optional uptime trigger:
 STATBOT_REPORT_UPTIME_HOURS=24
 ```
 
+Run end tracking:
+- Logs emit `RUN_END: reason=... detail=... exit_code=...`
+- Reports capture `run_end_reason`, `run_end_detail`, `run_end_time`
+- Reasons: `manual_stop`, `error`, `max_uptime`, `max_cycles`, `circuit_breaker`
+
+Max uptime (optional):
+```
+STATBOT_MAX_UPTIME_HOURS=24
+```
+
+### Pre-live Fee Check (Rebates/Discounts)
+Before switching to live, use the checklist script to verify your fee tier and recent bill credits:
+```
+cd OKXStatBot/Execution
+python pre_live_checklist.py --mode live --inst-type SWAP
+```
+The script respects `OKX_FLAG` by default; `--mode live` overrides it.
+
 ### Molt Monitoring (Optional)
 Stream StatBot alerts into Molt/Clawdbot using the monitor:
 ```
 python OKXStatBot/Execution/molt_monitor.py
 ```
 
-The monitor tails the newest `OKXStatBot/Logs/log_*.log` file and posts executive-level alerts
+The monitor tails the newest `OKXStatBot/Logs/v1/**/log_*.log` file and posts executive-level alerts
 for critical events and `PNL_ALERT` lines.
 
 Delivery modes:
@@ -217,7 +257,7 @@ MOLT_DELIVERY_MODE=gateway
 ```
 
 Notes:
-- The monitor auto-detects the latest log file in `OKXStatBot/Logs`.
+- The monitor auto-detects the latest log file in `OKXStatBot/Logs/v1`.
 - If no token is provided for hooks mode, it will read `gateway.auth.token` from
   `~/.clawdbot/clawdbot.json`.
 
@@ -242,7 +282,7 @@ Supported commands:
 - `!help`
 
 ### Min Equity Filtering (Strategy + Execution)
-Strategy can auto-filter expensive pairs before writing `2_cointegrated_pairs.csv`:
+Strategy can auto-filter expensive pairs before writing `Strategy/output/2_cointegrated_pairs.csv`:
 ```
 STATBOT_STRATEGY_MIN_EQUITY=170
 ```

@@ -73,6 +73,7 @@ from func_pair_state import (
     get_entry_equity,
     get_entry_notional,
     is_restricted_ticker,
+    reset_health_failure,
     cleanup_expired_graveyard
 )
 
@@ -802,6 +803,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 if not pair:
                     continue
                 t1, t2 = pair["sym_1"], pair["sym_2"]
+                if (t1 == curr_t1 and t2 == curr_t2) or (t1 == curr_t2 and t2 == curr_t1):
+                    continue
                 if is_in_graveyard(t1, t2):
                     continue
                 if is_restricted_ticker(t1) or is_restricted_ticker(t2):
@@ -818,6 +821,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             idx = (curr_idx + i) % len(pairs)
             pair = pairs[idx]
             t1, t2 = pair["sym_1"], pair["sym_2"]
+            if (t1 == curr_t1 and t2 == curr_t2) or (t1 == curr_t2 and t2 == curr_t1):
+                continue
             if is_in_graveyard(t1, t2):
                 continue
             if is_in_hospital(t1, t2):
@@ -900,7 +905,16 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         if switch_reason != "min_capital":
             if switch_reason in ("health", "cointegration_lost"):
                 stats = get_pair_history_stats(curr_t1, curr_t2)
-                if is_good_pair_history(curr_t1, curr_t2):
+                if stats and stats.get("trades", 0) == 0:
+                    unproven_reason = f"{switch_reason}_unproven"
+                    add_to_hospital(curr_t1, curr_t2, reason=unproven_reason)
+                    logger.warning(
+                        "Pair moved to hospital (unproven): %s/%s reason=%s trades=0",
+                        curr_t1,
+                        curr_t2,
+                        unproven_reason,
+                    )
+                elif is_good_pair_history(curr_t1, curr_t2):
                     add_to_hospital(curr_t1, curr_t2, reason=switch_reason)
                     if stats:
                         logger.warning(
@@ -954,6 +968,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
         if save_active_pair(next_t1, next_t2):
             logger.info("New pair saved to state/active_pair.json")
+            reset_health_failure(curr_t1, curr_t2)
             set_last_switch_time()
             return SWITCH_RESULT_SWITCHED
 

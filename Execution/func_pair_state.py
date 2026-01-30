@@ -90,7 +90,8 @@ def load_pair_state():
             "entry_notional": None,
             "last_switch_reason": "",
             "min_capital_cooldowns": {},
-            "stall_warning_marks": []
+            "stall_warning_marks": [],
+            "health_failures": {},
         }
     try:
         with open(STATE_FILE, "r") as f:
@@ -104,6 +105,8 @@ def load_pair_state():
                 state["hospital"] = {}
             if "pair_history" not in state:
                 state["pair_history"] = {}
+            if "health_failures" not in state:
+                state["health_failures"] = {}
             # Ensure last_health_score exists
             if "last_health_score" not in state:
                 state["last_health_score"] = None
@@ -127,7 +130,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": []}
+        return {"last_switch_time": 0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
 
 def save_pair_state(state):
     try:
@@ -308,6 +311,39 @@ def record_trade_result(is_win):
 def get_consecutive_losses():
     state = load_pair_state()
     return state.get("consecutive_losses", 0)
+
+
+def record_health_failure(t1, t2, is_failure):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return 0
+    state = load_pair_state()
+    failures = state.get("health_failures", {})
+    if not isinstance(failures, dict):
+        failures = {}
+    if is_failure:
+        count = int(failures.get(key, 0) or 0) + 1
+    else:
+        count = 0
+    failures[key] = count
+    state["health_failures"] = failures
+    save_pair_state(state)
+    return count
+
+
+def get_health_failure_count(t1, t2):
+    key = normalize_pair_key(t1, t2)
+    if not key:
+        return 0
+    state = load_pair_state()
+    failures = state.get("health_failures", {})
+    if not isinstance(failures, dict):
+        return 0
+    return int(failures.get(key, 0) or 0)
+
+
+def reset_health_failure(t1, t2):
+    return record_health_failure(t1, t2, False)
 
 def _graveyard_days_for_reason(reason):
     if not reason:

@@ -45,6 +45,60 @@ def _safe_float(value, default):
         return default
 
 
+def _env_float_list(name, default_list):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return list(default_list)
+    values = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            values.append(float(part))
+        except (TypeError, ValueError):
+            continue
+    return values if values else list(default_list)
+
+
+def _env_int_list(name, default_list):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return list(default_list)
+    values = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            values.append(int(float(part)))
+        except (TypeError, ValueError):
+            continue
+    return values if values else list(default_list)
+
+
+def _build_relax_tiers(base_value, candidates, direction):
+    tiers = []
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            continue
+        if direction == "down":
+            if val <= base_value + 1e-9:
+                tiers.append(val)
+        else:
+            if val >= base_value - 1e-9:
+                tiers.append(val)
+    if base_value not in tiers:
+        tiers.append(base_value)
+    reverse = True if direction == "down" else False
+    tiers = sorted({round(v, 8) for v in tiers}, reverse=reverse)
+    return tiers
+
+
 def _build_liquidity_fallbacks(base_pct):
     try:
         base_pct = float(base_pct)
@@ -122,6 +176,18 @@ def main():
     mode_label = "DEMO" if is_demo else "LIVE"
     settle_label = ",".join(settle_ccy_filter) if settle_ccy_filter else "ALL"
     min_equity_label = f"{min_equity_filter_usdt:.2f}" if min_equity_filter_usdt > 0 else "off"
+    fallback_enabled = str(os.getenv("STATBOT_STRATEGY_FALLBACK_ENABLED", "1")).strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    try:
+        min_pairs_needed = int(float(os.getenv("STATBOT_STRATEGY_MIN_PAIRS", "3")))
+    except (TypeError, ValueError):
+        min_pairs_needed = 3
+    if min_pairs_needed < 1:
+        min_pairs_needed = 1
 
     print("Strategy scan starting...")
     print(
@@ -151,6 +217,12 @@ def main():
             liquidity_window,
             min_avg_quote_volume,
             _safe_float(os.getenv("STATBOT_STRATEGY_LIQUIDITY_PCT"), DEFAULT_LIQUIDITY_PCT),
+        )
+    )
+    print(
+        "Fallback: enabled={0} min_pairs={1}".format(
+            "yes" if fallback_enabled else "no",
+            min_pairs_needed,
         )
     )
 
@@ -192,52 +264,242 @@ def main():
     coint_summary = None
     used_liquidity_pct = None
 
-    def _run_fallback(pass_label, corr_override):
-        nonlocal df_coint, coint_summary, used_liquidity_pct
-        for attempt, pct in enumerate(fallback_steps, start=1):
-            label = f"Attempt {attempt}/{len(fallback_steps)}"
-            corr_label = f"corr_min={corr_override:.2f}" if corr_override is not None else "corr_min=default"
-            print(f"Cointegration {label}: liquidity pct {pct:.2f} ({corr_label})")
-            if pct != base_liquidity_pct:
-                _update_env_value(env_path, "STATBOT_STRATEGY_LIQUIDITY_PCT", pct)
-                logger.warning(
-                    "Strategy %s attempt %d/%d: liquidity pct %.2f corr_min=%s",
-                    pass_label,
-                    attempt,
-                    len(fallback_steps),
-                    pct,
-                    "default" if corr_override is None else f"{corr_override:.2f}",
-                )
-            else:
-                logger.info(
-                    "Strategy %s attempt %d/%d: liquidity pct %.2f corr_min=%s",
-                    pass_label,
-                    attempt,
-                    len(fallback_steps),
-                    pct,
-                    "default" if corr_override is None else f"{corr_override:.2f}",
-                )
+    base_corr = corr_min_filter
+    base_pvalue_max = max_p_value_filter
+    base_zero_cross = min_zero_crossings
+    base_min_equity = min_equity_filter_usdt
+    base_min_capital = min_capital_per_leg
 
-            df_coint, coint_summary = get_cointegrated_pairs(
-                price_data,
-                liquidity_pct_override=pct,
-                corr_min_override=corr_override,
+    corr_candidates = _env_float_list(
+        "STATBOT_STRATEGY_CORR_TIERS",
+        [base_corr, 0.15, 0.10, 0.05, 0.0],
+    )
+    pvalue_candidates = _env_float_list(
+        "STATBOT_STRATEGY_PVALUE_MAX_TIERS",
+        [base_pvalue_max, 0.05, 0.10],
+    )
+    zero_cross_candidates = _env_int_list(
+        "STATBOT_STRATEGY_ZERO_CROSS_TIERS",
+        [base_zero_cross, 7, 5, 3, 1],
+    )
+    equity_mults = _env_float_list(
+        "STATBOT_STRATEGY_MIN_EQUITY_MULTS",
+        [1.0, 1.2, 1.4, 1.6, 2.0],
+    )
+    min_capital_mults = _env_float_list(
+        "STATBOT_STRATEGY_MIN_CAPITAL_MULTS",
+        [1.0, 0.75, 0.5, 0.0],
+    )
+
+    corr_tiers = _build_relax_tiers(base_corr, corr_candidates, "down")
+    pvalue_tiers = _build_relax_tiers(base_pvalue_max, pvalue_candidates, "up")
+    zero_cross_tiers = _build_relax_tiers(base_zero_cross, zero_cross_candidates, "down")
+    if base_min_equity and base_min_equity > 0:
+        equity_candidates = [base_min_equity * mult for mult in equity_mults if mult >= 0]
+        equity_tiers = _build_relax_tiers(base_min_equity, equity_candidates, "up")
+    else:
+        equity_tiers = [0.0]
+    if base_min_capital and base_min_capital > 0:
+        min_cap_candidates = [base_min_capital * mult for mult in min_capital_mults if mult >= 0]
+        min_capital_tiers = _build_relax_tiers(base_min_capital, min_cap_candidates, "down")
+    else:
+        min_capital_tiers = [0.0]
+
+    def _attempt_filters(pct, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital, label):
+        df, summary = get_cointegrated_pairs(
+            price_data,
+            liquidity_pct_override=pct,
+            corr_min_override=corr_min,
+            max_p_value_override=pvalue_max,
+            min_zero_crossings_override=zero_cross_min,
+            min_equity_filter_override=min_equity,
+            min_capital_per_leg_override=min_capital,
+        )
+        count = len(df)
+        logger.info(
+            "Strategy fallback %s: pairs=%d corr_min=%.3f pval_max=%.4f zc_min=%s min_eq=%.2f min_cap=%.4f",
+            label,
+            count,
+            corr_min,
+            pvalue_max,
+            int(zero_cross_min),
+            min_equity,
+            min_capital,
+        )
+        return df, summary
+
+    def _run_filter_fallbacks(pct):
+        best_df = None
+        best_summary = None
+        best_settings = None
+        best_count = -1
+
+        def _record_best(df, summary, settings):
+            nonlocal best_df, best_summary, best_settings, best_count
+            count = len(df)
+            if count > best_count:
+                best_df = df
+                best_summary = summary
+                best_settings = settings
+                best_count = count
+
+        def _attempt(label, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital):
+            df, summary = _attempt_filters(
+                pct,
+                corr_min,
+                pvalue_max,
+                zero_cross_min,
+                min_equity,
+                min_capital,
+                label,
             )
-            if len(df_coint) > 0:
-                used_liquidity_pct = pct
-                if pct != base_liquidity_pct:
-                    print(f"Cointegration: found pairs at liquidity pct {pct:.2f}")
-                return True
+            settings = {
+                "corr_min": corr_min,
+                "pvalue_max": pvalue_max,
+                "zero_cross_min": zero_cross_min,
+                "min_equity": min_equity,
+                "min_capital": min_capital,
+            }
+            _record_best(df, summary, settings)
+            if len(df) >= min_pairs_needed:
+                return df, summary, settings, True
+            return None, None, None, False
 
-            print(f"Cointegration: no pairs at liquidity pct {pct:.2f}, relaxing...")
-            logger.info("No pairs at liquidity pct %.2f", pct)
-        return False
+        df, summary, settings, ok = _attempt(
+            "base",
+            base_corr,
+            base_pvalue_max,
+            base_zero_cross,
+            base_min_equity,
+            base_min_capital,
+        )
+        if ok:
+            return df, summary, settings, True
+        if not fallback_enabled:
+            return best_df, best_summary, best_settings, False
 
-    if not _run_fallback("liquidity", None) and corr_min_filter > 0:
-        print("Cointegration: disabling correlation filter and retrying.")
-        logger.warning("Strategy fallback: disabling corr_min filter after no pairs.")
-        corr_override = 0.0
-        _run_fallback("corr_disable", corr_override)
+        for min_equity in equity_tiers:
+            for min_capital in min_capital_tiers:
+                if min_equity == base_min_equity and min_capital == base_min_capital:
+                    continue
+                df, summary, settings, ok = _attempt(
+                    "equity_cap",
+                    base_corr,
+                    base_pvalue_max,
+                    base_zero_cross,
+                    min_equity,
+                    min_capital,
+                )
+                if ok:
+                    return df, summary, settings, True
+
+        relaxed_equity = equity_tiers[-1]
+        relaxed_min_capital = min_capital_tiers[-1]
+
+        for zero_cross_min in zero_cross_tiers:
+            if zero_cross_min == base_zero_cross:
+                continue
+            df, summary, settings, ok = _attempt(
+                "zero_cross",
+                base_corr,
+                base_pvalue_max,
+                zero_cross_min,
+                relaxed_equity,
+                relaxed_min_capital,
+            )
+            if ok:
+                return df, summary, settings, True
+
+        relaxed_zero_cross = zero_cross_tiers[-1]
+        for pvalue_max in pvalue_tiers:
+            if pvalue_max == base_pvalue_max:
+                continue
+            df, summary, settings, ok = _attempt(
+                "p_value",
+                base_corr,
+                pvalue_max,
+                relaxed_zero_cross,
+                relaxed_equity,
+                relaxed_min_capital,
+            )
+            if ok:
+                return df, summary, settings, True
+
+        relaxed_pvalue = pvalue_tiers[-1]
+        for corr_min in corr_tiers:
+            if corr_min == base_corr:
+                continue
+            df, summary, settings, ok = _attempt(
+                "corr",
+                corr_min,
+                relaxed_pvalue,
+                relaxed_zero_cross,
+                relaxed_equity,
+                relaxed_min_capital,
+            )
+            if ok:
+                return df, summary, settings, True
+
+        return best_df, best_summary, best_settings, False
+
+    used_settings = None
+    best_overall_df = None
+    best_overall_summary = None
+    best_overall_settings = None
+    best_overall_liquidity = None
+    best_overall_count = -1
+    for attempt, pct in enumerate(fallback_steps, start=1):
+        label = f"Attempt {attempt}/{len(fallback_steps)}"
+        print(f"Cointegration {label}: liquidity pct {pct:.2f}")
+        if pct != base_liquidity_pct:
+            _update_env_value(env_path, "STATBOT_STRATEGY_LIQUIDITY_PCT", pct)
+            logger.warning(
+                "Strategy liquidity attempt %d/%d: liquidity pct %.2f",
+                attempt,
+                len(fallback_steps),
+                pct,
+            )
+        else:
+            logger.info(
+                "Strategy liquidity attempt %d/%d: liquidity pct %.2f",
+                attempt,
+                len(fallback_steps),
+                pct,
+            )
+
+        df_coint, coint_summary, used_settings, meets_min_pairs = _run_filter_fallbacks(pct)
+        if df_coint is not None and len(df_coint) > 0:
+            if len(df_coint) > best_overall_count:
+                best_overall_df = df_coint
+                best_overall_summary = coint_summary
+                best_overall_settings = used_settings
+                best_overall_liquidity = pct
+                best_overall_count = len(df_coint)
+            used_liquidity_pct = pct
+            if meets_min_pairs or attempt == len(fallback_steps):
+                break
+            print(
+                "Cointegration: {0} pairs below min {1}, relaxing liquidity...".format(
+                    len(df_coint),
+                    min_pairs_needed,
+                )
+            )
+            logger.info(
+                "Cointegration pairs below min (%d < %d) at liquidity pct %.2f",
+                len(df_coint),
+                min_pairs_needed,
+                pct,
+            )
+            continue
+
+        print(f"Cointegration: no pairs at liquidity pct {pct:.2f}, relaxing...")
+        logger.info("No pairs at liquidity pct %.2f", pct)
+
+    if (df_coint is None or len(df_coint) == 0) and best_overall_df is not None:
+        df_coint = best_overall_df
+        coint_summary = best_overall_summary
+        used_settings = best_overall_settings
+        used_liquidity_pct = best_overall_liquidity
 
     if df_coint is None or len(df_coint) == 0:
         print("WARNING: No cointegrated pairs found after liquidity fallback.")

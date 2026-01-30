@@ -1,4 +1,5 @@
 import math
+import os
 import warnings
 import threading
 import time
@@ -15,6 +16,44 @@ from func_log_setup import get_logger
 
 # Setup logging
 logger = get_logger("func_get_zscore")
+
+
+def _env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+_ORDERBOOK_BACKOFF_UNTIL = {}
+_ORDERBOOK_BACKOFF_SECONDS = _env_float("STATBOT_ORDERBOOK_BACKOFF_SECONDS", 45.0)
+_ORDERBOOK_BACKOFF_RETRIES = int(_env_float("STATBOT_ORDERBOOK_BACKOFF_RETRIES", 2))
+_ORDERBOOK_BACKOFF_RETRY_SLEEP = _env_float("STATBOT_ORDERBOOK_BACKOFF_RETRY_SLEEP", 0.25)
+
+
+def _backoff_active(inst_id):
+    if not inst_id:
+        return False
+    until = _ORDERBOOK_BACKOFF_UNTIL.get(inst_id, 0)
+    return until > time.time()
+
+
+def _set_backoff(inst_id, seconds, reason):
+    if not inst_id or seconds <= 0:
+        return
+    until = time.time() + seconds
+    current = _ORDERBOOK_BACKOFF_UNTIL.get(inst_id, 0)
+    if until > current:
+        _ORDERBOOK_BACKOFF_UNTIL[inst_id] = until
+        logger.warning(
+            "Orderbook backoff for %s: %s (%.0fs)",
+            inst_id,
+            reason,
+            seconds,
+        )
 
 
 def _compute_zscore(spread, window):
@@ -64,6 +103,8 @@ def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
     if not inst_id:
         logger.error(f"_fetch_mid_price called with empty inst_id")
         return None
+    if _backoff_active(inst_id):
+        return None
 
     active_session = session or market_session
     try:
@@ -75,7 +116,19 @@ def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
 
     # Issue #14 Fix: Use timeout-protected API call (5 second timeout)
     logger.debug(f"Fetching orderbook for {inst_id} (depth={level_count})")
-    response = _get_orderbook_with_timeout(active_session, inst_id, level_count, timeout=5)
+    response = None
+    attempts = max(_ORDERBOOK_BACKOFF_RETRIES, 0)
+    while True:
+        response = _get_orderbook_with_timeout(active_session, inst_id, level_count, timeout=5)
+        if response is None:
+            break
+        response_code = response.get("code")
+        if response_code != "50026" or attempts <= 0:
+            break
+        sleep_seconds = max(_ORDERBOOK_BACKOFF_RETRY_SLEEP * attempts, 0)
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        attempts -= 1
     
     if response is None:
         logger.error(f"❌ Orderbook fetch failed for {inst_id}: timeout or connection error")
@@ -89,6 +142,8 @@ def _fetch_mid_price(inst_id, depth_levels=depth, session=None):
         # Specific error handling
         if "Instrument ID does not exist" in error_msg or response_code == "51001":
             logger.error(f"🚨 TICKER DELISTED OR INVALID: {inst_id}")
+        elif response_code == "50026":
+            _set_backoff(inst_id, _ORDERBOOK_BACKOFF_SECONDS, "system error 50026")
         elif "rate limit" in error_msg.lower():
             logger.error(f"⚠️ Rate limit exceeded for {inst_id}")
         
@@ -213,13 +268,17 @@ def get_latest_zscore(
             from func_pair_state import reset_price_fetch_failures
             reset_price_fetch_failures()
         else:
-            logger.warning("get_latest_zscore: failed to fetch mid prices")
-            # Track consecutive failures - indicates delisted/illiquid tickers
-            from func_pair_state import increment_price_fetch_failures
-            failures = increment_price_fetch_failures()
-            if failures >= 5:
-                logger.error(f"⚠️ Price fetch failed {failures} times - tickers may be delisted/illiquid")
-                metrics["orderbook_dead"] = True
+            backoff_active = _backoff_active(inst_1) or _backoff_active(inst_2)
+            if backoff_active:
+                logger.info("get_latest_zscore: orderbook backoff active, using last kline prices")
+            else:
+                logger.warning("get_latest_zscore: failed to fetch mid prices")
+                # Track consecutive failures - indicates delisted/illiquid tickers
+                from func_pair_state import increment_price_fetch_failures
+                failures = increment_price_fetch_failures()
+                if failures >= 5:
+                    logger.error(f"⚠️ Price fetch failed {failures} times - tickers may be delisted/illiquid")
+                    metrics["orderbook_dead"] = True
 
     min_len = min(len(series_1), len(series_2))
     if min_len < 2:

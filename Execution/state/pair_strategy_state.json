@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1769744717.538568,
+    "last_switch_time": 1769765908.1163352,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
@@ -15,11 +15,41 @@
             "ts": 1769744707.6870005,
             "reason": "cointegration_lost_bad_history",
             "ttl_days": 7
+        },
+        "AXS-USDT-SWAP/LPT-USDT-SWAP": {
+            "ts": 1769755381.8363774,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "XRP-USDT-SWAP/NEO-USDT-SWAP": {
+            "ts": 1769758162.4783883,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "AXS-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1769758174.9197958,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "AXS-USDT-SWAP/NEO-USDT-SWAP": {
+            "ts": 1769758185.033401,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "AXS-USDT-SWAP/INJ-USDT-SWAP": {
+            "ts": 1769758387.6274729,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "AXS-USDT-SWAP/ICP-USDT-SWAP": {
+            "ts": 1769758850.4288194,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "restricted_tickers": {},
     "consecutive_losses": 0,
-    "last_health_score": 35,
+    "last_health_score": 70,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -29,14 +59,14 @@
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
     "persistence_history": [],
-    "last_exit_time": 1769744640.759171,
+    "last_exit_time": 1769758152.2581625,
     "z_history": [],
     "hospital": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": {
-            "ts": 1769744717.5365672,
+            "ts": 1769765908.1133373,
             "cooldown": 300,
             "reason": "cointegration_lost",
-            "visits": 2
+            "visits": 8
         }
     },
     "pair_history": {
@@ -55,6 +85,18 @@
             "loss_usdt": 0.005769699999746081,
             "trades": 1,
             "last_trade_ts": 1769744638.1490858
+        },
+        "NEO-USDT-SWAP/XRP-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 3.3113093000001754,
+            "trades": 1,
+            "last_trade_ts": 1769758150.2244234
         }
+    },
+    "health_failures": {
+        "LTC-USDT-SWAP/SOL-USDT-SWAP": 0,
+        "CRV-USDT-SWAP/YGG-USDT-SWAP": 0
     }
 }

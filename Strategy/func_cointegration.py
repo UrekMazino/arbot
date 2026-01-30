@@ -337,6 +337,11 @@ def get_cointegrated_pairs(
     liquidity_pct_override=None,
     min_avg_quote_volume_override=None,
     corr_min_override=None,
+    min_p_value_override=None,
+    max_p_value_override=None,
+    min_zero_crossings_override=None,
+    min_capital_per_leg_override=None,
+    min_equity_filter_override=None,
 ):
     """
     Find all cointegrated pairs from symbol data
@@ -471,19 +476,53 @@ def get_cointegrated_pairs(
         min_avg_quote_volume_override if min_avg_quote_volume_override is not None else min_avg_quote_volume
     )
 
+    active_min_p_value = min_p_value_filter
+    active_max_p_value = max_p_value_filter
+    if min_p_value_override is not None:
+        try:
+            active_min_p_value = float(min_p_value_override)
+        except (TypeError, ValueError):
+            pass
+    if max_p_value_override is not None:
+        try:
+            active_max_p_value = float(max_p_value_override)
+        except (TypeError, ValueError):
+            pass
+
+    active_zero_crossings = min_zero_crossings
+    if min_zero_crossings_override is not None:
+        try:
+            active_zero_crossings = int(float(min_zero_crossings_override))
+        except (TypeError, ValueError):
+            pass
+
+    active_min_capital_per_leg = min_capital_per_leg
+    if min_capital_per_leg_override is not None:
+        try:
+            active_min_capital_per_leg = float(min_capital_per_leg_override)
+        except (TypeError, ValueError):
+            pass
+
+    active_min_equity_filter = min_equity_filter_usdt
+    if min_equity_filter_override is not None:
+        try:
+            active_min_equity_filter = float(min_equity_filter_override)
+        except (TypeError, ValueError):
+            pass
+
     if not df_coint.empty:
-        if min_p_value_filter is not None and max_p_value_filter is not None:
-            if min_p_value_filter > 0 and max_p_value_filter > 0 and min_p_value_filter < max_p_value_filter:
+        if active_min_p_value is not None and active_max_p_value is not None:
+            if active_min_p_value > 0 and active_max_p_value > 0 and active_min_p_value < active_max_p_value:
                 before = len(df_coint)
                 df_coint = df_coint[
-                    (df_coint["p_value"] >= min_p_value_filter) &
-                    (df_coint["p_value"] <= max_p_value_filter)
+                    (df_coint["p_value"] >= active_min_p_value) &
+                    (df_coint["p_value"] <= active_max_p_value)
                 ].copy()
                 filtered_breakdown["p_value"] = before - len(df_coint)
 
-        if min_zero_crossings and min_zero_crossings > 0:
+        if active_zero_crossings and active_zero_crossings > 0:
             before = len(df_coint)
-            df_coint = df_coint[df_coint["zero_crossing"] >= min_zero_crossings].copy()
+            df_coint = df_coint[df_coint["zero_crossing"] >= active_zero_crossings].copy()
             filtered_breakdown["zero_crossing"] = before - len(df_coint)
 
         if min_hedge_ratio is not None and max_hedge_ratio is not None:
@@ -493,11 +532,11 @@ def get_cointegrated_pairs(
                 df_coint = df_coint[(hr_abs >= min_hedge_ratio) & (hr_abs <= max_hedge_ratio)].copy()
                 filtered_breakdown["hedge_ratio"] = before - len(df_coint)
 
-        if min_capital_per_leg is not None and min_capital_per_leg > 0:
+        if active_min_capital_per_leg is not None and active_min_capital_per_leg > 0:
             if "min_capital_per_leg" in df_coint.columns:
                 before = len(df_coint)
                 cap_vals = pd.to_numeric(df_coint["min_capital_per_leg"], errors="coerce")
-                df_coint = df_coint[cap_vals >= min_capital_per_leg].copy()
+                df_coint = df_coint[cap_vals >= active_min_capital_per_leg].copy()
                 filtered_breakdown["min_capital"] = before - len(df_coint)
 
         if active_min_avg_quote_volume and active_min_avg_quote_volume > 0:
@@ -528,14 +567,14 @@ def get_cointegrated_pairs(
             ].copy()
             filtered_breakdown["ticker_diversity"] = before - len(df_coint)
     if (
-        min_equity_filter_usdt
-        and min_equity_filter_usdt > 0
+        active_min_equity_filter
+        and active_min_equity_filter > 0
         and not df_coint.empty
         and "min_equity_recommended" in df_coint.columns
     ):
         before = len(df_coint)
         mask = df_coint["min_equity_recommended"].isna() | (
-            df_coint["min_equity_recommended"] <= min_equity_filter_usdt
+            df_coint["min_equity_recommended"] <= active_min_equity_filter
         )
         df_coint = df_coint[mask].copy()
         filtered_count = before - len(df_coint)
@@ -553,6 +592,11 @@ def get_cointegrated_pairs(
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),
+        "p_value_min": active_min_p_value,
+        "p_value_max": active_max_p_value,
+        "zero_crossing_min": active_zero_crossings,
+        "min_capital_per_leg": active_min_capital_per_leg,
+        "min_equity_filter_usdt": active_min_equity_filter,
         "liquidity_pct": active_liquidity_pct,
         "liquidity_pct_cutoff": liquidity_pct_cutoff,
         "min_equity_filtered": filtered_count,

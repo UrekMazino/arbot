@@ -27,6 +27,8 @@ from func_pair_state import (
     set_min_capital_cooldown,
     add_restricted_ticker,
     is_restricted_ticker,
+    get_last_switch_time,
+    record_health_failure,
 )
 
 # Risk management thresholds
@@ -52,6 +54,25 @@ _LAST_ZSCORE_LOG_TS = 0.0
 _LAST_WAITING_LOG_TS = 0.0
 _LAST_WAITING_MSG = ""
 _LAST_HOLD_LOG_TS = 0.0
+
+
+def _get_health_switch_settings():
+    raw_required = os.getenv("STATBOT_HEALTH_FAILS_REQUIRED", "2")
+    try:
+        required = int(float(raw_required))
+    except (TypeError, ValueError):
+        required = 2
+    if required < 1:
+        required = 1
+
+    raw_grace = os.getenv("STATBOT_HEALTH_SWITCH_GRACE_SECONDS", "300")
+    try:
+        grace_seconds = float(raw_grace)
+    except (TypeError, ValueError):
+        grace_seconds = 300.0
+    if grace_seconds < 0:
+        grace_seconds = 0.0
+    return required, grace_seconds
 
 """
 MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
@@ -646,7 +667,29 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
     # 2. Run Health Check if due or if cointegration is lost
     if health_check_due or coint_flag == 0:
         should_switch, score, rec = check_pair_health(metrics, latest_zscore)
+        failures = record_health_failure(
+            signal_positive_ticker,
+            signal_negative_ticker,
+            should_switch,
+        )
         if should_switch:
+            required, grace_seconds = _get_health_switch_settings()
+            if failures < required:
+                logger.warning(
+                    "Pair health critical (score=%s). Confirmation %d/%d; deferring switch.",
+                    score,
+                    failures,
+                    required,
+                )
+                return kill_switch, False, False
+            last_switch = get_last_switch_time()
+            elapsed = time.time() - last_switch if last_switch else grace_seconds + 1
+            if grace_seconds and elapsed < grace_seconds:
+                logger.warning(
+                    "Pair health critical but within grace period (%.0fs remaining).",
+                    grace_seconds - elapsed,
+                )
+                return kill_switch, False, False
             if coint_flag == 0:
                 set_last_switch_reason("cointegration_lost")
             else:

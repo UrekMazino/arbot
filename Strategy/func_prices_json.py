@@ -7,6 +7,7 @@ from func_price_klines import get_price_klines, get_latest_klines
 from func_strategy_log import get_strategy_logger
 from config_strategy_api import time_frame, kline_limit
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import json
 import os
@@ -176,6 +177,15 @@ def store_price_history(symbols):
     max_gap_bars = _int_env("STATBOT_STRATEGY_CACHE_MAX_GAP_BARS", 120)
     refresh_bars = _int_env("STATBOT_STRATEGY_CACHE_REFRESH_BARS", 100)
     cache_sleep = _float_env("STATBOT_STRATEGY_CACHE_SLEEP", 0.05)
+    request_sleep = _float_env("STATBOT_STRATEGY_KLINE_SLEEP", 0.0)
+    max_workers = _int_env("STATBOT_STRATEGY_KLINE_WORKERS", 3)
+    retry_count = _int_env("STATBOT_STRATEGY_KLINE_RETRIES", 2)
+    retry_sleep = _float_env("STATBOT_STRATEGY_KLINE_RETRY_SLEEP", 0.25)
+    max_stale_bars = _int_env("STATBOT_STRATEGY_CACHE_MAX_STALE_BARS", 2)
+    if max_stale_bars < 0:
+        max_stale_bars = 0
+    if max_workers < 1:
+        max_workers = 1
     no_data_ttl = _float_env("STATBOT_STRATEGY_NO_DATA_TTL_HOURS", 24)
     bar_ms = _timeframe_to_ms(time_frame)
 
@@ -205,85 +215,197 @@ def store_price_history(symbols):
             logger.warning("Price history cache load failed: %s", exc)
             cached_data = {}
 
-    def _render_progress(idx, symbol_name, status=""):
+    def _render_progress(idx, symbol_name, status="", stored=None):
         filled = int(bar_len * idx / max(1, total_symbols))
         bar = "#" * filled + "-" * (bar_len - filled)
         suffix = f" | {status}" if status else ""
+        if stored is not None:
+            suffix = f"{suffix} | stored {stored}/{total_symbols}"
         sys.stdout.write(f"\r[{bar}] {idx}/{total_symbols} {symbol_name}{suffix}")
         sys.stdout.flush()
         if idx >= total_symbols:
             sys.stdout.write("\n")
 
-    for idx, symbol in enumerate(symbols, 1):
-        klines = []  # Reset klines for each symbol
-        symbol_name = symbol['symbol']
+    cache_hits = 0
+    cache_refreshed = 0
+    cache_stale_used = 0
+    cache_stale_skipped = 0
+    stale_symbols = 0
+    stale_gap_total = 0
+
+    def _fetch_symbol_data(symbol):
+        symbol_name = symbol.get("symbol")
+        klines = []
         status = ""
+        no_data = False
+        cache_used = False
+        cache_refreshed_local = False
+        stale_used = False
+        stale_skipped = False
+        gap_bars = None
 
-        cached_entry = cached_data.get(symbol_name) if cache_enabled else None
-        cached_klines = cached_entry.get("klines") if isinstance(cached_entry, dict) else None
+        try:
+            cached_entry = cached_data.get(symbol_name) if cache_enabled else None
+            cached_klines = cached_entry.get("klines") if isinstance(cached_entry, dict) else None
+            use_cache = bool(cache_enabled and cached_klines)
 
-        use_cache = cache_enabled and cached_klines
-        if use_cache and bar_ms > 0:
-            try:
-                last_ts = int(cached_klines[-1].get("timestamp"))
-            except (TypeError, ValueError, AttributeError):
-                last_ts = 0
-            now_ms = int(time.time() * 1000)
-            gap_bars = int(max(0, (now_ms - last_ts) // bar_ms))
-            if gap_bars <= max_gap_bars:
-                fetch_limit = max(refresh_bars, gap_bars + 5)
-                fetch_limit = max(1, min(int(fetch_limit), 100))
+            if use_cache and bar_ms > 0:
                 try:
-                    latest = get_latest_klines(symbol_name, limit=fetch_limit)
-                    time.sleep(cache_sleep)
-                    klines = _normalize_klines(latest)
-                    if klines:
-                        klines = _merge_klines(cached_klines, klines)
-                    else:
-                        klines = list(cached_klines)
+                    last_ts = int(cached_klines[-1].get("timestamp"))
+                except (TypeError, ValueError, AttributeError):
+                    last_ts = 0
+                now_ms = int(time.time() * 1000)
+                gap_bars = int(max(0, (now_ms - last_ts) // bar_ms))
+                if gap_bars <= max_gap_bars:
+                    fetch_limit = max(refresh_bars, gap_bars + 5)
+                    fetch_limit = max(1, min(int(fetch_limit), 100))
+                    try:
+                        latest = get_latest_klines(symbol_name, limit=fetch_limit)
+                        if request_sleep > 0:
+                            time.sleep(request_sleep)
+                        if cache_sleep > 0:
+                            time.sleep(cache_sleep)
+                        latest_klines = _normalize_klines(latest)
+                        if latest_klines:
+                            klines = _merge_klines(cached_klines, latest_klines)
+                            cache_used = True
+                            cache_refreshed_local = True
+                        elif gap_bars <= max_stale_bars:
+                            klines = list(cached_klines)
+                            cache_used = True
+                            stale_used = gap_bars > 0
+                        else:
+                            stale_skipped = True
+                    except Exception:
+                        if gap_bars is not None and gap_bars <= max_stale_bars:
+                            klines = list(cached_klines)
+                            cache_used = True
+                            stale_used = gap_bars > 0
+                        else:
+                            stale_skipped = True
+                else:
+                    stale_skipped = True
+
+                if klines:
                     if len(klines) > kline_limit:
                         klines = klines[-int(kline_limit):]
-                    status = f"CACHE {len(klines)} candles | stored {count + 1}/{total_symbols}"
-                except Exception:
-                    use_cache = False
-            else:
-                use_cache = False
+                    status = f"CACHE {len(klines)} candles"
 
-        if not use_cache:
-            try:
-                price_history = get_price_klines(symbol_name)
-                time.sleep(0.1)
-            except Exception:
-                status = "ERR fetch failed"
-                _render_progress(idx, symbol_name, status=status)
-                logger.warning("Price history fetch failed: %s", symbol_name)
-                continue
+            if not klines:
+                attempts = max(retry_count, 0) + 1
+                last_error = None
+                for attempt in range(attempts):
+                    try:
+                        price_history = get_price_klines(symbol_name)
+                        if request_sleep > 0:
+                            time.sleep(request_sleep)
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt < attempts - 1 and retry_sleep > 0:
+                            time.sleep(retry_sleep * (attempt + 1))
+                        continue
 
-            klines = _normalize_klines(price_history)
-            if klines:
-                status = f"OK {len(klines)} candles | stored {count + 1}/{total_symbols}"
-            else:
-                status = "ERR no data"
-                msg = str(price_history.get("msg") or "").lower()
-                if "insufficient data" in msg or "no data" in msg:
-                    no_data_map[symbol_name] = datetime.now(timezone.utc).isoformat()
-                    no_data_changed = True
-                    logger.warning("Price history: no data for %s; added to blacklist.", symbol_name)
+                    klines = _normalize_klines(price_history)
+                    if klines:
+                        status = f"OK {len(klines)} candles"
+                        break
+                    status = "ERR no data"
+                    msg = str(price_history.get("msg") or "").lower() if isinstance(price_history, dict) else ""
+                    if "insufficient data" in msg or "no data" in msg:
+                        no_data = True
+                    break
 
-        symbol['total_klines'] = len(klines)
+                if not klines and not status:
+                    status = "ERR fetch failed"
+                    if last_error:
+                        logger.warning("Price history fetch failed: %s", symbol_name)
+        except Exception:
+            status = "ERR fetch failed"
+
+        return {
+            "symbol": symbol,
+            "symbol_name": symbol_name,
+            "klines": klines,
+            "status": status,
+            "no_data": no_data,
+            "cache_used": cache_used,
+            "cache_refreshed": cache_refreshed_local,
+            "stale_used": stale_used,
+            "stale_skipped": stale_skipped,
+            "gap_bars": gap_bars,
+        }
+
+    def _handle_result(idx, result):
+        nonlocal count, no_data_changed, cache_hits, cache_refreshed, cache_stale_used, cache_stale_skipped
+        nonlocal stale_symbols, stale_gap_total
+
+        symbol_name = result.get("symbol_name")
+        klines = result.get("klines") or []
+        status = result.get("status") or ""
+        gap_bars = result.get("gap_bars")
+
+        if gap_bars is not None and gap_bars > 0:
+            stale_symbols += 1
+            stale_gap_total += gap_bars
+
+        if result.get("cache_used"):
+            cache_hits += 1
+            if result.get("cache_refreshed"):
+                cache_refreshed += 1
+            if result.get("stale_used"):
+                cache_stale_used += 1
+        if result.get("stale_skipped"):
+            cache_stale_skipped += 1
+
+        symbol = result.get("symbol") or {}
+        symbol["total_klines"] = len(klines)
 
         if len(klines) > 0:
             price_history_dict[symbol_name] = {
-                'symbol_info': symbol,
-                'klines': klines
+                "symbol_info": symbol,
+                "klines": klines,
             }
             count += 1
         else:
             if not status or status.startswith("CACHE"):
                 status = "SKIP no klines"
-        _render_progress(idx, symbol_name, status=status)
+            if result.get("no_data") and symbol_name:
+                no_data_map[symbol_name] = datetime.now(timezone.utc).isoformat()
+                no_data_changed = True
+                logger.warning("Price history: no data for %s; added to blacklist.", symbol_name)
+
+        _render_progress(idx, symbol_name, status=status, stored=count)
+
+    if max_workers == 1:
+        for idx, symbol in enumerate(symbols, 1):
+            result = _fetch_symbol_data(symbol)
+            _handle_result(idx, result)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_fetch_symbol_data, symbol) for symbol in symbols]
+            for idx, future in enumerate(as_completed(futures), 1):
+                result = future.result()
+                _handle_result(idx, result)
     if no_data_changed:
         _save_no_data_blacklist(no_data_path, no_data_map)
+    if total_symbols > 0:
+        stale_rate = round((stale_symbols / total_symbols) * 100, 2)
+    else:
+        stale_rate = 0.0
+    avg_gap_bars = round((stale_gap_total / stale_symbols), 2) if stale_symbols else 0.0
+    logger.info(
+        "Price history cache: hits=%d refreshed=%d stale_used=%d stale_skipped=%d",
+        cache_hits,
+        cache_refreshed,
+        cache_stale_used,
+        cache_stale_skipped,
+    )
+    logger.info(
+        "Price history staleness: symbols=%d rate=%.2f%% avg_gap_bars=%.2f",
+        stale_symbols,
+        stale_rate,
+        avg_gap_bars,
+    )
     # Output prices to JSON
     if len(price_history_dict) > 0:
         try:

@@ -44,6 +44,28 @@ FILL_RE = re.compile(
 RUN_END_RE = re.compile(
     r"RUN_END: reason=(?P<reason>[A-Za-z0-9_\-]+)(?: detail=(?P<detail>.*))?$"
 )
+CURRENT_PAIR_RE = re.compile(r"Current pair: (?P<t1>[^/]+)/(?P<t2>[^\s]+)")
+PAIR_SWITCH_RE = re.compile(r"Attempting to switch to next pair \(reason=(?P<reason>[^)]+)\)")
+PAIR_SWITCH_BLOCKED_RE = re.compile(r"Pair switch blocked", re.IGNORECASE)
+PAIR_MOVED_HOSPITAL_RE = re.compile(r"Pair moved to hospital: (?P<t1>[^/]+)/(?P<t2>[^\s]+) reason=(?P<reason>[^\s]+)")
+PAIR_MOVED_GRAVEYARD_RE = re.compile(r"Pair moved to graveyard: (?P<t1>[^/]+)/(?P<t2>[^\s]+) reason=(?P<reason>[^\s]+)")
+HOSPITAL_PRIORITY_RE = re.compile(r"Prioritizing hospital pair (?P<t1>[^/]+)/(?P<t2>[^\s]+)")
+STRATEGY_REFRESH_RE = re.compile(r"(Strategy refresh|refresh pair universe|Searching for new pairs)", re.IGNORECASE)
+LIQUIDITY_FALLBACK_ATTEMPT_RE = re.compile(
+    r"Execution liquidity fallback attempt \d+/\d+: min_ratio=(?P<ratio>[-+]?\d+\.\d+)x"
+)
+LIQUIDITY_ATTEMPT_RE = re.compile(
+    r"Execution liquidity attempt \d+/\d+: min_ratio=(?P<ratio>[-+]?\d+\.\d+)x"
+)
+LIQUIDITY_RATIO_RE = re.compile(
+    r"Liquidity ratios .*long=(?P<long>[-+]?\d+\.\d+)x short=(?P<short>[-+]?\d+\.\d+)x \(min=(?P<min>[-+]?\d+\.\d+)x\)"
+)
+LIQUIDITY_DOWNSIZE_RE = re.compile(r"Liquidity downsize: target=[-+]?\d+\.\d+ -> [-+]?\d+\.\d+")
+PNL_FALLBACK_USED_RE = re.compile(r"PnL fallback used: legs=(?P<legs>\d+) basis=(?P<basis>[^\s]+)")
+PNL_FALLBACK_CLEARED_RE = re.compile(r"PnL fallback cleared", re.IGNORECASE)
+ORDERBOOK_BACKOFF_RE = re.compile(r"Orderbook backoff for (?P<inst>[^:]+): (?P<reason>[^()]+) \((?P<seconds>\d+)s\)")
+ORDERBOOK_BACKOFF_ACTIVE_RE = re.compile(r"orderbook backoff active", re.IGNORECASE)
+ORDERBOOK_MID_FAIL_RE = re.compile(r"failed to fetch mid prices", re.IGNORECASE)
 
 ALERT_PATTERNS = [
     re.compile(r"\bERROR\b", re.IGNORECASE),
@@ -384,6 +406,73 @@ def _write_report_index(report_root):
     _write_csv(index_csv, rows, INDEX_FIELDS)
 
 
+def _build_run_comparison(report_root, current_summary):
+    summaries = _collect_report_summaries(report_root)
+    summaries = _sort_summaries(summaries)
+    if not summaries:
+        return {}
+
+    current_run_id = current_summary.get("run_id")
+    current_seq = current_summary.get("run_sequence")
+    prev_summary = None
+
+    if isinstance(current_seq, int):
+        candidates = [
+            item
+            for item in summaries
+            if isinstance(item.get("run_sequence"), int) and item.get("run_sequence") < current_seq
+        ]
+        if candidates:
+            prev_summary = max(candidates, key=lambda item: item.get("run_sequence", 0))
+    if prev_summary is None:
+        for item in reversed(summaries):
+            if item.get("run_id") and item.get("run_id") != current_run_id:
+                prev_summary = item
+                break
+
+    if prev_summary is None:
+        return {}
+
+    metrics = [
+        ("session_pnl", "session_pnl"),
+        ("session_pnl_pct", "session_pnl_pct"),
+        ("total_pnl", "total_pnl"),
+        ("total_pnl_pct", "total_pnl_pct"),
+        ("trades_total", "trades_total"),
+        ("win_rate_pct", "win_rate_pct"),
+        ("max_drawdown_usdt", "max_drawdown_usdt"),
+        ("signals_total", "signals_total"),
+        ("entries_total", "entries_total"),
+        ("liquidity_reject_rate_pct", "liquidity_reject_rate_pct"),
+        ("slippage_avg_abs_bps", "slippage_avg_abs_bps"),
+        ("duration_seconds", "duration_seconds"),
+    ]
+
+    deltas = []
+    for label, key in metrics:
+        curr_val = current_summary.get(key)
+        prev_val = prev_summary.get(key)
+        curr_num = _safe_float(curr_val)
+        prev_num = _safe_float(prev_val)
+        delta = None
+        if curr_num is not None and prev_num is not None:
+            delta = round(curr_num - prev_num, 4)
+        deltas.append(
+            {
+                "metric": label,
+                "current": curr_val,
+                "previous": prev_val,
+                "delta": delta,
+            }
+        )
+
+    return {
+        "previous_run_sequence": prev_summary.get("run_sequence"),
+        "previous_run_id": prev_summary.get("run_id"),
+        "metrics": deltas,
+    }
+
+
 def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequence=None, report_version="v1"):
     log_path = Path(log_path)
     output_dir = Path(output_dir)
@@ -400,6 +489,35 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     entry_slippage = []
     open_positions = []
     entry_order_map = {}
+    pairs_seen = []
+    pair_stats = {}
+    pair_switch_reasons = {}
+    pair_switches = 0
+    pair_switch_blocked = 0
+    hospital_moves = 0
+    graveyard_moves = 0
+    hospital_prioritized = 0
+    strategy_refreshes = 0
+    idle_timeouts = 0
+    pnl_fallback_count = 0
+    pnl_fallback_cleared = 0
+    pnl_fallback_active = False
+    pnl_fallback_start = None
+    pnl_fallback_seconds = 0.0
+    pnl_fallback_basis_counts = {}
+    liquidity_fallback_attempts = 0
+    liquidity_fallback_ratios = []
+    liquidity_attempts = 0
+    liquidity_attempt_ratios = []
+    liquidity_downsizes = 0
+    entry_liquidity_min_ratios = []
+    entries_with_fallback_liquidity = 0
+    last_liquidity_min_ratio = None
+    orderbook_backoff_events = 0
+    orderbook_backoff_active = 0
+    orderbook_mid_failures = 0
+    orderbook_backoff_reasons = {}
+    active_pair = None
 
     start_ts = None
     end_ts = None
@@ -424,6 +542,33 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     run_end_detail = None
     run_end_time = None
 
+    def _track_pair(pair_value):
+        nonlocal active_pair
+        if not pair_value:
+            return
+        active_pair = pair_value
+        if pair_value not in pairs_seen:
+            pairs_seen.append(pair_value)
+
+    def _pair_stats_entry(pair_value):
+        if not pair_value:
+            pair_value = "unknown"
+        entry = pair_stats.get(pair_value)
+        if entry is None:
+            entry = {
+                "pair": pair_value,
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "pnl_usdt": 0.0,
+                "pnl_win_usdt": 0.0,
+                "pnl_loss_usdt": 0.0,
+                "pnl_pct": 0.0,
+                "hold_minutes": [],
+            }
+            pair_stats[pair_value] = entry
+        return entry
+
     with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
         for raw in handle:
             line = raw.strip()
@@ -442,10 +587,44 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             if ts:
                 end_ts = ts
 
-            if not pair:
-                tmatch = TICKER_CONFIG_RE.search(clean_msg)
-                if tmatch:
-                    pair = f"{tmatch.group('t1')}/{tmatch.group('t2')}"
+            tmatch = TICKER_CONFIG_RE.search(clean_msg)
+            if tmatch:
+                pair_value = f"{tmatch.group('t1')}/{tmatch.group('t2')}"
+                if not pair:
+                    pair = pair_value
+                _track_pair(pair_value)
+
+            pair_match = CURRENT_PAIR_RE.search(clean_msg)
+            if pair_match:
+                _track_pair(f"{pair_match.group('t1')}/{pair_match.group('t2')}")
+
+            hospital_match = HOSPITAL_PRIORITY_RE.search(clean_msg)
+            if hospital_match:
+                hospital_prioritized += 1
+                _track_pair(f"{hospital_match.group('t1')}/{hospital_match.group('t2')}")
+
+            switch_match = PAIR_SWITCH_RE.search(clean_msg)
+            if switch_match:
+                pair_switches += 1
+                reason = switch_match.group("reason")
+                pair_switch_reasons[reason] = pair_switch_reasons.get(reason, 0) + 1
+
+            if PAIR_SWITCH_BLOCKED_RE.search(clean_msg):
+                pair_switch_blocked += 1
+
+            if "Pair idle timeout reached" in clean_msg:
+                idle_timeouts += 1
+
+            if STRATEGY_REFRESH_RE.search(clean_msg):
+                strategy_refreshes += 1
+
+            moved_hospital_match = PAIR_MOVED_HOSPITAL_RE.search(clean_msg)
+            if moved_hospital_match:
+                hospital_moves += 1
+
+            moved_graveyard_match = PAIR_MOVED_GRAVEYARD_RE.search(clean_msg)
+            if moved_graveyard_match:
+                graveyard_moves += 1
 
             if starting_equity is None:
                 smatch = START_EQUITY_RE.search(clean_msg)
@@ -485,6 +664,11 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             open_match = POSITION_OPEN_RE.search(clean_msg)
             if open_match and ts:
                 open_positions.append({"timestamp": ts, "entry_z": open_match.group("entry_z")})
+                if last_liquidity_min_ratio is not None:
+                    entry_liquidity_min_ratios.append(last_liquidity_min_ratio)
+                    if last_liquidity_min_ratio < ratio_threshold:
+                        entries_with_fallback_liquidity += 1
+                    last_liquidity_min_ratio = None
 
             trade_match = TRADE_CLOSED_RE.search(clean_msg)
             if trade_match and ts:
@@ -495,10 +679,11 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     entry_z = entry.get("entry_z")
                     delta = ts - entry.get("timestamp")
                     hold_minutes = round(delta.total_seconds() / 60, 2)
-
+                pair_key = active_pair or pair or "unknown"
                 trades.append(
                     {
                         "timestamp": ts.isoformat(),
+                        "pair": pair_key,
                         "result": trade_match.group("result"),
                         "pnl_usdt": _safe_float(trade_match.group("pnl")),
                         "pnl_pct": _safe_float(trade_match.group("pnl_pct")),
@@ -509,6 +694,20 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                         "entry_z": entry_z,
                     }
                 )
+                stats_entry = _pair_stats_entry(pair_key)
+                stats_entry["trades"] += 1
+                pnl_val = _safe_float(trade_match.group("pnl")) or 0.0
+                stats_entry["pnl_usdt"] += pnl_val
+                pnl_pct_val = _safe_float(trade_match.group("pnl_pct")) or 0.0
+                stats_entry["pnl_pct"] += pnl_pct_val
+                if trade_match.group("result") == "WIN":
+                    stats_entry["wins"] += 1
+                    stats_entry["pnl_win_usdt"] += pnl_val
+                elif trade_match.group("result") == "LOSS":
+                    stats_entry["losses"] += 1
+                    stats_entry["pnl_loss_usdt"] += pnl_val
+                if hold_minutes is not None:
+                    stats_entry["hold_minutes"].append(hold_minutes)
 
             if ENTRY_SIGNAL_RE.search(clean_msg):
                 signals_total += 1
@@ -604,6 +803,55 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     }
                 )
 
+            ratio_match = LIQUIDITY_RATIO_RE.search(clean_msg)
+            if ratio_match:
+                last_liquidity_min_ratio = _safe_float(ratio_match.group("min"))
+
+            fallback_attempt_match = LIQUIDITY_FALLBACK_ATTEMPT_RE.search(clean_msg)
+            if fallback_attempt_match:
+                liquidity_fallback_attempts += 1
+                ratio_val = _safe_float(fallback_attempt_match.group("ratio"))
+                if ratio_val is not None:
+                    liquidity_fallback_ratios.append(ratio_val)
+
+            attempt_match = LIQUIDITY_ATTEMPT_RE.search(clean_msg)
+            if attempt_match:
+                liquidity_attempts += 1
+                ratio_val = _safe_float(attempt_match.group("ratio"))
+                if ratio_val is not None:
+                    liquidity_attempt_ratios.append(ratio_val)
+
+            if LIQUIDITY_DOWNSIZE_RE.search(clean_msg):
+                liquidity_downsizes += 1
+
+            pnl_fallback_match = PNL_FALLBACK_USED_RE.search(clean_msg)
+            if pnl_fallback_match:
+                pnl_fallback_count += 1
+                basis = pnl_fallback_match.group("basis")
+                pnl_fallback_basis_counts[basis] = pnl_fallback_basis_counts.get(basis, 0) + 1
+                if ts and not pnl_fallback_active:
+                    pnl_fallback_active = True
+                    pnl_fallback_start = ts
+
+            if PNL_FALLBACK_CLEARED_RE.search(clean_msg):
+                pnl_fallback_cleared += 1
+                if pnl_fallback_active and pnl_fallback_start and ts:
+                    pnl_fallback_seconds += (ts - pnl_fallback_start).total_seconds()
+                pnl_fallback_active = False
+                pnl_fallback_start = None
+
+            backoff_match = ORDERBOOK_BACKOFF_RE.search(clean_msg)
+            if backoff_match:
+                orderbook_backoff_events += 1
+                reason = backoff_match.group("reason").strip()
+                orderbook_backoff_reasons[reason] = orderbook_backoff_reasons.get(reason, 0) + 1
+
+            if ORDERBOOK_BACKOFF_ACTIVE_RE.search(clean_msg):
+                orderbook_backoff_active += 1
+
+            if ORDERBOOK_MID_FAIL_RE.search(clean_msg):
+                orderbook_mid_failures += 1
+
             if any(pat.search(clean_msg) for pat in ALERT_PATTERNS):
                 alerts.append(f"{match.group('ts')} {level} {clean_msg}")
 
@@ -615,6 +863,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     detail = detail.split(" exit_code=", 1)[0].strip()
                 run_end_detail = detail if detail else None
                 run_end_time = ts.isoformat()
+
+    if pnl_fallback_active and pnl_fallback_start and end_ts:
+        pnl_fallback_seconds += (end_ts - pnl_fallback_start).total_seconds()
 
     duration_seconds = None
     if start_ts and end_ts:
@@ -682,6 +933,34 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     if hold_times:
         avg_hold = round(sum(hold_times) / len(hold_times), 2)
 
+    pair_rows = []
+    for pair_key, stats in pair_stats.items():
+        trades_total = stats.get("trades", 0)
+        wins_total = stats.get("wins", 0)
+        losses_total = stats.get("losses", 0)
+        win_rate_pair = round((wins_total / trades_total) * 100, 2) if trades_total else None
+        pnl_usdt = round(stats.get("pnl_usdt", 0.0), 4)
+        pnl_pct = round(stats.get("pnl_pct", 0.0), 4) if trades_total else None
+        hold_vals = stats.get("hold_minutes") or []
+        avg_hold_pair = round(sum(hold_vals) / len(hold_vals), 2) if hold_vals else None
+        avg_pnl_pair = round(pnl_usdt / trades_total, 4) if trades_total else None
+        pair_rows.append(
+            {
+                "pair": pair_key,
+                "trades": trades_total,
+                "wins": wins_total,
+                "losses": losses_total,
+                "win_rate_pct": win_rate_pair,
+                "pnl_usdt": pnl_usdt,
+                "pnl_win_usdt": round(stats.get("pnl_win_usdt", 0.0), 4),
+                "pnl_loss_usdt": round(stats.get("pnl_loss_usdt", 0.0), 4),
+                "avg_pnl_usdt": avg_pnl_pair,
+                "avg_hold_minutes": avg_hold_pair,
+                "pnl_pct_sum": pnl_pct,
+            }
+        )
+    pair_rows.sort(key=lambda row: row.get("trades", 0), reverse=True)
+
     slippage_samples = len(entry_slippage)
     avg_slippage_bps = None
     avg_slippage_abs_bps = None
@@ -707,10 +986,58 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     avg_long_ratio = round(sum(long_ratios) / len(long_ratios), 4) if long_ratios else None
     avg_short_ratio = round(sum(short_ratios) / len(short_ratios), 4) if short_ratios else None
 
+    entry_liq_avg = None
+    entry_liq_min = None
+    if entry_liquidity_min_ratios:
+        entry_liq_avg = round(sum(entry_liquidity_min_ratios) / len(entry_liquidity_min_ratios), 4)
+        entry_liq_min = round(min(entry_liquidity_min_ratios), 4)
+
+    pnl_fallback_pct_runtime = None
+    if duration_seconds and duration_seconds > 0:
+        pnl_fallback_pct_runtime = round((pnl_fallback_seconds / duration_seconds) * 100, 2)
+
     repo_root = Path(__file__).resolve().parents[1]
     version = _read_version(repo_root)
     git_sha = _git_sha(repo_root)
     config_snapshot = _redact_config(env_values)
+
+    liquidity_fallback_min_ratio = None
+    liquidity_fallback_avg_ratio = None
+    if liquidity_fallback_ratios:
+        liquidity_fallback_min_ratio = round(min(liquidity_fallback_ratios), 4)
+        liquidity_fallback_avg_ratio = round(sum(liquidity_fallback_ratios) / len(liquidity_fallback_ratios), 4)
+
+    run_behavior = {
+        "pair_switches": pair_switches,
+        "pair_switch_reasons": pair_switch_reasons,
+        "pair_switch_blocked": pair_switch_blocked,
+        "idle_timeouts": idle_timeouts,
+        "hospital_moves": hospital_moves,
+        "graveyard_moves": graveyard_moves,
+        "hospital_prioritized": hospital_prioritized,
+        "strategy_refreshes": strategy_refreshes,
+        "signals_to_entries_pct": round((entries_total / signals_total) * 100, 2) if signals_total else None,
+        "entries_to_trades_pct": round((trade_count / entries_total) * 100, 2) if entries_total else None,
+    }
+
+    fallback_summary = {
+        "pnl_fallback_used": pnl_fallback_count,
+        "pnl_fallback_cleared": pnl_fallback_cleared,
+        "pnl_fallback_seconds": round(pnl_fallback_seconds, 2),
+        "pnl_fallback_pct_runtime": pnl_fallback_pct_runtime,
+        "pnl_fallback_basis_counts": pnl_fallback_basis_counts,
+        "liquidity_fallback_attempts": liquidity_fallback_attempts,
+        "liquidity_fallback_min_ratio": liquidity_fallback_min_ratio,
+        "liquidity_fallback_avg_ratio": liquidity_fallback_avg_ratio,
+        "liquidity_downsizes": liquidity_downsizes,
+        "entries_with_fallback_liquidity": entries_with_fallback_liquidity,
+        "entry_liquidity_min_ratio_avg": entry_liq_avg,
+        "entry_liquidity_min_ratio_min": entry_liq_min,
+        "orderbook_backoff_events": orderbook_backoff_events,
+        "orderbook_backoff_active": orderbook_backoff_active,
+        "orderbook_midprice_failures": orderbook_mid_failures,
+        "orderbook_backoff_reasons": orderbook_backoff_reasons,
+    }
 
     if run_id is None:
         run_id = start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -736,6 +1063,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "end_time": end_ts.isoformat() if end_ts else "",
         "duration_seconds": duration_seconds,
         "pair": pair or "",
+        "pairs_seen": pairs_seen,
         "run_end_reason": run_end_reason,
         "run_end_detail": run_end_detail,
         "run_end_time": run_end_time,
@@ -779,12 +1107,23 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "slippage_avg_bps": avg_slippage_bps,
         "slippage_avg_abs_bps": avg_slippage_abs_bps,
         "slippage_max_abs_bps": max_slippage_abs_bps,
+        "entry_liquidity_min_ratio_avg": entry_liq_avg,
+        "entry_liquidity_min_ratio_min": entry_liq_min,
+        "entries_with_fallback_liquidity": entries_with_fallback_liquidity,
+        "fallback_summary": fallback_summary,
+        "run_behavior": run_behavior,
     }
+
+    report_root = _report_root(repo_root)
+    run_comparison = _build_run_comparison(report_root, summary)
+    if run_comparison:
+        summary["run_comparison"] = run_comparison
 
     summary_path = output_dir / "summary.json"
     summary_txt_path = output_dir / "summary.txt"
     equity_path = output_dir / "equity_curve.csv"
     trades_path = output_dir / "trades.csv"
+    pair_perf_path = output_dir / "pair_performance.csv"
     liquidity_path = output_dir / "liquidity_checks.csv"
     slippage_path = output_dir / "entry_slippage.csv"
     alerts_path = output_dir / "alerts.txt"
@@ -792,6 +1131,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
 
     summary["equity_curve_path"] = str(equity_path)
     summary["trades_path"] = str(trades_path)
+    summary["pair_performance_path"] = str(pair_perf_path)
     summary["liquidity_checks_path"] = str(liquidity_path)
     summary["entry_slippage_path"] = str(slippage_path)
     summary["alerts_path"] = str(alerts_path)
@@ -810,6 +1150,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         trades,
         [
             "timestamp",
+            "pair",
             "result",
             "pnl_usdt",
             "pnl_pct",
@@ -818,6 +1159,23 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "session_pnl_pct",
             "hold_minutes",
             "entry_z",
+        ],
+    )
+    _write_csv(
+        pair_perf_path,
+        pair_rows,
+        [
+            "pair",
+            "trades",
+            "wins",
+            "losses",
+            "win_rate_pct",
+            "pnl_usdt",
+            "pnl_win_usdt",
+            "pnl_loss_usdt",
+            "avg_pnl_usdt",
+            "avg_hold_minutes",
+            "pnl_pct_sum",
         ],
     )
     _write_csv(
@@ -855,6 +1213,37 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     config_path.write_text(json.dumps(config_snapshot, indent=2), encoding="utf-8")
 
+    switch_reason_parts = []
+    for reason, count in sorted(pair_switch_reasons.items()):
+        switch_reason_parts.append(f"{reason}={count}")
+    switch_reason_line = ", ".join(switch_reason_parts) if switch_reason_parts else "n/a"
+
+    backoff_reason_parts = []
+    for reason, count in sorted(orderbook_backoff_reasons.items()):
+        backoff_reason_parts.append(f"{reason}={count}")
+    backoff_reason_line = ", ".join(backoff_reason_parts) if backoff_reason_parts else "n/a"
+
+    comparison_lines = []
+    if run_comparison:
+        prev_seq = run_comparison.get("previous_run_sequence")
+        prev_id = run_comparison.get("previous_run_id")
+        comparison_lines.extend(
+            [
+                "RUN COMPARISON",
+                f"Previous run: {prev_seq or 'n/a'} ({prev_id or 'n/a'})",
+            ]
+        )
+        for item in run_comparison.get("metrics", []):
+            metric = item.get("metric")
+            curr_val = item.get("current")
+            prev_val = item.get("previous")
+            delta = item.get("delta")
+            if delta is None:
+                delta_str = "n/a"
+            else:
+                delta_str = f"{delta:+}"
+            comparison_lines.append(f"{metric}: {curr_val} (prev {prev_val}, delta {delta_str})")
+
     files_list = [
         summary_path.name,
         summary_txt_path.name,
@@ -863,6 +1252,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     for path in [
         equity_path,
         trades_path,
+        pair_perf_path,
         liquidity_path,
         slippage_path,
         alerts_path,
@@ -877,6 +1267,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Run: {summary['run_sequence'] or 'n/a'} ({summary['run_id']})",
                 f"Version: {summary['version'] or 'n/a'} | Git: {summary['git_sha'] or 'n/a'}",
                 f"Pair: {summary['pair'] or 'n/a'} | td_mode={summary['td_mode'] or 'n/a'} | pos_mode={summary['pos_mode'] or 'n/a'}",
+                f"Pairs seen: {', '.join(summary.get('pairs_seen') or []) or 'n/a'}",
                 f"Run end: {summary.get('run_end_reason') or 'n/a'}",
                 f"Run end detail: {summary.get('run_end_detail') or 'n/a'}",
                 f"Start: {summary['start_time'] or 'n/a'}",
@@ -897,12 +1288,34 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Liquidity rejects: {summary['liquidity_rejects']} ({summary['liquidity_reject_rate_pct']}%)",
                 f"Liquidity low pct: {summary['liquidity_low_pct']}",
                 f"Liquidity ratio avg (long/short): {summary['liquidity_avg_long_ratio']} / {summary['liquidity_avg_short_ratio']}",
+                f"Entry liquidity min ratio avg/min: {summary['entry_liquidity_min_ratio_avg']} / {summary['entry_liquidity_min_ratio_min']}",
+                f"Entries with fallback liquidity: {summary['entries_with_fallback_liquidity']}",
                 f"Slippage samples: {summary['slippage_samples']}",
                 f"Slippage avg bps (signed/abs): {summary['slippage_avg_bps']} / {summary['slippage_avg_abs_bps']}",
                 f"Slippage max abs bps: {summary['slippage_max_abs_bps']}",
                 "",
+                "FALLBACK EFFECTIVENESS",
+                f"PnL fallback used: {fallback_summary['pnl_fallback_used']} | Cleared: {fallback_summary['pnl_fallback_cleared']}",
+                f"PnL fallback runtime: {fallback_summary['pnl_fallback_seconds']}s ({fallback_summary['pnl_fallback_pct_runtime']}%)",
+                f"Liquidity fallback attempts: {fallback_summary['liquidity_fallback_attempts']} | Min ratio: {fallback_summary['liquidity_fallback_min_ratio']} | Avg ratio: {fallback_summary['liquidity_fallback_avg_ratio']}",
+                f"Liquidity downsizes: {fallback_summary['liquidity_downsizes']}",
+                f"Orderbook backoff events: {fallback_summary['orderbook_backoff_events']} | Active: {fallback_summary['orderbook_backoff_active']}",
+                f"Orderbook mid-price failures: {fallback_summary['orderbook_midprice_failures']}",
+                f"Orderbook backoff reasons: {backoff_reason_line}",
+                "",
+                "RUN BEHAVIOR",
+                f"Pair switches: {run_behavior['pair_switches']} | Blocked: {run_behavior['pair_switch_blocked']}",
+                f"Switch reasons: {switch_reason_line}",
+                f"Idle timeouts: {run_behavior['idle_timeouts']}",
+                f"Hospital moves: {run_behavior['hospital_moves']} | Graveyard moves: {run_behavior['graveyard_moves']}",
+                f"Hospital prioritized: {run_behavior['hospital_prioritized']}",
+                f"Strategy refreshes: {run_behavior['strategy_refreshes']}",
+                f"Signals->Entries: {run_behavior['signals_to_entries_pct']}% | Entries->Trades: {run_behavior['entries_to_trades_pct']}%",
+                "",
                 "ALERTS",
                 f"Alerts: {summary['alerts_total']} | Errors: {summary['errors_total']}",
+                "",
+                *comparison_lines,
                 "",
                 "FILES",
                 *[f"- {name}" for name in files_list],

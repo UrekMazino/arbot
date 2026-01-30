@@ -50,5 +50,10 @@ def get_strategy_logger():
     else:
         logging.basicConfig(level=level)
 
+    # Quiet noisy HTTP client logs (OKX SDK uses httpx/httpcore under the hood).
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
     _LOGGER = logger
     return logger

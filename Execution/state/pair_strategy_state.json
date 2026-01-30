@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1769765908.1163352,
+    "last_switch_time": 1769792688.900529,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
@@ -45,21 +45,37 @@
             "ts": 1769758850.4288194,
             "reason": "cointegration_lost_bad_history",
             "ttl_days": 7
+        },
+        "KSM-USDT-SWAP/NEO-USDT-SWAP": {
+            "ts": 1769782168.2333398,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1769784226.974414,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "restricted_tickers": {},
-    "consecutive_losses": 0,
-    "last_health_score": 70,
+    "consecutive_losses": 2,
+    "last_health_score": 60,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
     "entry_equity": null,
     "entry_notional": null,
-    "last_switch_reason": "cointegration_lost",
+    "last_switch_reason": "idle_timeout",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
-    "persistence_history": [],
-    "last_exit_time": 1769758152.2581625,
+    "persistence_history": [
+        -1.9196459668546233,
+        -1.686631354130886,
+        0.3728420380881767,
+        0.3261325845356125,
+        0.42059400197409913
+    ],
+    "last_exit_time": 1769793188.6828449,
     "z_history": [],
     "hospital": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": {
@@ -67,6 +83,36 @@
             "cooldown": 300,
             "reason": "cointegration_lost",
             "visits": 8
+        },
+        "CRV-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1769767482.7239976,
+            "cooldown": 300,
+            "reason": "cointegration_lost_unproven",
+            "visits": 3
+        },
+        "ASTER-USDT-SWAP/MASK-USDT-SWAP": {
+            "ts": 1769768682.2596517,
+            "cooldown": 300,
+            "reason": "cointegration_lost_unproven",
+            "visits": 4
+        },
+        "ARB-USDT-SWAP/XLM-USDT-SWAP": {
+            "ts": 1769785225.5933998,
+            "cooldown": 300,
+            "reason": "cointegration_lost_unproven",
+            "visits": 4
+        },
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
+            "ts": 1769792688.8964527,
+            "cooldown": 300,
+            "reason": "idle_timeout",
+            "visits": 2
+        },
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1769789259.4906986,
+            "cooldown": 300,
+            "reason": "idle_timeout",
+            "visits": 1
         }
     },
     "pair_history": {
@@ -93,10 +139,48 @@
             "loss_usdt": 3.3113093000001754,
             "trades": 1,
             "last_trade_ts": 1769758150.2244234
+        },
+        "KSM-USDT-SWAP/NEO-USDT-SWAP": {
+            "wins": 1,
+            "losses": 12,
+            "win_usdt": 2.267961450000257,
+            "loss_usdt": 12.69731229999752,
+            "trades": 13,
+            "last_trade_ts": 1769781908.044652
+        },
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.4136259000001701,
+            "trades": 2,
+            "last_trade_ts": 1769783855.1694036
+        },
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
+            "wins": 2,
+            "losses": 1,
+            "win_usdt": 0.417565900000227,
+            "loss_usdt": 0.18246600000020408,
+            "trades": 3,
+            "last_trade_ts": 1769792675.5318427
+        },
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 18.917575705548188,
+            "loss_usdt": 4.278353659999539,
+            "trades": 2,
+            "last_trade_ts": 1769793186.0213044
         }
     },
     "health_failures": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": 0,
-        "CRV-USDT-SWAP/YGG-USDT-SWAP": 0
+        "CRV-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/MASK-USDT-SWAP": 0,
+        "KSM-USDT-SWAP/NEO-USDT-SWAP": 0,
+        "ARB-USDT-SWAP/XLM-USDT-SWAP": 0,
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": 0,
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": 0,
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": 0
     }
 }

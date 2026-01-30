@@ -7,10 +7,55 @@
 """
 
 import time
+import os
+import threading
 
 from func_strategy_log import get_strategy_logger
 
 from config_strategy_api import market_session, time_frame, kline_limit
+
+
+def _float_env(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+class RateLimiter:
+    def __init__(self, max_requests_per_second=5.0):
+        try:
+            self.max_requests = float(max_requests_per_second)
+        except (TypeError, ValueError):
+            self.max_requests = 0.0
+        if self.max_requests < 0:
+            self.max_requests = 0.0
+        self.tokens = self.max_requests
+        self.lock = threading.Lock()
+        self.last_update = time.time()
+
+    def acquire(self):
+        if self.max_requests <= 0:
+            return
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_update
+            self.tokens = min(self.max_requests, self.tokens + elapsed * self.max_requests)
+            self.last_update = now
+
+            if self.tokens < 1:
+                sleep_time = (1 - self.tokens) / self.max_requests
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                self.tokens = 1
+
+            self.tokens -= 1
+
+
+_KLINE_RATE_LIMITER = RateLimiter(max_requests_per_second=_float_env("STATBOT_STRATEGY_KLINE_RPS", 5.0))
 
 
 def get_price_klines(inst_id):
@@ -48,6 +93,7 @@ def get_price_klines(inst_id):
             if after is not None:
                 params["after"] = str(after)
 
+            _KLINE_RATE_LIMITER.acquire()
             prices = market_session.get_candlesticks(**params)
 
             if prices.get('code') != '0':
@@ -117,6 +163,7 @@ def get_latest_klines(inst_id, limit=100):
         limit = 100
 
     try:
+        _KLINE_RATE_LIMITER.acquire()
         prices = market_session.get_candlesticks(
             instId=inst_id,
             bar=time_frame,

@@ -88,7 +88,13 @@ class AdvancedTradeManager:
             # Trailing stop
             'trailing_stop_enabled': True,
             'trailing_stop_activation': 0.8,  # Activate at Z < 0.8
-            'trailing_stop_distance': 0.5,    # Trail by 0.5 sigma
+            'trailing_stop_distance': 0.5,    # Fallback distance
+            'trailing_stop_min_hold_seconds': 120,
+            'trailing_stop_tight_progress': 1.5,
+            'trailing_stop_mid_progress': 1.0,
+            'trailing_stop_tight_distance': 0.3,
+            'trailing_stop_mid_distance': 0.4,
+            'trailing_stop_loose_distance': 0.5,
             
             # Maximum hold time
             'max_hold_hours': 6,  # 6 hours maximum
@@ -353,11 +359,31 @@ class AdvancedTradeManager:
         
         if not self.config['trailing_stop_enabled']:
             return {'action': 'HOLD', 'reason': 'Trailing stop disabled'}
-        
+
+        time_in_trade = time.time() - self.trade_state.entry_time
+        min_hold_seconds = self.config.get('trailing_stop_min_hold_seconds', 0)
+        if min_hold_seconds and time_in_trade < min_hold_seconds:
+            return {
+                'action': 'HOLD',
+                'reason': 'Trailing stop grace period'
+            }
+
         abs_current = abs(current_z)
         abs_best = abs(self.trade_state.best_z)
+        abs_entry = abs(self.trade_state.entry_z)
         activation_threshold = self.config['trailing_stop_activation']
-        trail_distance = self.config['trailing_stop_distance']
+        progress = max(0.0, abs_entry - abs_best)
+        tight_progress = self.config.get('trailing_stop_tight_progress', 1.5)
+        mid_progress = self.config.get('trailing_stop_mid_progress', 1.0)
+        tight_distance = self.config.get('trailing_stop_tight_distance', 0.3)
+        mid_distance = self.config.get('trailing_stop_mid_distance', 0.4)
+        loose_distance = self.config.get('trailing_stop_loose_distance', self.config['trailing_stop_distance'])
+        if progress >= tight_progress:
+            trail_distance = tight_distance
+        elif progress >= mid_progress:
+            trail_distance = mid_distance
+        else:
+            trail_distance = loose_distance
         
         # Activate trailing stop when Z gets close to mean
         if not self.trade_state.trailing_stop_active:

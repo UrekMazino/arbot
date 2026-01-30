@@ -59,6 +59,7 @@ from func_pair_state import (
     record_trade_result,
     record_pair_trade_result,
     get_pair_history_stats,
+    should_blacklist_pair,
     get_hospital_entries,
     get_hospital_remaining,
     normalize_pair_key,
@@ -94,6 +95,8 @@ _PNL_ALERT_INTERVAL_SECONDS = None
 _LAST_PNL_ALERT_TS = 0.0
 _LAST_PNL_ALERT_VAL = None
 _LAST_PNL_ALERT_SIGN = 0
+_PNL_FALLBACK_ACTIVE = False
+_PNL_FALLBACK_BASIS = ""
 _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
 
@@ -136,6 +139,17 @@ def _get_pnl_alert_thresholds():
         except (TypeError, ValueError):
             _PNL_ALERT_INTERVAL_SECONDS = 600
     return _PNL_ALERT_USDT, _PNL_ALERT_PCT, _PNL_ALERT_INTERVAL_SECONDS
+
+
+def _get_pair_idle_timeout_min():
+    raw = os.getenv("STATBOT_PAIR_IDLE_TIMEOUT_MIN", "0")
+    try:
+        minutes = float(raw)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes < 0:
+        minutes = 0.0
+    return minutes
 
 
 def _sanitize_run_end_detail(detail, max_len=300):
@@ -903,7 +917,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         curr_t2 = ticker_2
         # Commit graveyard only after a replacement is found.
         if switch_reason != "min_capital":
-            if switch_reason in ("health", "cointegration_lost"):
+            if switch_reason in ("health", "cointegration_lost", "idle_timeout"):
                 stats = get_pair_history_stats(curr_t1, curr_t2)
                 if stats and stats.get("trades", 0) == 0:
                     unproven_reason = f"{switch_reason}_unproven"
@@ -983,6 +997,8 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
     """
     Calculate cumulative P&L from open positions using fetched account state.
     """
+    global _PNL_FALLBACK_ACTIVE
+    global _PNL_FALLBACK_BASIS
     total_pnl = 0.0
     positions = []
     if isinstance(state, dict):
@@ -1021,6 +1037,10 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
             )
         pnl_info["source"] = "upl"
         pnl_info["used_positions"] = used_positions
+        if _PNL_FALLBACK_ACTIVE:
+            logger.info("PnL fallback cleared: positions detected")
+            _PNL_FALLBACK_ACTIVE = False
+            _PNL_FALLBACK_BASIS = ""
         return total_pnl, pnl_pct, pnl_info
 
     try:
@@ -1066,11 +1086,21 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
         pnl_info["source"] = "fallback"
         pnl_info["fallback_legs"] = fallback_legs
         pnl_info["fallback_basis"] = ",".join(fallback_basis)
-        logger.info(
-            "PnL fallback used: legs=%d basis=%s",
-            fallback_legs,
-            pnl_info["fallback_basis"] or "last_trade",
-        )
+        basis_value = pnl_info["fallback_basis"] or "last_trade"
+        if (not _PNL_FALLBACK_ACTIVE) or (basis_value != _PNL_FALLBACK_BASIS):
+            logger.info(
+                "PnL fallback used: legs=%d basis=%s",
+                fallback_legs,
+                basis_value,
+            )
+            _PNL_FALLBACK_ACTIVE = True
+            _PNL_FALLBACK_BASIS = basis_value
+        else:
+            logger.debug(
+                "PnL fallback used: legs=%d basis=%s",
+                fallback_legs,
+                basis_value,
+            )
         return total_pnl, pnl_pct, pnl_info
     except Exception as e:
         logger.error(f"Error calculating P&L: {e}")
@@ -1535,6 +1565,36 @@ if __name__ == "__main__":
             if health_check_due:
                 last_health_check = current_time
 
+            idle_timeout_min = _get_pair_idle_timeout_min()
+            if idle_timeout_min > 0 and is_manage_new_trades and kill_switch == 0:
+                time_in_pair_min = (current_time - pair_start_time) / 60
+                if time_in_pair_min >= idle_timeout_min:
+                    logger.warning(
+                        "Pair idle timeout reached (%.1f min >= %.1f). Switching pair.",
+                        time_in_pair_min,
+                        idle_timeout_min,
+                    )
+                    if lock_on_pair:
+                        logger.warning("lock_on_pair enabled; staying on current pair despite idle timeout.")
+                    else:
+                        status_dict["message"] = "Idle timeout; switching pair..."
+                        save_status(status_dict)
+                        set_last_switch_reason("idle_timeout")
+                        switch_result = _switch_to_next_pair(
+                            health_score=0,
+                            switch_reason="idle_timeout",
+                        )
+                        if switch_result == SWITCH_RESULT_SWITCHED:
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            sys.exit(3)
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after idle timeout. Hard stop.")
+                            sys.exit(1)
+                        logger.error("Pair switch blocked. Will retry next cycle.")
+
             # 4. Check for signal and place new trades
             if is_manage_new_trades and kill_switch == 0:
                 status_dict["message"] = "Managing new trades..."
@@ -1595,6 +1655,7 @@ if __name__ == "__main__":
                 
                 # Phase 3: Record trade result before closing
                 # total_pnl was calculated at the start of the loop
+                blacklist_pair = False
                 is_win = total_pnl > 0
                 entry_equity = get_entry_equity()
                 entry_notional = get_entry_notional()
@@ -1649,6 +1710,21 @@ if __name__ == "__main__":
                             stats["win_usdt"],
                             stats["loss_usdt"],
                         )
+                        if should_blacklist_pair(ticker_1, ticker_2):
+                            add_to_graveyard(ticker_1, ticker_2, reason="bad_history")
+                            set_last_switch_reason("bad_history")
+                            blacklist_pair = True
+                            logger.warning(
+                                "Pair blacklisted: %s/%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                                ticker_1,
+                                ticker_2,
+                                stats["trades"],
+                                stats["wins"],
+                                stats["losses"],
+                                stats["win_rate"] * 100,
+                                stats["win_usdt"],
+                                stats["loss_usdt"],
+                            )
 
                 kill_switch = close_all_positions(kill_switch)
 
@@ -1683,6 +1759,27 @@ if __name__ == "__main__":
                     alert_session_pnl,
                     alert_session_pnl_pct,
                 )
+
+                if blacklist_pair:
+                    if lock_on_pair:
+                        logger.warning("Pair blacklisted but lock_on_pair enabled; staying on current pair.")
+                    else:
+                        status_dict["message"] = "Pair blacklisted; switching..."
+                        save_status(status_dict)
+                        switch_result = _switch_to_next_pair(
+                            health_score=0,
+                            switch_reason="bad_history",
+                        )
+                        if switch_result == SWITCH_RESULT_SWITCHED:
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            sys.exit(3)
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after blacklist. Hard stop.")
+                            sys.exit(1)
+                        logger.error("Pair switch blocked after blacklist.")
 
                 # Sleep for 5 seconds
                 time.sleep(5)

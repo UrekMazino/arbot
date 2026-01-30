@@ -11,6 +11,9 @@ DEFAULT_HISTORY_MIN_TRADES = 1
 DEFAULT_HISTORY_MIN_WIN_RATE = 0.50
 DEFAULT_HISTORY_REQUIRE_PROFIT = True
 DEFAULT_HOSPITAL_COOLDOWN_SECONDS = 300
+DEFAULT_BLACKLIST_MIN_TRADES = 10
+DEFAULT_BLACKLIST_MAX_LOSS_RATE = 0.75
+DEFAULT_BLACKLIST_REQUIRE_LOSS_DOMINANCE = True
 
 # Min-capital cooldown defaults (seconds)
 MIN_CAPITAL_COOLDOWN_SHORT = 180
@@ -30,6 +33,8 @@ GRAVEYARD_REASON_DAYS = {
     "health": 5 / (24 * 60),
     "health_bad_history": 7,
     "settle_ccy_filter": 30,
+    "bad_history": 7,
+    "idle_timeout": 3,
 }
 
 
@@ -71,6 +76,13 @@ PAIR_HISTORY_REQUIRE_PROFIT = _env_flag("STATBOT_HISTORY_REQUIRE_PROFIT", DEFAUL
 HOSPITAL_DEFAULT_COOLDOWN_SECONDS = _env_int(
     "STATBOT_HOSPITAL_COOLDOWN_SECONDS",
     DEFAULT_HOSPITAL_COOLDOWN_SECONDS,
+)
+BLACKLIST_ENABLED = _env_flag("STATBOT_BLACKLIST_ENABLED", True)
+BLACKLIST_MIN_TRADES = _env_int("STATBOT_BLACKLIST_MIN_TRADES", DEFAULT_BLACKLIST_MIN_TRADES)
+BLACKLIST_MAX_LOSS_RATE = _env_float("STATBOT_BLACKLIST_MAX_LOSS_RATE", DEFAULT_BLACKLIST_MAX_LOSS_RATE)
+BLACKLIST_REQUIRE_LOSS_DOMINANCE = _env_flag(
+    "STATBOT_BLACKLIST_REQUIRE_LOSS_DOMINANCE",
+    DEFAULT_BLACKLIST_REQUIRE_LOSS_DOMINANCE,
 )
 
 def load_pair_state():
@@ -220,6 +232,37 @@ def is_good_pair_history(
     if stats["win_rate"] <= min_win_rate:
         return False
     if require_profit and stats["win_usdt"] <= stats["loss_usdt"]:
+        return False
+    return True
+
+
+def should_blacklist_pair(
+    t1,
+    t2,
+    min_trades=None,
+    max_loss_rate=None,
+    require_loss_dominance=None,
+):
+    if not BLACKLIST_ENABLED:
+        return False
+    stats = get_pair_history_stats(t1, t2)
+    if not stats:
+        return False
+    if min_trades is None:
+        min_trades = BLACKLIST_MIN_TRADES
+    if max_loss_rate is None:
+        max_loss_rate = BLACKLIST_MAX_LOSS_RATE
+    if require_loss_dominance is None:
+        require_loss_dominance = BLACKLIST_REQUIRE_LOSS_DOMINANCE
+
+    trades = stats.get("trades", 0) or 0
+    if trades < min_trades:
+        return False
+    losses = stats.get("losses", 0) or 0
+    loss_rate = (losses / trades) if trades > 0 else 0.0
+    if loss_rate < max_loss_rate:
+        return False
+    if require_loss_dominance and stats.get("loss_usdt", 0.0) <= stats.get("win_usdt", 0.0):
         return False
     return True
 

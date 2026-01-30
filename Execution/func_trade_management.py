@@ -74,6 +74,32 @@ def _get_health_switch_settings():
         grace_seconds = 0.0
     return required, grace_seconds
 
+
+def _env_float(name, default=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float_list(name, default_list):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return list(default_list)
+    values = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            values.append(float(part))
+        except (TypeError, ValueError):
+            continue
+    return values if values else list(default_list)
+
 """
 MANAGE_NEW_TRADES KILL_SWITCH TRANSITIONS
 ==========================================
@@ -317,6 +343,10 @@ def _build_liquidity_ratio_steps(base_ratio):
     if base_ratio <= 0:
         return [0.0]
 
+    floor = _env_float("STATBOT_LIQUIDITY_FALLBACK_MIN")
+    if floor is not None and base_ratio < floor:
+        base_ratio = floor
+
     steps = []
 
     def _add_step(value):
@@ -328,7 +358,29 @@ def _build_liquidity_ratio_steps(base_ratio):
         steps.append(value)
 
     _add_step(base_ratio)
-    for value in DEFAULT_LIQUIDITY_RATIO_STEPS:
+    tier_candidates = []
+    tier_1 = _env_float("STATBOT_LIQUIDITY_FALLBACK_TIER1")
+    tier_2 = _env_float("STATBOT_LIQUIDITY_FALLBACK_TIER2")
+    tier_3 = _env_float("STATBOT_LIQUIDITY_FALLBACK_TIER3")
+    if tier_1 is not None:
+        tier_candidates.append(tier_1)
+    if tier_2 is not None:
+        tier_candidates.append(tier_2)
+    if tier_3 is not None:
+        tier_candidates.append(tier_3)
+    if floor is not None:
+        tier_candidates.append(floor)
+    if not tier_candidates:
+        tier_candidates = _env_float_list(
+            "STATBOT_LIQUIDITY_RATIO_STEPS",
+            DEFAULT_LIQUIDITY_RATIO_STEPS,
+        )
+
+    for value in tier_candidates:
+        if value is None:
+            continue
+        if floor is not None and value < floor:
+            continue
         if value < base_ratio - 1e-9:
             _add_step(value)
 
@@ -666,7 +718,12 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
 
     # 2. Run Health Check if due or if cointegration is lost
     if health_check_due or coint_flag == 0:
-        should_switch, score, rec = check_pair_health(metrics, latest_zscore)
+        log_health_details = bool(health_check_due)
+        should_switch, score, rec = check_pair_health(
+            metrics,
+            latest_zscore,
+            silent=not log_health_details,
+        )
         failures = record_health_failure(
             signal_positive_ticker,
             signal_negative_ticker,
@@ -675,20 +732,34 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         if should_switch:
             required, grace_seconds = _get_health_switch_settings()
             if failures < required:
-                logger.warning(
-                    "Pair health critical (score=%s). Confirmation %d/%d; deferring switch.",
-                    score,
-                    failures,
-                    required,
-                )
+                if log_health_details:
+                    logger.warning(
+                        "Pair health critical (score=%s). Confirmation %d/%d; deferring switch.",
+                        score,
+                        failures,
+                        required,
+                    )
+                else:
+                    logger.debug(
+                        "Pair health critical (score=%s). Confirmation %d/%d; deferring switch.",
+                        score,
+                        failures,
+                        required,
+                    )
                 return kill_switch, False, False
             last_switch = get_last_switch_time()
             elapsed = time.time() - last_switch if last_switch else grace_seconds + 1
             if grace_seconds and elapsed < grace_seconds:
-                logger.warning(
-                    "Pair health critical but within grace period (%.0fs remaining).",
-                    grace_seconds - elapsed,
-                )
+                if log_health_details:
+                    logger.warning(
+                        "Pair health critical but within grace period (%.0fs remaining).",
+                        grace_seconds - elapsed,
+                    )
+                else:
+                    logger.debug(
+                        "Pair health critical but within grace period (%.0fs remaining).",
+                        grace_seconds - elapsed,
+                    )
                 return kill_switch, False, False
             if coint_flag == 0:
                 set_last_switch_reason("cointegration_lost")

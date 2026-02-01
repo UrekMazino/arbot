@@ -57,7 +57,7 @@ def _env_bool(name, default=False):
     return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
 kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)
-min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 1000)
+min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
 min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)

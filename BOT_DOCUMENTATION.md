@@ -112,7 +112,7 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
-*   **Hospital**: Pairs with good trade history that fail health/cointegration get a 5-minute cooldown, then are prioritized for re-evaluation. When the active pair fails, hospital pairs that have completed cooldown are selected FIFO (oldest ready first). Good history defaults to: min_trades=1, win_rate > 50%, total_win_usdt > total_loss_usdt.
+*   **Hospital**: Pairs with good trade history that fail health/cointegration get a 1-hour cooldown, then are prioritized for re-evaluation. When the active pair fails, hospital pairs that have completed cooldown are selected FIFO (oldest ready first). Good history defaults to: min_trades=1, win_rate > 50%, total_win_usdt > total_loss_usdt.
 *   **Graveyard**: Failed pairs are blacklisted using reason-based TTLs:
     - `cointegration_lost_bad_history`: 7 days
     - `health_bad_history`: 7 days
@@ -163,7 +163,6 @@ Each trading cycle logs comprehensive performance metrics:
 - **Per-Run Logs Directory**: Logs live in `OKXStatBot/Logs/v1/run_XX_YYYYMMDD_HHMMSS/log_YYYYMMDD_HHMMSS.log`
 - **Entry Signal Snapshots**: One-time startup balance snapshot plus pre-trade snapshots (USDT availBal/availEq) at entry signal
 - **PNL Alerts**: `PNL_ALERT` fires on session threshold breaches and trade closes; trade-close alerts log after positions close and equity refresh
-- **Discord Command Listener**: Optional listener answers `!status`, `!pnl`, `!pair`, `!balance`, `!help` via Clawdbot
 
 ### Log Rotation and Retention
 StatBot writes per-run logs to `OKXStatBot/Logs/v1` (or `STATBOT_LOG_PATH` if set) with a timestamped filename.
@@ -231,62 +230,10 @@ python pre_live_checklist.py --mode live --inst-type SWAP
 ```
 The script respects `OKX_FLAG` by default; `--mode live` overrides it.
 
-### Molt Monitoring (Optional)
-Stream StatBot alerts into Molt/Clawdbot using the monitor:
-```
-python OKXStatBot/Execution/molt_monitor.py
-```
-
-The monitor tails the newest `OKXStatBot/Logs/v1/**/log_*.log` file and posts executive-level alerts
-for critical events and `PNL_ALERT` lines.
-
-Delivery modes:
-- `MOLT_DELIVERY_MODE=gateway` (default, uses `clawdbot gateway call send`)
-- `MOLT_DELIVERY_MODE=hooks` (uses webhook token)
-
-Environment options:
-```
-MOLT_GATEWAY_URL=http://127.0.0.1:18789
-MOLT_GATEWAY_TOKEN=<gateway token>        # or CLAWDBOT_GATEWAY_TOKEN
-MOLT_HOOK_TOKEN=<shared-secret>           # for hooks mode
-MOLT_CHANNEL=discord
-MOLT_TO=channel:1234567890
-MOLT_ALERT_COOLDOWN_SECONDS=60
-MOLT_ALERT_CONTEXT_LINES=5
-MOLT_ALERT_INCLUDE_CONTEXT=1
-MOLT_MONITOR_FROM_START=1
-MOLT_DELIVERY_MODE=gateway
-```
-
-Notes:
-- The monitor auto-detects the latest log file in `OKXStatBot/Logs/v1`.
-- If no token is provided for hooks mode, it will read `gateway.auth.token` from
-  `~/.clawdbot/clawdbot.json`.
-
-### Discord Command Listener (Optional)
-Enable a lightweight listener for bot status queries (via Clawdbot):
-```
-STATBOT_COMMAND_LISTENER=1
-STATBOT_COMMAND_CHANNEL=discord
-STATBOT_COMMAND_TARGET=channel:1234567890
-STATBOT_COMMAND_PREFIX_REQUIRED=1
-STATBOT_COMMAND_PREFIXES=!,/
-STATBOT_COMMAND_POLL_SECONDS=5
-STATBOT_COMMAND_READ_LIMIT=20
-STATBOT_COMMAND_INCLUDE_THREAD=0
-```
-
-Supported commands:
-- `!status` (executive summary)
-- `!pnl`
-- `!pair`
-- `!balance`
-- `!help`
-
 ### Min Equity Filtering (Strategy + Execution)
 Strategy can auto-filter expensive pairs before writing `Strategy/output/2_cointegrated_pairs.csv`:
 ```
-STATBOT_STRATEGY_MIN_EQUITY=170
+STATBOT_STRATEGY_MIN_EQUITY=0
 ```
 Pairs with `min_equity_recommended` above this threshold are removed.
 

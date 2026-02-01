@@ -73,7 +73,7 @@ Enable the fast path for large universes (keeps accuracy by using full-length co
 
 ```env
 STATBOT_STRATEGY_FAST_PATH=1
-STATBOT_STRATEGY_CORR_MIN=0.2        # correlation prefilter on log returns (set 0 to disable)
+STATBOT_STRATEGY_CORR_MIN=0.1        # correlation prefilter on log returns (set 0 to disable)
 STATBOT_STRATEGY_CORR_LOOKBACK=0     # 0 = full length, or set a bar count for faster prefilter
 ```
 
@@ -108,7 +108,7 @@ StatBot v1.0 is considered stable after a staged rollout:
 - 24-72 hours demo soak, then 5-10 trading days small live.
 
 ### V1 Checklist
-- Phase 0 (Smoke, 15-30 min): startup logs OK, availEq/availBal snapshot printed, !status replies, Molt alert sends, no API errors.
+- Phase 0 (Smoke, 15-30 min): startup logs OK, availEq/availBal snapshot printed, no API errors.
 - Phase 1 (Entry/Exit, 2-6h): at least one full entry/exit, contract value log present, no 51008 margin errors.
 - Phase 2 (Soak, 24-72h demo): >=2 funding windows, one restart, one health check, log rotation OK, no crashes.
 - Phase 3 (Limited live, 5-10d): small cap, PNL alerts appear, equity drift reasonable, no repeated order failures.
@@ -182,31 +182,6 @@ Behavior:
 - If a leg fails the ratio, the bot attempts to downsize per-leg capital to meet the minimum.
 - If the ratio still fails, the bot progressively relaxes the min ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
 - If the adjusted target drops below the exchange min order size, the entry is skipped.
-
-### Molt/Clawdbot alerts (optional)
-Monitor logs and push executive alerts (errors, circuit breaks, PNL alerts) to Discord:
-```bash
-cd Execution
-python molt_monitor.py
-```
-
-Env options in `Execution/.env`:
-```env
-MOLT_CHANNEL=discord
-MOLT_TO=channel:1234567890
-MOLT_DELIVERY_MODE=gateway
-MOLT_ALERT_COOLDOWN_SECONDS=60
-```
-
-### Discord command listener (optional)
-Reply to `!status`, `!pnl`, `!pair`, `!balance`, `!help` in a channel:
-```env
-STATBOT_COMMAND_LISTENER=1
-STATBOT_COMMAND_CHANNEL=discord
-STATBOT_COMMAND_TARGET=channel:1234567890
-STATBOT_COMMAND_PREFIX_REQUIRED=1
-STATBOT_COMMAND_PREFIXES=!,/
-```
 
 ## Features
 

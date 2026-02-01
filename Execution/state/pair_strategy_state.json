@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1769792688.900529,
+    "last_switch_time": 1769931712.5811534,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
@@ -55,63 +55,333 @@
             "ts": 1769784226.974414,
             "reason": "cointegration_lost_bad_history",
             "ttl_days": 7
+        },
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1769796279.6322432,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/MET-USDT-SWAP": {
+            "ts": 1769798527.8865278,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ASTER-USDT-SWAP/MET-USDT-SWAP": {
+            "ts": 1769827640.9672568,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "LPT-USDT-SWAP/ZETA-USDT-SWAP": {
+            "ts": 1769833033.555147,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "MAGIC-USDT-SWAP/MET-USDT-SWAP": {
+            "ts": 1769836267.9400752,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "IMX-USDT-SWAP/ZETA-USDT-SWAP": {
+            "ts": 1769837676.8307247,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/LINK-USDT-SWAP": {
+            "ts": 1769845464.9713504,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ARB-USDT-SWAP/ZIL-USDT-SWAP": {
+            "ts": 1769846406.4615233,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "MAJOR-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "ts": 1769848767.2678678,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "MUBARAK-USDT-SWAP/PEPE-USDT-SWAP": {
+            "ts": 1769860880.0982213,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "OP-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "ts": 1769867991.620545,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "BOME-USDT-SWAP/ZIL-USDT-SWAP": {
+            "ts": 1769873957.7456105,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "CHZ-USDT-SWAP/HBAR-USDT-SWAP": {
+            "ts": 1769880523.8058293,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "CELO-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1769887885.1233902,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/OP-USDT-SWAP": {
+            "ts": 1769891105.875813,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/KAITO-USDT-SWAP": {
+            "ts": 1769897106.6170602,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/LDO-USDT-SWAP": {
+            "ts": 1769902940.5538018,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/MASK-USDT-SWAP": {
+            "ts": 1769908259.3392837,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "EOS-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1769915085.701449,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ADA-USDT-SWAP/IMX-USDT-SWAP": {
+            "ts": 1769917793.8546166,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "CRO-USDT-SWAP/LQTY-USDT-SWAP": {
+            "ts": 1769920502.151764,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ATOM-USDT-SWAP/ICP-USDT-SWAP": {
+            "ts": 1769922671.2606573,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "HBAR-USDT-SWAP/MUBARAK-USDT-SWAP": {
+            "ts": 1769925144.556619,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ALGO-USDT-SWAP/MINA-USDT-SWAP": {
+            "ts": 1769930569.302056,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
         }
     },
     "restricted_tickers": {},
-    "consecutive_losses": 2,
-    "last_health_score": 60,
+    "consecutive_losses": 0,
+    "last_health_score": 35,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
     "entry_equity": null,
     "entry_notional": null,
-    "last_switch_reason": "idle_timeout",
+    "last_switch_reason": "cointegration_lost",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
     "persistence_history": [
-        -1.9196459668546233,
-        -1.686631354130886,
-        0.3728420380881767,
-        0.3261325845356125,
-        0.42059400197409913
+        0.601794924352996,
+        0.6053474740288879,
+        0.7687262480988997,
+        0.7735047007827341,
+        0.7769322096154844
     ],
-    "last_exit_time": 1769793188.6828449,
+    "last_exit_time": 1769929641.274831,
     "z_history": [],
     "hospital": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": {
             "ts": 1769765908.1133373,
-            "cooldown": 300,
+            "cooldown": 3600,
             "reason": "cointegration_lost",
             "visits": 8
         },
         "CRV-USDT-SWAP/YGG-USDT-SWAP": {
             "ts": 1769767482.7239976,
-            "cooldown": 300,
+            "cooldown": 3600,
             "reason": "cointegration_lost_unproven",
             "visits": 3
         },
         "ASTER-USDT-SWAP/MASK-USDT-SWAP": {
             "ts": 1769768682.2596517,
-            "cooldown": 300,
+            "cooldown": 3600,
             "reason": "cointegration_lost_unproven",
             "visits": 4
         },
         "ARB-USDT-SWAP/XLM-USDT-SWAP": {
             "ts": 1769785225.5933998,
-            "cooldown": 300,
+            "cooldown": 3600,
             "reason": "cointegration_lost_unproven",
             "visits": 4
         },
         "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
-            "ts": 1769792688.8964527,
-            "cooldown": 300,
-            "reason": "idle_timeout",
+            "ts": 1769809033.1810772,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 17
+        },
+        "HBAR-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1769810631.8847613,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 15
+        },
+        "CRV-USDT-SWAP/XPL-USDT-SWAP": {
+            "ts": 1769813646.9949536,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "SUSHI-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1769814244.090947,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "LDO-USDT-SWAP/XPL-USDT-SWAP": {
+            "ts": 1769814546.0577707,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "INJ-USDT-SWAP/LINK-USDT-SWAP": {
+            "ts": 1769816448.9420562,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "DOGE-USDT-SWAP/ZETA-USDT-SWAP": {
+            "ts": 1769816749.9433885,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "SUSHI-USDT-SWAP/ZETA-USDT-SWAP": {
+            "ts": 1769817050.8962457,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "MAJOR-USDT-SWAP/XPL-USDT-SWAP": {
+            "ts": 1769850798.5673716,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 4
+        },
+        "MAJOR-USDT-SWAP/MET-USDT-SWAP": {
+            "ts": 1769864679.6763375,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 6
+        },
+        "OP-USDT-SWAP/XLM-USDT-SWAP": {
+            "ts": 1769850494.069773,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
             "visits": 2
         },
-        "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
-            "ts": 1769789259.4906986,
-            "cooldown": 300,
-            "reason": "idle_timeout",
+        "XTZ-USDT-SWAP/YB-USDT-SWAP": {
+            "ts": 1769841641.4516644,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "CHZ-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1769893007.1727674,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 8
+        },
+        "MAGIC-USDT-SWAP/XLM-USDT-SWAP": {
+            "ts": 1769857648.2027254,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 2
+        },
+        "CHZ-USDT-SWAP/TRX-USDT-SWAP": {
+            "ts": 1769857952.415066,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 2
+        },
+        "IMX-USDT-SWAP/MINA-USDT-SWAP": {
+            "ts": 1769861184.6976786,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 2
+        },
+        "CATI-USDT-SWAP/NOT-USDT-SWAP": {
+            "ts": 1769892316.3131607,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 5
+        },
+        "CRV-USDT-SWAP/H-USDT-SWAP": {
+            "ts": 1769892704.8173428,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 5
+        },
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "ts": 1769891410.6694982,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 4
+        },
+        "CRV-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1769891713.473014,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "MASK-USDT-SWAP/MET-USDT-SWAP": {
+            "ts": 1769892014.820031,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "BAND-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1769893310.2215981,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "ETHFI-USDT-SWAP/H-USDT-SWAP": {
+            "ts": 1769894504.167163,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "CHZ-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1769927857.115965,
+            "cooldown": 3600,
+            "reason": "idle_timeout_unproven",
+            "visits": 3
+        },
+        "EOS-USDT-SWAP/MUBARAK-USDT-SWAP": {
+            "ts": 1769930873.189056,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 2
+        },
+        "ICP-USDT-SWAP/LPT-USDT-SWAP": {
+            "ts": 1769931177.1955264,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "ALGO-USDT-SWAP/ZETA-USDT-SWAP": {
+            "ts": 1769931712.5771527,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
             "visits": 1
         }
     },
@@ -165,12 +435,236 @@
             "last_trade_ts": 1769792675.5318427
         },
         "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
+            "wins": 2,
+            "losses": 3,
+            "win_usdt": 33.00885529554853,
+            "loss_usdt": 7.406249864999609,
+            "trades": 5,
+            "last_trade_ts": 1769796161.6510727
+        },
+        "ETHW-USDT-SWAP/MET-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.09402769000007538,
+            "trades": 2,
+            "last_trade_ts": 1769798077.8065886
+        },
+        "ASTER-USDT-SWAP/MET-USDT-SWAP": {
             "wins": 1,
             "losses": 1,
-            "win_usdt": 18.917575705548188,
-            "loss_usdt": 4.278353659999539,
+            "win_usdt": 0.07661240000015823,
+            "loss_usdt": 0.37312400000018897,
             "trades": 2,
-            "last_trade_ts": 1769793186.0213044
+            "last_trade_ts": 1769825300.6624732
+        },
+        "MAJOR-USDT-SWAP/XPL-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.3398109999998269,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1769830712.2057817
+        },
+        "LPT-USDT-SWAP/ZETA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.08703574999981356,
+            "trades": 1,
+            "last_trade_ts": 1769833020.5938125
+        },
+        "MAGIC-USDT-SWAP/MET-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.29972177999979976,
+            "trades": 2,
+            "last_trade_ts": 1769836251.3556106
+        },
+        "IMX-USDT-SWAP/ZETA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 2.0895189500001834,
+            "trades": 1,
+            "last_trade_ts": 1769836669.1240563
+        },
+        "OP-USDT-SWAP/XLM-USDT-SWAP": {
+            "wins": 2,
+            "losses": 1,
+            "win_usdt": 4.460064380000404,
+            "loss_usdt": 0.05827318499996181,
+            "trades": 3,
+            "last_trade_ts": 1769849417.7274804
+        },
+        "ETHW-USDT-SWAP/LINK-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.235,
+            "loss_usdt": 0.0028760999998667103,
+            "trades": 2,
+            "last_trade_ts": 1769845439.4295156
+        },
+        "ARB-USDT-SWAP/ZIL-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.3994909199996073,
+            "trades": 1,
+            "last_trade_ts": 1769846230.9969764
+        },
+        "MAJOR-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 2.6879164999995737,
+            "trades": 1,
+            "last_trade_ts": 1769848749.0801277
+        },
+        "IMX-USDT-SWAP/MINA-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.06283739000036803,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1769856702.8957086
+        },
+        "MUBARAK-USDT-SWAP/PEPE-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.0980000000000014,
+            "trades": 1,
+            "last_trade_ts": 1769860866.6392856
+        },
+        "CHZ-USDT-SWAP/YGG-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.012616600000001199,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1769865265.884071
+        },
+        "OP-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 1.1806942000002891,
+            "loss_usdt": 7.607758400000421,
+            "trades": 2,
+            "last_trade_ts": 1769867393.7991426
+        },
+        "ETHW-USDT-SWAP/KAITO-USDT-SWAP": {
+            "wins": 2,
+            "losses": 3,
+            "win_usdt": 0.4412154327874305,
+            "loss_usdt": 0.6627623250001307,
+            "trades": 5,
+            "last_trade_ts": 1769897088.1024053
+        },
+        "BOME-USDT-SWAP/ZIL-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.33421720000023925,
+            "loss_usdt": 0.054066749999947206,
+            "trades": 2,
+            "last_trade_ts": 1769873742.0799546
+        },
+        "CELO-USDT-SWAP/YGG-USDT-SWAP": {
+            "wins": 4,
+            "losses": 2,
+            "win_usdt": 1.1328889999999774,
+            "loss_usdt": 2.309759399999166,
+            "trades": 6,
+            "last_trade_ts": 1769886379.8851786
+        },
+        "CHZ-USDT-SWAP/HBAR-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.3732900999998492,
+            "trades": 2,
+            "last_trade_ts": 1769880504.7232254
+        },
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "wins": 3,
+            "losses": 0,
+            "win_usdt": 0.2339019000000917,
+            "loss_usdt": 0.0,
+            "trades": 3,
+            "last_trade_ts": 1769884997.2417367
+        },
+        "ETHW-USDT-SWAP/OP-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.13063637000004746,
+            "trades": 1,
+            "last_trade_ts": 1769890958.6173403
+        },
+        "ETHW-USDT-SWAP/LDO-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.1336849849999453,
+            "trades": 1,
+            "last_trade_ts": 1769902927.6162868
+        },
+        "ETHW-USDT-SWAP/MASK-USDT-SWAP": {
+            "wins": 2,
+            "losses": 2,
+            "win_usdt": 0.19662419999986014,
+            "loss_usdt": 0.0699386549999872,
+            "trades": 4,
+            "last_trade_ts": 1769907889.1360168
+        },
+        "EOS-USDT-SWAP/LRC-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 1.3978601300000264,
+            "trades": 1,
+            "last_trade_ts": 1769915071.2932787
+        },
+        "ADA-USDT-SWAP/IMX-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 3.0217768499996964,
+            "trades": 1,
+            "last_trade_ts": 1769917780.6927097
+        },
+        "CRO-USDT-SWAP/LQTY-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.15394680999997945,
+            "trades": 1,
+            "last_trade_ts": 1769919824.426243
+        },
+        "ATOM-USDT-SWAP/ICP-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.6680456919998505,
+            "trades": 1,
+            "last_trade_ts": 1769922639.411495
+        },
+        "HBAR-USDT-SWAP/MUBARAK-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.03248849999954473,
+            "loss_usdt": 0.09197649999987334,
+            "trades": 2,
+            "last_trade_ts": 1769924465.4322126
+        },
+        "ALGO-USDT-SWAP/MINA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.5769832799996948,
+            "trades": 1,
+            "last_trade_ts": 1769929638.092403
         }
     },
     "health_failures": {
@@ -181,6 +675,55 @@
         "ARB-USDT-SWAP/XLM-USDT-SWAP": 0,
         "LDO-USDT-SWAP/XTZ-USDT-SWAP": 0,
         "KAITO-USDT-SWAP/LDO-USDT-SWAP": 0,
-        "NEAR-USDT-SWAP/SUI-USDT-SWAP": 0
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/MET-USDT-SWAP": 0,
+        "HBAR-USDT-SWAP/LRC-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/MET-USDT-SWAP": 0,
+        "CRV-USDT-SWAP/XPL-USDT-SWAP": 0,
+        "SUSHI-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "LDO-USDT-SWAP/XPL-USDT-SWAP": 0,
+        "INJ-USDT-SWAP/LINK-USDT-SWAP": 0,
+        "DOGE-USDT-SWAP/ZETA-USDT-SWAP": 0,
+        "SUSHI-USDT-SWAP/ZETA-USDT-SWAP": 0,
+        "LPT-USDT-SWAP/ZETA-USDT-SWAP": 0,
+        "MAJOR-USDT-SWAP/XPL-USDT-SWAP": 0,
+        "IMX-USDT-SWAP/ZETA-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/LINK-USDT-SWAP": 0,
+        "MAJOR-USDT-SWAP/MET-USDT-SWAP": 0,
+        "ARB-USDT-SWAP/ZIL-USDT-SWAP": 0,
+        "MAGIC-USDT-SWAP/MET-USDT-SWAP": 0,
+        "MAJOR-USDT-SWAP/SYRUP-USDT-SWAP": 0,
+        "OP-USDT-SWAP/XLM-USDT-SWAP": 0,
+        "XTZ-USDT-SWAP/YB-USDT-SWAP": 0,
+        "CHZ-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "MAGIC-USDT-SWAP/XLM-USDT-SWAP": 0,
+        "CHZ-USDT-SWAP/TRX-USDT-SWAP": 0,
+        "IMX-USDT-SWAP/MINA-USDT-SWAP": 0,
+        "MUBARAK-USDT-SWAP/PEPE-USDT-SWAP": 0,
+        "OP-USDT-SWAP/SYRUP-USDT-SWAP": 0,
+        "CHZ-USDT-SWAP/HBAR-USDT-SWAP": 0,
+        "CATI-USDT-SWAP/NOT-USDT-SWAP": 0,
+        "CRV-USDT-SWAP/H-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/KAITO-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/OP-USDT-SWAP": 0,
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": 0,
+        "CELO-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "BOME-USDT-SWAP/ZIL-USDT-SWAP": 0,
+        "CRV-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "MASK-USDT-SWAP/MET-USDT-SWAP": 0,
+        "BAND-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "ETHFI-USDT-SWAP/H-USDT-SWAP": 0,
+        "ATOM-USDT-SWAP/ICP-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/LDO-USDT-SWAP": 0,
+        "EOS-USDT-SWAP/LRC-USDT-SWAP": 0,
+        "ADA-USDT-SWAP/IMX-USDT-SWAP": 0,
+        "CRO-USDT-SWAP/LQTY-USDT-SWAP": 0,
+        "CHZ-USDT-SWAP/LRC-USDT-SWAP": 10,
+        "ETHW-USDT-SWAP/MASK-USDT-SWAP": 0,
+        "ALGO-USDT-SWAP/MINA-USDT-SWAP": 0,
+        "EOS-USDT-SWAP/MUBARAK-USDT-SWAP": 0,
+        "HBAR-USDT-SWAP/MUBARAK-USDT-SWAP": 0,
+        "ICP-USDT-SWAP/LPT-USDT-SWAP": 0,
+        "ALGO-USDT-SWAP/ZETA-USDT-SWAP": 0
     }
 }

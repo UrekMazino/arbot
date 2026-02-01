@@ -1656,9 +1656,11 @@ if __name__ == "__main__":
                 # Phase 3: Record trade result before closing
                 # total_pnl was calculated at the start of the loop
                 blacklist_pair = False
-                is_win = total_pnl > 0
                 entry_equity = get_entry_equity()
                 entry_notional = get_entry_notional()
+                equity_change = None
+
+                # Calculate equity change and reconcile with position PnL
                 if entry_equity is not None and equity_usdt is not None and entry_notional:
                     equity_change = equity_usdt - entry_equity
                     costs = fee_tracker.record_trade_costs(entry_notional)
@@ -1681,11 +1683,37 @@ if __name__ == "__main__":
                         reconciliation["funding"],
                         reconciliation["unexplained"],
                     )
+
+                    # Warn if large discrepancy between position PnL and equity change
+                    pnl_diff = abs(total_pnl - equity_change)
+                    if pnl_diff > 0.10:  # 10 cents threshold
+                        logger.warning(
+                            "Large PnL discrepancy detected: position_pnl=%.2f equity_change=%.2f diff=%.2f",
+                            total_pnl,
+                            equity_change,
+                            pnl_diff,
+                        )
+
+                    # Warn if large unexplained component in reconciliation
+                    unexplained_pct = abs(reconciliation["unexplained"] / reconciliation["difference"]) * 100 if reconciliation["difference"] != 0 else 0
+                    if abs(reconciliation["unexplained"]) > 0.10 and unexplained_pct > 50:
+                        logger.warning(
+                            "Large unexplained reconciliation component: %.2f USDT (%.1f%% of difference)",
+                            reconciliation["unexplained"],
+                            unexplained_pct,
+                        )
+
+                # Use equity_change for WIN/LOSS classification (source of truth)
+                # Fall back to total_pnl only if equity_change is unavailable
+                is_win = equity_change > 0 if equity_change is not None else total_pnl > 0
+                actual_pnl = equity_change if equity_change is not None else total_pnl
+
                 record_trade_result(is_win)
                 result_label = "WIN" if is_win else "LOSS"
-                logger.info(f"Trade result recorded: {result_label} (PNL: {total_pnl:.2f} USDT)")
+                logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
 
-                alert_pnl = total_pnl
+                # Use equity-based PnL as primary source of truth for alerts and history
+                alert_pnl = actual_pnl
                 alert_pnl_pct = pnl_pct
                 alert_equity = equity_usdt
                 alert_session_pnl = session_pnl
@@ -1695,7 +1723,8 @@ if __name__ == "__main__":
                     if tradeable_capital_usdt > 0:
                         alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
 
-                history_pnl = alert_pnl if alert_pnl is not None else total_pnl
+                # Use the same actual_pnl for pair history to maintain consistency
+                history_pnl = actual_pnl
                 if record_pair_trade_result(ticker_1, ticker_2, history_pnl):
                     stats = get_pair_history_stats(ticker_1, ticker_2)
                     if stats:

@@ -1593,14 +1593,12 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             
     # 2. Stop Loss Check (Hard Stop)
     # Check if position has exceeded stop loss threshold
-    from func_position_calls import get_account_state
     from func_pair_state import get_entry_equity
 
     entry_equity = get_entry_equity()
     if entry_equity is not None and entry_equity > 0:
-        # Get current equity
+        # Get current equity (account_session already imported at top of file)
         try:
-            from config_ws_connect import account_session
             balance_res = account_session.get_account_balance()
             if balance_res.get("code") == "0":
                 details = balance_res.get("data", [{}])[0].get("details", [])

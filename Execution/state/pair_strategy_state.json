@@ -183,8 +183,8 @@
         }
     },
     "restricted_tickers": {},
-    "consecutive_losses": 0,
-    "last_health_score": 85,
+    "consecutive_losses": 1,
+    "last_health_score": 65,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -193,14 +193,8 @@
     "last_switch_reason": "cointegration_lost",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
-    "persistence_history": [
-        -0.8415539212076666,
-        -0.8415539212076666,
-        -0.8787924333068763,
-        -0.9338483759035525,
-        -0.8796915046915736
-    ],
-    "last_exit_time": 1769960235.605682,
+    "persistence_history": [],
+    "last_exit_time": 1769961545.0496564,
     "z_history": [],
     "hospital": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": {
@@ -672,6 +666,14 @@
             "loss_usdt": 0.13444080000044778,
             "trades": 2,
             "last_trade_ts": 1769960232.970471
+        },
+        "EOS-USDT-SWAP/MUBARAK-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.17095200000039767,
+            "trades": 1,
+            "last_trade_ts": 1769961542.4070854
         }
     },
     "health_failures": {

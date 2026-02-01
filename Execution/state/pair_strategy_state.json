@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1769931712.5811534,
+    "last_switch_time": 1769960707.0440876,
     "graveyard": {
         "ARB-USDT-SWAP/FIL-USDT-SWAP": {
             "ts": 1769680855.9268842,
@@ -175,11 +175,16 @@
             "ts": 1769930569.302056,
             "reason": "idle_timeout_bad_history",
             "ttl_days": 7
+        },
+        "CHZ-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1769960707.0380144,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "restricted_tickers": {},
     "consecutive_losses": 0,
-    "last_health_score": 35,
+    "last_health_score": 85,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -189,13 +194,13 @@
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
     "persistence_history": [
-        0.601794924352996,
-        0.6053474740288879,
-        0.7687262480988997,
-        0.7735047007827341,
-        0.7769322096154844
+        -0.8415539212076666,
+        -0.8415539212076666,
+        -0.8787924333068763,
+        -0.9338483759035525,
+        -0.8796915046915736
     ],
-    "last_exit_time": 1769929641.274831,
+    "last_exit_time": 1769960235.605682,
     "z_history": [],
     "hospital": {
         "LTC-USDT-SWAP/SOL-USDT-SWAP": {
@@ -359,12 +364,6 @@
             "cooldown": 3600,
             "reason": "cointegration_lost_unproven",
             "visits": 1
-        },
-        "CHZ-USDT-SWAP/LRC-USDT-SWAP": {
-            "ts": 1769927857.115965,
-            "cooldown": 3600,
-            "reason": "idle_timeout_unproven",
-            "visits": 3
         },
         "EOS-USDT-SWAP/MUBARAK-USDT-SWAP": {
             "ts": 1769930873.189056,
@@ -665,6 +664,14 @@
             "loss_usdt": 0.5769832799996948,
             "trades": 1,
             "last_trade_ts": 1769929638.092403
+        },
+        "CHZ-USDT-SWAP/LRC-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.10858299999972587,
+            "loss_usdt": 0.13444080000044778,
+            "trades": 2,
+            "last_trade_ts": 1769960232.970471
         }
     },
     "health_failures": {
@@ -718,7 +725,7 @@
         "EOS-USDT-SWAP/LRC-USDT-SWAP": 0,
         "ADA-USDT-SWAP/IMX-USDT-SWAP": 0,
         "CRO-USDT-SWAP/LQTY-USDT-SWAP": 0,
-        "CHZ-USDT-SWAP/LRC-USDT-SWAP": 10,
+        "CHZ-USDT-SWAP/LRC-USDT-SWAP": 0,
         "ETHW-USDT-SWAP/MASK-USDT-SWAP": 0,
         "ALGO-USDT-SWAP/MINA-USDT-SWAP": 0,
         "EOS-USDT-SWAP/MUBARAK-USDT-SWAP": 0,

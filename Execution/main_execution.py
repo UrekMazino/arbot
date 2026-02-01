@@ -503,8 +503,25 @@ def _get_per_leg_allocation():
 
     risk_usdt = effective_capital * RISK_PER_TRADE_PCT
     initial_capital_usdt = risk_usdt / stop_loss_fail_safe
+
+    # If calculated position would exceed capital, scale down proportionally
     if initial_capital_usdt * 2 > effective_capital:
+        # Calculate what the actual risk would be with 50/50 split
+        actual_position_size = effective_capital * 0.5
+        actual_risk_usdt = actual_position_size * stop_loss_fail_safe
+        actual_risk_pct = (actual_risk_usdt / effective_capital) * 100
+
+        # Warn if risk exceeds target
+        if actual_risk_pct > RISK_PER_TRADE_PCT * 100:
+            logger.warning(
+                "⚠️  Position sizing adjusted: Actual risk=%.2f USDT (%.2f%%) exceeds target %.2f%% due to capital constraints",
+                actual_risk_usdt,
+                actual_risk_pct,
+                RISK_PER_TRADE_PCT * 100
+            )
+
         initial_capital_usdt = effective_capital * 0.5
+
     return initial_capital_usdt
 
 
@@ -1449,6 +1466,27 @@ if __name__ == "__main__":
 
             _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
 
+            # Check per-pair loss limit (2% of tradeable capital)
+            per_pair_loss_limit_pct = 0.02  # 2% per pair before forcing switch
+            if tradeable_capital_usdt > 0:
+                pair_loss_threshold = tradeable_capital_usdt * per_pair_loss_limit_pct
+                if total_pnl < -pair_loss_threshold:
+                    pair_loss_pct = (total_pnl / tradeable_capital_usdt) * 100
+                    logger.warning(
+                        "⚠️  PER-PAIR LOSS LIMIT: Pair loss=%.2f USDT (%.2f%%) exceeds %.1f%% limit. Switching pair...",
+                        total_pnl,
+                        pair_loss_pct,
+                        per_pair_loss_limit_pct * 100
+                    )
+
+                    # Close positions and switch to new pair
+                    if kill_switch == 0:
+                        logger.info("Closing positions due to per-pair loss limit...")
+                        kill_switch = 2  # Trigger position close
+
+                    # Mark for pair switch after positions close
+                    set_last_switch_reason("pair_loss_limit")
+
             # Log cycle with PnL, equity, and session performance
             pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
             session_emoji = "🟢" if session_pnl >= 0 else "🔴"
@@ -1545,18 +1583,38 @@ if __name__ == "__main__":
                     logger.info("Z-Score: %+0.2f", latest_zscore)
                 print(_green(f"Uptime: {uptime}"))
                 last_status_update = current_time
+            # Check session-wide drawdown (not just current pair)
+            if starting_equity > 0 and equity_usdt is not None:
+                session_drawdown = equity_usdt - starting_equity
+                session_drawdown_pct = (session_drawdown / starting_equity) * 100
+
+                # Circuit breaker based on session-wide loss
+                max_session_loss_usdt = starting_equity * max_drawdown_pct
+                if session_drawdown < -max_session_loss_usdt:
+                    msg = f"⚠️  SESSION CIRCUIT BREAKER: Equity={equity_usdt:.2f} (started at {starting_equity:.2f}), Loss={session_drawdown:.2f} USDT ({session_drawdown_pct:.2f}%) exceeds session limit {max_drawdown_pct*100:.1f}%"
+                    print(msg)
+                    logger.critical(msg)
+                    status_dict["message"] = "Session circuit breaker triggered - closing all positions"
+                    save_status(status_dict)
+                    close_all_positions(0)
+                    run_end_reason = "session_circuit_breaker"
+                    run_end_detail = (
+                        f"session_loss={session_drawdown:.2f} session_pct={session_drawdown_pct:.2f} limit={max_drawdown_pct*100:.1f}%"
+                    )
+                    break
+
+            # Also check current pair drawdown (legacy check)
             max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
-            
             if total_pnl < -max_loss_allowed:
-                msg = f"⚠️  CIRCUIT BREAKER TRIGGERED: P&L={total_pnl:.2f} USDT ({pnl_pct:.2f}%) exceeds max drawdown {max_drawdown_pct*100:.1f}%"
+                msg = f"⚠️  PAIR CIRCUIT BREAKER: P&L={total_pnl:.2f} USDT ({pnl_pct:.2f}%) exceeds pair limit {max_drawdown_pct*100:.1f}%"
                 print(msg)
                 logger.warning(msg)
-                status_dict["message"] = "Circuit breaker triggered - closing all positions"
+                status_dict["message"] = "Pair circuit breaker triggered - closing all positions"
                 save_status(status_dict)
                 close_all_positions(0)
-                run_end_reason = "circuit_breaker"
+                run_end_reason = "pair_circuit_breaker"
                 run_end_detail = (
-                    f"pnl={total_pnl:.2f} pct={pnl_pct:.2f} max_drawdown_pct={max_drawdown_pct*100:.1f}"
+                    f"pair_pnl={total_pnl:.2f} pair_pct={pnl_pct:.2f} max_drawdown_pct={max_drawdown_pct*100:.1f}"
                 )
                 break
 
@@ -1663,6 +1721,12 @@ if __name__ == "__main__":
                 # Calculate equity change and reconcile with position PnL
                 if entry_equity is not None and equity_usdt is not None and entry_notional:
                     equity_change = equity_usdt - entry_equity
+
+                    # Fetch actual funding fees from OKX
+                    funding_fees = fee_tracker.fetch_funding_fees(account_session, ticker_1, ticker_2)
+                    if funding_fees > 0:
+                        logger.info("Funding fees fetched from OKX: %.4f USDT", funding_fees)
+
                     costs = fee_tracker.record_trade_costs(entry_notional)
                     reconciliation = fee_tracker.reconcile_equity_drift(total_pnl, equity_change)
                     logger.info(

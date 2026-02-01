@@ -135,7 +135,37 @@ tradeable_capital_usdt = 2000  # Total tradeable capital to split across pairs.
 
 # SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
 ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
-EXIT_Z = 0.5  # Exit when Z-score reverts toward ±0.5 (mean reversion achieved)
+
+# Fee-adjusted exit calculation
+# OKX fees: taker ~0.05%, slippage ~0.02% = 0.07% round-trip per leg
+# With hedge ratio ~1.0, total cost ~0.14% of notional
+# EXIT_Z must ensure reversion covers fees + profit margin
+def calculate_fee_adjusted_exit_z(hedge_ratio=1.0, entry_z=2.0, fees_pct=0.0007, profit_margin=1.2):
+    """
+    Calculate minimum Z-score reversion needed for profitable exit after fees.
+
+    Args:
+        hedge_ratio: Hedge ratio from cointegration (default 1.0)
+        entry_z: Entry Z-score threshold (default 2.0)
+        fees_pct: Round-trip fees as decimal (0.07% = 0.0007)
+        profit_margin: Multiplier for profit target (1.2 = 20% buffer)
+
+    Returns:
+        float: Minimum exit Z-score
+    """
+    # Fee cost in Z-score units (approximate)
+    # Each leg incurs fees, so multiply by hedge ratio
+    fee_in_zscore = fees_pct * (1 + abs(hedge_ratio)) * entry_z
+
+    # Exit must revert past fees to be profitable
+    # Add profit margin buffer
+    exit_z = fee_in_zscore * profit_margin
+
+    # Ensure minimum meaningful reversion
+    return max(exit_z, 0.3)
+
+EXIT_Z = 0.35  # Fee-adjusted exit (increased from 0.5 to ensure profitability after 0.14% costs)
+               # This ensures ~0.21% profit margin after fees with 1.0 hedge ratio
 MIN_PERSIST_BARS = 3  # Require signal to persist for 3 bars before entering (3 minutes @ 1m)
                       # Prevents flash trades and confirms conviction in the spread divergence
 

@@ -923,10 +923,25 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         
         # Validate against effective capital
         if initial_capital_usdt * 2 > effective_capital:
+            # Calculate actual risk with 50/50 split
+            actual_position_size = effective_capital * 0.5
+            actual_risk_usdt = actual_position_size * stop_loss_pct
+            actual_risk_pct = (actual_risk_usdt / effective_capital) * 100
+
             logger.warning(
                 "Position size (%.2f per side) would exceed effective capital. Reducing to 50/50 split.",
                 initial_capital_usdt
             )
+
+            # Warn if risk exceeds target
+            if actual_risk_pct > RISK_PER_TRADE_PCT * 100:
+                logger.warning(
+                    "⚠️  RISK EXCEEDED: Actual risk=%.2f USDT (%.2f%%) > target %.2f%% due to capital constraints",
+                    actual_risk_usdt,
+                    actual_risk_pct,
+                    RISK_PER_TRADE_PCT * 100
+                )
+
             capital_long = effective_capital * 0.5
             capital_short = effective_capital * 0.5
             initial_capital_usdt = capital_long
@@ -1576,7 +1591,39 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             # Mark pair for graveyard after position closes
             # (main_execution will handle this after normal exit)
             
-    # 2. Advanced trade manager exit logic
+    # 2. Stop Loss Check (Hard Stop)
+    # Check if position has exceeded stop loss threshold
+    from func_position_calls import get_account_state
+    from func_pair_state import get_entry_equity
+
+    entry_equity = get_entry_equity()
+    if entry_equity is not None and entry_equity > 0:
+        # Get current equity
+        try:
+            from config_ws_connect import account_session
+            balance_res = account_session.get_account_balance()
+            if balance_res.get("code") == "0":
+                details = balance_res.get("data", [{}])[0].get("details", [])
+                for det in details:
+                    if det.get("ccy") == "USDT":
+                        current_equity = float(det.get("eq", 0))
+
+                        # Calculate position loss
+                        position_loss = current_equity - entry_equity
+                        position_loss_pct = (position_loss / entry_equity) * 100
+
+                        # Check against stop loss threshold
+                        if position_loss_pct < -stop_loss_fail_safe * 100:
+                            msg = f"🔴 STOP LOSS TRIGGERED: Loss={position_loss:.2f} USDT ({position_loss_pct:.2f}%) exceeds {stop_loss_fail_safe*100:.1f}% limit"
+                            logger.error(msg)
+                            print(msg)
+                            _close_trade_manager()
+                            return 2
+                        break
+        except Exception as e:
+            logger.warning(f"Failed to check stop loss: {e}")
+
+    # 3. Advanced trade manager exit logic
     from func_pair_state import get_entry_z_score, get_entry_time
     entry_z = get_entry_z_score()
     entry_time = get_entry_time()

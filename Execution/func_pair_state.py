@@ -25,16 +25,19 @@ Z_HISTORY_MAX_AGE_SECONDS = 14400
 Z_HISTORY_MAX_LEN = 5000
 GRAVEYARD_DEFAULT_DAYS = 7
 GRAVEYARD_REASON_DAYS = {
-    "cointegration_lost": 5 / (24 * 60),
+    "cointegration_lost": 7,  # Changed from 5min to 7 days
     "cointegration_lost_bad_history": 7,
+    "cointegration_lost_unproven": 7,  # Added for consistency
     "orderbook_dead": 30,
-    "compliance_restricted": None,
-    "manual": 3,
-    "health": 5 / (24 * 60),
+    "compliance_restricted": None,  # Permanent (handled by permanent blacklist)
+    "manual": 7,  # Changed from 3 to 7 days
+    "health": 7,  # Changed from 5min to 7 days
     "health_bad_history": 7,
     "settle_ccy_filter": 30,
     "bad_history": 7,
-    "idle_timeout": 3,
+    "idle_timeout": 7,  # Changed from 3 to 7 days
+    "idle_timeout_bad_history": 7,  # Added for consistency
+    "pair_loss_limit": 7,  # New reason from per-pair loss limit
 }
 
 

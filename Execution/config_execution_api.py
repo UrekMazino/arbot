@@ -133,6 +133,29 @@ z_score_window = 21  # Z-score calculation window (21 x 1m candles = ~21 minutes
 limit_order_basis = True  # Place entries with limit orders when True.
 tradeable_capital_usdt = 2000  # Total tradeable capital to split across pairs.
 
+# PERMANENT BLACKLIST - Tickers that should NEVER be traded
+# No cooldown, completely excluded from pair discovery and trading
+PERMANENT_BLACKLIST = {
+    # Compliance restricted (regional or regulatory issues)
+    'BIO-USDT-SWAP': 'Code 51155 - regional restriction',
+
+    # Liquidity failures (dead orderbooks, no bids/asks)
+    'MUBARAK-USDT-SWAP': '0 bids in orderbook, illiquid',
+
+    # Consistently poor performers (multiple failed pairs, large losses)
+    'ZETA-USDT-SWAP': 'Trap token, 5+ failed pairs, -2.22 USDT total',
+    'IMX-USDT-SWAP': '-2.13 USDT single loss, high fees',
+    'MAGIC-USDT-SWAP': '-0.30 USDT across 2 trades, unreliable',
+}
+
+def is_permanently_blacklisted(ticker):
+    """Check if a ticker is permanently blacklisted"""
+    return ticker in PERMANENT_BLACKLIST
+
+def get_blacklist_reason(ticker):
+    """Get the reason why a ticker is blacklisted"""
+    return PERMANENT_BLACKLIST.get(ticker, None)
+
 # SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
 ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
 

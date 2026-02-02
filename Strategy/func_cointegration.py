@@ -407,6 +407,41 @@ def get_cointegrated_pairs(
     else:
         corr_min = corr_min_filter if fast_path_enabled else 0.0
 
+    # Load permanent blacklist
+    permanent_blacklist = set()
+    try:
+        config_path = Path(__file__).resolve().parent.parent / "Execution" / "config_execution_api.py"
+        with open(config_path, 'r') as f:
+            content = f.read()
+            # Extract permanent blacklist tickers
+            if 'PERMANENT_BLACKLIST' in content:
+                import re
+                # Match ticker patterns like 'BIO-USDT-SWAP'
+                blacklist_matches = re.findall(r"'([A-Z0-9]+-USDT-SWAP)':", content)
+                permanent_blacklist = set(blacklist_matches)
+                if permanent_blacklist:
+                    logger.info(f"Loaded {len(permanent_blacklist)} permanently blacklisted tickers: {', '.join(sorted(permanent_blacklist))}")
+    except Exception as e:
+        logger.warning(f"Could not load permanent blacklist: {e}")
+
+    # Load graveyard to exclude failed pairs
+    graveyard_pairs = set()
+    try:
+        execution_state_path = Path(__file__).resolve().parent.parent / "Execution" / "state" / "pair_strategy_state.json"
+        if execution_state_path.exists():
+            with open(execution_state_path, 'r') as f:
+                exec_state = json.load(f)
+                graveyard = exec_state.get("graveyard", {})
+                for pair_key in graveyard.keys():
+                    graveyard_pairs.add(pair_key)
+                    # Also add reverse
+                    parts = pair_key.split('/')
+                    if len(parts) == 2:
+                        graveyard_pairs.add(f"{parts[1]}/{parts[0]}")
+                logger.info(f"Loaded {len(graveyard)} pairs from graveyard (will exclude from discovery)")
+    except Exception as e:
+        logger.warning(f"Could not load graveyard: {e}")
+
     filtered_breakdown = {}
 
     for sym_1, sym_2 in combinations(symbols, 2):
@@ -414,6 +449,17 @@ def get_cointegrated_pairs(
         series_2_log = log_series_by_symbol[sym_2]
 
         total_comparisons += 1
+
+        # Skip permanently blacklisted tickers
+        if sym_1 in permanent_blacklist or sym_2 in permanent_blacklist:
+            filtered_breakdown["permanent_blacklist"] = filtered_breakdown.get("permanent_blacklist", 0) + 1
+            continue
+
+        # Skip graveyard pairs
+        pair_key = f"{sym_1}/{sym_2}"
+        if pair_key in graveyard_pairs:
+            filtered_breakdown["graveyard"] = filtered_breakdown.get("graveyard", 0) + 1
+            continue
 
         if corr_min and corr_min > 0:
             ret_1 = returns_by_symbol.get(sym_1)

@@ -31,7 +31,9 @@ from config_execution_api import (
     td_mode,
     account_session,
     lock_on_pair,
-    allowed_settle_ccy
+    allowed_settle_ccy,
+    is_permanently_blacklisted,
+    get_blacklist_reason
 )
 from func_position_calls import (
     open_position_confirmation, 
@@ -783,6 +785,17 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             sym_2 = row.get("sym_2")
             if not sym_1 or not sym_2:
                 continue
+
+            # Skip permanently blacklisted tickers
+            if is_permanently_blacklisted(sym_1):
+                logger.info("Skipping pair %s/%s - %s is permanently blacklisted: %s",
+                           sym_1, sym_2, sym_1, get_blacklist_reason(sym_1))
+                continue
+            if is_permanently_blacklisted(sym_2):
+                logger.info("Skipping pair %s/%s - %s is permanently blacklisted: %s",
+                           sym_1, sym_2, sym_2, get_blacklist_reason(sym_2))
+                continue
+
             min_equity = _parse_min_equity(row.get("min_equity_recommended"))
             pair_key = normalize_pair_key(sym_1, sym_2)
             pairs.append(
@@ -1834,14 +1847,12 @@ if __name__ == "__main__":
                     post_equity_usdt = None
 
                 if post_equity_usdt is not None:
-                    alert_equity = post_equity_usdt
+                    # Update session PnL only (don't overwrite per-trade alert_pnl)
                     if starting_equity > 0:
                         alert_session_pnl = post_equity_usdt - starting_equity
                         alert_session_pnl_pct = (alert_session_pnl / starting_equity) * 100
-                    if entry_equity is not None:
-                        alert_pnl = post_equity_usdt - entry_equity
-                        if tradeable_capital_usdt > 0:
-                            alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
+                    # Note: alert_pnl and alert_pnl_pct already set correctly above (lines 1793-1801)
+                    # DO NOT recalculate here as entry_equity is from previous trade
 
                 logger.warning(
                     "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%)",

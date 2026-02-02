@@ -535,15 +535,22 @@ def generate_signal(z_history, cointegration_ok, in_position):
     return None, "No signal generated"
 
 
-def check_pair_health(metrics, latest_zscore, silent=False):
+def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=False, trade_pnl_pct=0.0):
     """
     Evaluate pair health based on statistical metrics.
     Returns (should_switch, health_score, recommendation)
+
+    Args:
+        metrics: Dictionary of cointegration metrics
+        latest_zscore: Current Z-score value
+        silent: If True, suppress logging
+        in_active_trade: If True, currently holding a position
+        trade_pnl_pct: Current trade PnL as percentage (e.g., 0.5 for +0.5%)
     """
     health_score = 100
     critical_issues = []
     warnings_list = []
-    
+
     p_val = metrics.get("p_value", 1.0)
     adf_stat = metrics.get("adf_stat", 0.0)
     crit_val = metrics.get("critical_value", -3.4)
@@ -551,54 +558,80 @@ def check_pair_health(metrics, latest_zscore, silent=False):
     correlation = metrics.get("correlation", 0.0)
     spread_trend = metrics.get("spread_trend", 0.0)
     coint_flag = metrics.get("coint_flag", 0)
-    
-    # 1. Statistical Strength (P-value)
-    if p_val >= P_VALUE_CRITICAL:
-        critical_issues.append(f"P-value ({p_val:.4f}) >= {P_VALUE_CRITICAL}")
-        health_score -= 50
+
+    # ADAPTIVE thresholds: Relax during active profitable trades
+    # Rationale: Don't kill winning trades due to temporary statistical drift
+    MIN_PROFIT_FOR_PROTECTION_PCT = 0.10  # Protect trades at +0.1% or better
+
+    if in_active_trade and trade_pnl_pct >= MIN_PROFIT_FOR_PROTECTION_PCT:
+        # Much more lenient thresholds for profitable trades
+        P_VALUE_CRITICAL_ADJUSTED = 0.30  # Allow higher p-value drift
+        health_penalty_modifier = 0.5     # Halve all health penalties
+        protection_active = True
+    elif in_active_trade and trade_pnl_pct >= -0.10:  # Near breakeven
+        # Slightly relaxed for near-breakeven trades
+        P_VALUE_CRITICAL_ADJUSTED = 0.20
+        health_penalty_modifier = 0.75
+        protection_active = True
+    else:
+        # Standard thresholds for losing trades or no position
+        P_VALUE_CRITICAL_ADJUSTED = P_VALUE_CRITICAL  # 0.15
+        health_penalty_modifier = 1.0
+        protection_active = False
+
+    # 1. Statistical Strength (P-value) with adaptive threshold
+    if p_val >= P_VALUE_CRITICAL_ADJUSTED:
+        critical_issues.append(f"P-value ({p_val:.4f}) >= {P_VALUE_CRITICAL_ADJUSTED}")
+        health_score -= int(50 * health_penalty_modifier)
     elif p_val > 0.05:
-        # We still keep a minor penalty for p-values between 0.05 and 0.15
         warnings_list.append(f"P-value ({p_val:.4f}) elevated")
-        health_score -= 15
+        health_score -= int(15 * health_penalty_modifier)
 
     # 2. ADF Ratio
     adf_ratio = abs(adf_stat / crit_val) if crit_val != 0 else 0
     if adf_ratio < 0.8:
         warnings_list.append(f"ADF ratio ({adf_ratio:.2f}) < 0.8")
-        health_score -= 15
-        
+        health_score -= int(15 * health_penalty_modifier)
+
     # 3. Zero Crossings
     if z_cross < ZERO_CROSSINGS_MIN:
         warnings_list.append(f"Low Zero Crossings ({z_cross} < {ZERO_CROSSINGS_MIN})")
-        health_score -= 15
-        
+        health_score -= int(15 * health_penalty_modifier)
+
     # 4. Spread Stationarity
     if abs(spread_trend) > TREND_CRITICAL:
         critical_issues.append(f"Spread Trending ({spread_trend:.4f} > {TREND_CRITICAL})")
-        health_score -= 30
-        
+        health_score -= int(30 * health_penalty_modifier)
+
     # 5. Relationship Integrity
     if abs(latest_zscore) > Z_SCORE_CRITICAL:
         critical_issues.append(f"Extreme Z-score ({abs(latest_zscore):.2f} > {Z_SCORE_CRITICAL})")
-        health_score -= 25
-        
+        health_score -= int(25 * health_penalty_modifier)
+
     # 6. Price Correlation
     if correlation < CORRELATION_MIN:
         warnings_list.append(f"Low Correlation ({correlation:.2f} < {CORRELATION_MIN})")
-        health_score -= 15
+        health_score -= int(15 * health_penalty_modifier)
 
     # 7. Recent Trading Performance
     losses = get_consecutive_losses()
     if losses >= 3:
         warnings_list.append(f"Consecutive Losses ({losses})")
-        health_score -= 20
+        health_score -= int(20 * health_penalty_modifier)
     elif losses > 0:
         warnings_list.append(f"Recent Loss detected ({losses})")
-        health_score -= 5 * losses
+        health_score -= int(5 * losses * health_penalty_modifier)
 
-    # Action determination
-    should_switch = health_score < 40
-    recommendation = "STOP_AND_SWITCH" if should_switch else ("MONITOR_CLOSELY" if health_score < 70 else "PAIR_IS_HEALTHY")
+    # Action determination with profit protection
+    # CRITICAL: Don't force switch if trade is profitable above threshold
+    if in_active_trade and trade_pnl_pct >= MIN_PROFIT_FOR_PROTECTION_PCT:
+        should_switch = False  # Never kill profitable trades
+        recommendation = "HOLDING_PROFITABLE_TRADE"
+        if not silent:
+            logger.info(f"🛡️ Profit protection active: +{trade_pnl_pct:.2f}% - health checks relaxed")
+    else:
+        should_switch = health_score < 40
+        recommendation = "STOP_AND_SWITCH" if should_switch else ("MONITOR_CLOSELY" if health_score < 70 else "PAIR_IS_HEALTHY")
 
     # Store health score for emergency override checks
     from func_pair_state import set_last_health_score
@@ -606,17 +639,20 @@ def check_pair_health(metrics, latest_zscore, silent=False):
 
     if not silent:
         logger.info("━━━ PERIODIC HEALTH CHECK ━━━")
-        logger.info(f"P-value: {p_val:.4f} {'✅' if p_val < P_VALUE_CRITICAL else '❌'}")
+        if protection_active:
+            logger.info(f"Trade Status: {'PROFITABLE' if trade_pnl_pct >= MIN_PROFIT_FOR_PROTECTION_PCT else 'NEAR BREAKEVEN'} ({trade_pnl_pct:+.2f}%)")
+            logger.info(f"Adjusted P-value threshold: {P_VALUE_CRITICAL_ADJUSTED:.2f} (modifier: {health_penalty_modifier:.1f}x)")
+        logger.info(f"P-value: {p_val:.4f} {'✅' if p_val < P_VALUE_CRITICAL_ADJUSTED else '❌'}")
         logger.info(f"Zero crossings: {z_cross} {'✅' if z_cross >= ZERO_CROSSINGS_MIN else '❌'}")
         logger.info(f"Correlation: {correlation:.2f} {'✅' if correlation >= CORRELATION_MIN else '❌'}")
         logger.info(f"Spread Trend: {spread_trend:.4f} {'✅' if abs(spread_trend) <= TREND_CRITICAL else '❌'}")
         logger.info(f"Health score: {health_score}/100 {'✅' if health_score >= 40 else '❌'}")
-        
+
         if critical_issues:
             logger.warning(f"CRITICAL ISSUES: {', '.join(critical_issues)}")
         if warnings_list:
             logger.info(f"Warnings: {', '.join(warnings_list)}")
-            
+
         if should_switch:
             logger.warning(f"❌ Pair health CRITICAL: {recommendation}")
         else:
@@ -1578,13 +1614,40 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     from func_pair_state import add_to_z_history
     add_to_z_history(latest_zscore)
 
-    # 1. Periodic Health Check - ONLY FOR LOGGING, NOT IMMEDIATE EXIT
-    # CRITICAL: Health checks are regime-level diagnostics for pair selection
-    # They are NOT price-based risk controls and should NEVER force immediate exit
+    # 1. Periodic Health Check with Trade PnL Context
+    # Pass current trade PnL to enable adaptive health thresholds
     if health_check_due:
-        should_switch, score, rec = check_pair_health(metrics, latest_zscore, silent=False)
+        # Calculate current trade PnL percentage
+        trade_pnl_pct = 0.0
+        entry_equity = None
+        try:
+            from func_pair_state import get_entry_equity
+            entry_equity = get_entry_equity()
+
+            if entry_equity is not None and entry_equity > 0:
+                balance_res = account_session.get_account_balance()
+                if balance_res.get("code") == "0":
+                    details = balance_res.get("data", [{}])[0].get("details", [])
+                    for det in details:
+                        if det.get("ccy") == "USDT":
+                            current_equity = float(det.get("eq", 0))
+                            trade_pnl = current_equity - entry_equity
+                            trade_pnl_pct = (trade_pnl / entry_equity) * 100
+                            break
+        except Exception as e:
+            logger.debug(f"Could not calculate trade PnL for health check: {e}")
+
+        # Call health check with trade context
+        should_switch, score, rec = check_pair_health(
+            metrics,
+            latest_zscore,
+            silent=False,
+            in_active_trade=True,  # We're always in a trade when monitor_exit is called
+            trade_pnl_pct=trade_pnl_pct
+        )
+
         if should_switch:
-            # Log the health degradation but DO NOT exit position
+            # Log the health degradation but DO NOT force immediate exit
             logger.warning(f"⚠️  Pair health degraded (score={score}) while in position.")
             logger.warning("This pair will be blacklisted after position closes normally.")
             logger.warning("Health checks do NOT force immediate exit - only price-based rules can.")

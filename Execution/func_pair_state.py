@@ -258,6 +258,13 @@ def should_blacklist_pair(
     if require_loss_dominance is None:
         require_loss_dominance = BLACKLIST_REQUIRE_LOSS_DOMINANCE
 
+    # Check consecutive losses first (immediate blacklist)
+    from config_execution_api import MAX_CONSECUTIVE_LOSSES
+    consecutive_losses = get_consecutive_losses()
+    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+        return True  # Blacklist after MAX_CONSECUTIVE_LOSSES consecutive losses
+
+    # Original logic for overall performance
     trades = stats.get("trades", 0) or 0
     if trades < min_trades:
         return False

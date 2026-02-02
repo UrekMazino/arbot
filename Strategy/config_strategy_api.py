@@ -61,8 +61,8 @@ min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
 min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)
-max_p_value_filter = _env_float("STATBOT_STRATEGY_MAX_P_VALUE", 0.02)
-min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 1)
+max_p_value_filter = _env_float("STATBOT_STRATEGY_MAX_P_VALUE", 0.01)  # Tightened from 0.02 - only top 1% statistical strength
+min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 20)  # Increased from 1 - need frequent reversions
 min_hedge_ratio = _env_float("STATBOT_STRATEGY_MIN_HEDGE_RATIO", 0.3)
 max_hedge_ratio = _env_float("STATBOT_STRATEGY_MAX_HEDGE_RATIO", 3.0)
 min_capital_per_leg = _env_float("STATBOT_STRATEGY_MIN_CAPITAL_PER_LEG", 1.0)
@@ -74,7 +74,7 @@ if liquidity_pct < 0:
 if liquidity_pct > 1:
     liquidity_pct = 1.0
 fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
-corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.2 if fast_path_enabled else 0.0)
+corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.60 if fast_path_enabled else 0.0)  # Increased from 0.2 - need strong correlation
 corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)
 
 # API CREDENTIALS from .env

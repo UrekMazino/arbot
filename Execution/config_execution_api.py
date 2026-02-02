@@ -189,8 +189,10 @@ def calculate_fee_adjusted_exit_z(hedge_ratio=1.0, entry_z=2.0, fees_pct=0.0007,
 
 EXIT_Z = 0.35  # Fee-adjusted exit (increased from 0.5 to ensure profitability after 0.14% costs)
                # This ensures ~0.21% profit margin after fees with 1.0 hedge ratio
-MIN_PERSIST_BARS = 3  # Require signal to persist for 3 bars before entering (3 minutes @ 1m)
-                      # Prevents flash trades and confirms conviction in the spread divergence
+MIN_PERSIST_BARS = 4  # Require signal to persist for 4 bars before entering (4 minutes @ 1m)
+                      # Increased from 3 to reduce false entries and improve conviction
+MAX_CONSECUTIVE_LOSSES = 2  # Move pair to graveyard after 2 consecutive losses
+                            # Prevents repeated losses on deteriorating pairs
 
 # PAIR HEALTH & MONITORING (conintegration_pair_switching.txt recommendations)
 HEALTH_CHECK_INTERVAL = 3600  # Check health every 1 hour (3600 seconds)

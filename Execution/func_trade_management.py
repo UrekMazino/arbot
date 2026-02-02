@@ -6,6 +6,7 @@ from config_execution_api import (
     signal_positive_ticker,
     signal_negative_ticker,
     ENTRY_Z,
+    ENTRY_Z_MAX,
     EXIT_Z,
     MIN_PERSIST_BARS,
     tradeable_capital_usdt,
@@ -513,8 +514,9 @@ def generate_signal(z_history, cointegration_ok, in_position):
             recent_zscores = persistence_history[-MIN_PERSIST_BARS:]
 
             # Check if all recent z-scores are in the same extreme zone
-            all_oversold = all(z <= -ENTRY_Z for z in recent_zscores)
-            all_overbought = all(z >= ENTRY_Z for z in recent_zscores)
+            # Also enforce ENTRY_Z_MAX to avoid regime breaks
+            all_oversold = all(z <= -ENTRY_Z and z >= -ENTRY_Z_MAX for z in recent_zscores)
+            all_overbought = all(z >= ENTRY_Z and z <= ENTRY_Z_MAX for z in recent_zscores)
 
             if all_oversold:
                 return "BUY_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at -ENTRY_Z (oversold, bars={MIN_PERSIST_BARS})"

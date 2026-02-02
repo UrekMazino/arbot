@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1769992016.9006395,
+    "last_switch_time": 1770054652.4959776,
     "graveyard": {
         "BIO-USDT-SWAP/CFX-USDT-SWAP": {
             "ts": 1769966267.510994,
@@ -35,6 +35,51 @@
             "ts": 1769987736.446628,
             "reason": "idle_timeout_bad_history",
             "ttl_days": 7
+        },
+        "ETHFI-USDT-SWAP/LDO-USDT-SWAP": {
+            "ts": 1770014706.4342823,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "LDO-USDT-SWAP/YB-USDT-SWAP": {
+            "ts": 1770016689.2787719,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1770019849.1192274,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "SPK-USDT-SWAP/ZIL-USDT-SWAP": {
+            "ts": 1770021123.8254046,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ETHFI-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "ts": 1770022345.382348,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "LDO-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1770025052.06967,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ETHW-USDT-SWAP/YB-USDT-SWAP": {
+            "ts": 1770031035.7118824,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "SKY-USDT-SWAP/SPK-USDT-SWAP": {
+            "ts": 1770035449.5472445,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "FIL-USDT-SWAP/QTUM-USDT-SWAP": {
+            "ts": 1770036948.2898123,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "hospital": {
@@ -51,10 +96,10 @@
             "visits": 3
         },
         "SKY-USDT-SWAP/XLM-USDT-SWAP": {
-            "ts": 1769988040.5408063,
+            "ts": 1769997580.5243552,
             "cooldown": 3600,
-            "reason": "cointegration_lost",
-            "visits": 2
+            "reason": "idle_timeout",
+            "visits": 3
         },
         "CHZ-USDT-SWAP/IOTA-USDT-SWAP": {
             "ts": 1769988354.3812551,
@@ -79,6 +124,78 @@
             "cooldown": 3600,
             "reason": "cointegration_lost_unproven",
             "visits": 1
+        },
+        "SKY-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1770012511.074997,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 3
+        },
+        "ASTER-USDT-SWAP/OP-USDT-SWAP": {
+            "ts": 1770015007.8864722,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 3
+        },
+        "FIL-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1770015446.2301023,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 3
+        },
+        "LQTY-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1770008876.4565325,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "MAJOR-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1770009180.8536496,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "DOT-USDT-SWAP/XRP-USDT-SWAP": {
+            "ts": 1770054349.3408692,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 7
+        },
+        "OP-USDT-SWAP/XPL-USDT-SWAP": {
+            "ts": 1770011931.2690783,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "HBAR-USDT-SWAP/LRC-USDT-SWAP": {
+            "ts": 1770054652.4887414,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 6
+        },
+        "DOGE-USDT-SWAP/YGG-USDT-SWAP": {
+            "ts": 1770051412.150195,
+            "cooldown": 3600,
+            "reason": "idle_timeout",
+            "visits": 4
+        },
+        "ASTER-USDT-SWAP/CRV-USDT-SWAP": {
+            "ts": 1770052868.6959584,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 4
+        },
+        "BAND-USDT-SWAP/GMT-USDT-SWAP": {
+            "ts": 1770051715.5806148,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 2
+        },
+        "ASTER-USDT-SWAP/KAITO-USDT-SWAP": {
+            "ts": 1770052020.1007528,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 2
         }
     },
     "pair_history": {
@@ -161,6 +278,126 @@
             "loss_usdt": 0.17415843000026143,
             "trades": 3,
             "last_trade_ts": 1769990834.1887043
+        },
+        "FIL-USDT-SWAP/SUI-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.3031617000001461,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1770000842.298832
+        },
+        "SKY-USDT-SWAP/YGG-USDT-SWAP": {
+            "wins": 4,
+            "losses": 0,
+            "win_usdt": 63.697734250000394,
+            "loss_usdt": 0.0,
+            "trades": 4,
+            "last_trade_ts": 1770006070.590843
+        },
+        "ETHFI-USDT-SWAP/LDO-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.8573226499997872,
+            "trades": 1,
+            "last_trade_ts": 1770014686.341851
+        },
+        "LDO-USDT-SWAP/YB-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.6064748500002679,
+            "loss_usdt": 5.3969247499999256,
+            "trades": 2,
+            "last_trade_ts": 1770016526.3741548
+        },
+        "ETHW-USDT-SWAP/XTZ-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.05130072584051959,
+            "trades": 2,
+            "last_trade_ts": 1770019846.224568
+        },
+        "SPK-USDT-SWAP/ZIL-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.006943399999727262,
+            "trades": 1,
+            "last_trade_ts": 1770021107.3555646
+        },
+        "ETHFI-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.16377814999987095,
+            "loss_usdt": 0.11760450000019773,
+            "trades": 2,
+            "last_trade_ts": 1770022328.4168315
+        },
+        "LDO-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.5306663500000468,
+            "loss_usdt": 1.54890690000002,
+            "trades": 2,
+            "last_trade_ts": 1770025018.6318884
+        },
+        "DOT-USDT-SWAP/XRP-USDT-SWAP": {
+            "wins": 2,
+            "losses": 1,
+            "win_usdt": 4.66089263000049,
+            "loss_usdt": 1.4717867999997907,
+            "trades": 3,
+            "last_trade_ts": 1770053987.0255618
+        },
+        "ETHW-USDT-SWAP/YB-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.013548699999773817,
+            "trades": 1,
+            "last_trade_ts": 1770030266.2891583
+        },
+        "SKY-USDT-SWAP/SPK-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 37.82169123998983,
+            "trades": 1,
+            "last_trade_ts": 1770033562.1044457
+        },
+        "DOGE-USDT-SWAP/YGG-USDT-SWAP": {
+            "wins": 5,
+            "losses": 0,
+            "win_usdt": 0.6713693499996225,
+            "loss_usdt": 0.0,
+            "trades": 5,
+            "last_trade_ts": 1770050997.5372698
+        },
+        "FIL-USDT-SWAP/QTUM-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.08434909999959928,
+            "trades": 1,
+            "last_trade_ts": 1770036930.8656392
+        },
+        "ASTER-USDT-SWAP/KAITO-USDT-SWAP": {
+            "wins": 2,
+            "losses": 0,
+            "win_usdt": 0.8715653999997812,
+            "loss_usdt": 0.0,
+            "trades": 2,
+            "last_trade_ts": 1770045710.5495348
+        },
+        "ASTER-USDT-SWAP/CRV-USDT-SWAP": {
+            "wins": 2,
+            "losses": 0,
+            "win_usdt": 0.5632273500000338,
+            "loss_usdt": 0.0,
+            "trades": 2,
+            "last_trade_ts": 1770052159.3672562
         }
     },
     "restricted_tickers": {
@@ -170,8 +407,8 @@
             "msg": "You can't trade this pair or borrow this crypto due to local compliance restrictions. "
         }
     },
-    "consecutive_losses": 0,
-    "last_health_score": 20,
+    "consecutive_losses": 1,
+    "last_health_score": 30,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -194,15 +431,369 @@
         "CHZ-USDT-SWAP/IOTA-USDT-SWAP": 0,
         "CRV-USDT-SWAP/XLM-USDT-SWAP": 0,
         "ETHW-USDT-SWAP/YGG-USDT-SWAP": 0,
-        "OP-USDT-SWAP/THETA-USDT-SWAP": 0
+        "OP-USDT-SWAP/THETA-USDT-SWAP": 0,
+        "SKY-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "ETHFI-USDT-SWAP/LDO-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/OP-USDT-SWAP": 0,
+        "FIL-USDT-SWAP/SUI-USDT-SWAP": 0,
+        "LDO-USDT-SWAP/YB-USDT-SWAP": 0,
+        "LQTY-USDT-SWAP/LRC-USDT-SWAP": 0,
+        "MAJOR-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "DOT-USDT-SWAP/XRP-USDT-SWAP": 0,
+        "OP-USDT-SWAP/XPL-USDT-SWAP": 0,
+        "ETHFI-USDT-SWAP/SYRUP-USDT-SWAP": 0,
+        "LDO-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/XTZ-USDT-SWAP": 0,
+        "HBAR-USDT-SWAP/LRC-USDT-SWAP": 0,
+        "SPK-USDT-SWAP/ZIL-USDT-SWAP": 0,
+        "SKY-USDT-SWAP/SPK-USDT-SWAP": 0,
+        "DOGE-USDT-SWAP/YGG-USDT-SWAP": 0,
+        "FIL-USDT-SWAP/QTUM-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/YB-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/CRV-USDT-SWAP": 0,
+        "BAND-USDT-SWAP/GMT-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/KAITO-USDT-SWAP": 0
     },
     "persistence_history": [
-        0.30657541363554475,
-        0.3065587435877446,
-        0.3046132713720128,
-        0.3426117614779196,
-        0.3426117614779196
+        -1.4190528927525976,
+        -1.751751493545154,
+        -1.7519808534656145,
+        -1.377915805613196,
+        -1.5348642089609819
     ],
-    "last_exit_time": 1769990837.3477094,
-    "z_history": []
+    "last_exit_time": 1770053990.8538852,
+    "z_history": [
+        {
+            "ts": 1770054000.1442065,
+            "z": 1.6362067045857587
+        },
+        {
+            "ts": 1770054004.2524366,
+            "z": 1.4562359680733532
+        },
+        {
+            "ts": 1770054008.351966,
+            "z": 1.1513088317945288
+        },
+        {
+            "ts": 1770054012.4489388,
+            "z": 0.6878517760812742
+        },
+        {
+            "ts": 1770054016.546064,
+            "z": 1.7319679899067737
+        },
+        {
+            "ts": 1770054020.6451557,
+            "z": 1.7224642107634378
+        },
+        {
+            "ts": 1770054025.1960628,
+            "z": 1.6531061144157086
+        },
+        {
+            "ts": 1770054029.2966413,
+            "z": 1.3836994314149256
+        },
+        {
+            "ts": 1770054033.4986663,
+            "z": 1.320948283977928
+        },
+        {
+            "ts": 1770054037.5922647,
+            "z": 0.9633619336393023
+        },
+        {
+            "ts": 1770054041.6983685,
+            "z": 1.3722064171352626
+        },
+        {
+            "ts": 1770054045.8001318,
+            "z": 1.3722993164513746
+        },
+        {
+            "ts": 1770054049.8962588,
+            "z": 1.3753952189035954
+        },
+        {
+            "ts": 1770054054.0074034,
+            "z": 1.669048502470797
+        },
+        {
+            "ts": 1770054058.4064133,
+            "z": 1.6668228416342565
+        },
+        {
+            "ts": 1770054062.5166216,
+            "z": 1.8466290116672117
+        },
+        {
+            "ts": 1770054066.6008277,
+            "z": 1.8466290116672117
+        },
+        {
+            "ts": 1770054070.9523387,
+            "z": 1.8466290116672117
+        },
+        {
+            "ts": 1770054075.0430818,
+            "z": 1.8466290116672117
+        },
+        {
+            "ts": 1770054079.1498344,
+            "z": 1.8247637497203442
+        },
+        {
+            "ts": 1770054083.2396724,
+            "z": 1.825039367961365
+        },
+        {
+            "ts": 1770054087.335519,
+            "z": 1.8149980548168692
+        },
+        {
+            "ts": 1770054091.4372,
+            "z": 1.8491345483969805
+        },
+        {
+            "ts": 1770054095.5454268,
+            "z": 1.8488652212121912
+        },
+        {
+            "ts": 1770054100.114891,
+            "z": 1.6597663968113245
+        },
+        {
+            "ts": 1770054104.296751,
+            "z": 1.8401647260362213
+        },
+        {
+            "ts": 1770054108.3906684,
+            "z": 1.542604803221946
+        },
+        {
+            "ts": 1770054112.5005162,
+            "z": 1.5655046195119633
+        },
+        {
+            "ts": 1770054116.5934541,
+            "z": 1.858860514976148
+        },
+        {
+            "ts": 1770054120.7023723,
+            "z": 2.0024956979875626
+        },
+        {
+            "ts": 1770054124.7959955,
+            "z": 1.8487028988943277
+        },
+        {
+            "ts": 1770054128.9103973,
+            "z": 1.839494612138484
+        },
+        {
+            "ts": 1770054133.046733,
+            "z": 1.5275087662997102
+        },
+        {
+            "ts": 1770054137.1405056,
+            "z": 1.9987606323637477
+        },
+        {
+            "ts": 1770054141.2484362,
+            "z": 2.0311623133298826
+        },
+        {
+            "ts": 1770054145.5955212,
+            "z": 2.0022066465856376
+        },
+        {
+            "ts": 1770054149.6862335,
+            "z": 1.6521621375721556
+        },
+        {
+            "ts": 1770054153.7988105,
+            "z": 1.579916367756733
+        },
+        {
+            "ts": 1770054157.9439523,
+            "z": 1.2470413757900445
+        },
+        {
+            "ts": 1770054162.0468135,
+            "z": 1.701704264804304
+        },
+        {
+            "ts": 1770054166.1571636,
+            "z": 2.0304227021622605
+        },
+        {
+            "ts": 1770054170.2332919,
+            "z": 2.032270916902269
+        },
+        {
+            "ts": 1770054174.3427548,
+            "z": 1.6582534927431454
+        },
+        {
+            "ts": 1770054178.6031508,
+            "z": 1.660599152583455
+        },
+        {
+            "ts": 1770054182.7499354,
+            "z": 1.8778380205087386
+        },
+        {
+            "ts": 1770054186.851611,
+            "z": 2.1377357028083264
+        },
+        {
+            "ts": 1770054191.097073,
+            "z": 2.1724799675968196
+        },
+        {
+            "ts": 1770054195.204614,
+            "z": 2.1722601089193305
+        },
+        {
+            "ts": 1770054199.342923,
+            "z": 2.06135092967774
+        },
+        {
+            "ts": 1770054203.4994998,
+            "z": 1.7472291235384747
+        },
+        {
+            "ts": 1770054207.5927732,
+            "z": 1.3563340052745054
+        },
+        {
+            "ts": 1770054211.687841,
+            "z": 1.7357410898124737
+        },
+        {
+            "ts": 1770054215.7958267,
+            "z": 1.712491280479103
+        },
+        {
+            "ts": 1770054220.1061795,
+            "z": 1.700872516756446
+        },
+        {
+            "ts": 1770054224.3075597,
+            "z": 1.2545728631495892
+        },
+        {
+            "ts": 1770054228.3906171,
+            "z": 0.8394153856417095
+        },
+        {
+            "ts": 1770054232.4922266,
+            "z": 0.402902154978874
+        },
+        {
+            "ts": 1770054236.598664,
+            "z": 1.5574281498642133
+        },
+        {
+            "ts": 1770054240.6863704,
+            "z": 1.7952926139734777
+        },
+        {
+            "ts": 1770054244.7928283,
+            "z": 2.2003404695818065
+        },
+        {
+            "ts": 1770054248.8928883,
+            "z": 2.189171351335935
+        },
+        {
+            "ts": 1770054252.9983544,
+            "z": 2.1675017738867677
+        },
+        {
+            "ts": 1770054257.0946891,
+            "z": 2.1673147192926057
+        },
+        {
+            "ts": 1770054261.1877236,
+            "z": 1.353063905067026
+        },
+        {
+            "ts": 1770054265.696445,
+            "z": 1.353063905067026
+        },
+        {
+            "ts": 1770054269.7812436,
+            "z": 2.0567653879397434
+        },
+        {
+            "ts": 1770054274.044513,
+            "z": 1.9900925944184698
+        },
+        {
+            "ts": 1770054278.141379,
+            "z": 1.954353987853651
+        },
+        {
+            "ts": 1770054282.2458923,
+            "z": 1.9508015049057164
+        },
+        {
+            "ts": 1770054286.349851,
+            "z": 1.0800185107045925
+        },
+        {
+            "ts": 1770054290.5012953,
+            "z": 1.1644524338386533
+        },
+        {
+            "ts": 1770054294.6528187,
+            "z": 1.8657853151071515
+        },
+        {
+            "ts": 1770054299.044026,
+            "z": 1.89701965058629
+        },
+        {
+            "ts": 1770054303.1423585,
+            "z": 1.975051779252071
+        },
+        {
+            "ts": 1770054307.2484236,
+            "z": 2.004008286879524
+        },
+        {
+            "ts": 1770054311.3432164,
+            "z": 1.0457771467474288
+        },
+        {
+            "ts": 1770054315.443312,
+            "z": 1.0457771467474288
+        },
+        {
+            "ts": 1770054319.546703,
+            "z": 1.9952047425710262
+        },
+        {
+            "ts": 1770054323.6423807,
+            "z": 1.585654775218889
+        },
+        {
+            "ts": 1770054327.7461445,
+            "z": 0.5494766456763255
+        },
+        {
+            "ts": 1770054331.846785,
+            "z": 0.5716703134380905
+        },
+        {
+            "ts": 1770054335.9992836,
+            "z": 1.447619647161057
+        },
+        {
+            "ts": 1770054340.3343732,
+            "z": 1.439489867357337
+        }
+    ]
 }

@@ -146,6 +146,10 @@ PERMANENT_BLACKLIST = {
     'ZETA-USDT-SWAP': 'Trap token, 5+ failed pairs, -2.22 USDT total',
     'IMX-USDT-SWAP': '-2.13 USDT single loss, high fees',
     'MAGIC-USDT-SWAP': '-0.30 USDT across 2 trades, unreliable',
+
+    # Regime break catastrophic losses
+    'SPK-USDT-SWAP': 'Regime break -37.82 USDT loss, Z whipsaw -3.83 to +4.18',
+    'XPL-USDT-SWAP': 'Multiple failures in previous runs, unreliable cointegration',
 }
 
 def is_permanently_blacklisted(ticker):
@@ -158,6 +162,7 @@ def get_blacklist_reason(ticker):
 
 # SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
 ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
+ENTRY_Z_MAX = 3.0  # Maximum threshold - don't enter if too extreme (regime break)
 
 # Fee-adjusted exit calculation
 # OKX fees: taker ~0.05%, slippage ~0.02% = 0.07% round-trip per leg

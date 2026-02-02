@@ -14,6 +14,7 @@ from config_strategy_api import (
     fast_path_enabled,
     corr_min_filter,
     corr_lookback,
+    market_session,
 )
 from pathlib import Path
 import json
@@ -482,6 +483,59 @@ def get_cointegrated_pairs(
         if coint_flag == 1:
             if zero_crossings > 0:
                 pairs_with_crossings += 1
+
+            # Orderbook depth check - ensure sufficient USDT liquidity
+            MIN_ORDERBOOK_DEPTH_USDT = 5000.0  # Minimum liquidity in USDT per side
+            MIN_ORDERBOOK_LEVELS = 10  # Minimum price levels (secondary check)
+            orderbook_check_passed = True
+
+            for ticker in [sym_1, sym_2]:
+                try:
+                    orderbook_res = market_session.get_orderbook(instId=ticker, sz=50)
+                    if orderbook_res.get("code") == "0":
+                        data = orderbook_res.get("data", [])
+                        if data:
+                            bids = data[0].get("bids", [])
+                            asks = data[0].get("asks", [])
+
+                            # Check minimum levels first (quick sanity check)
+                            if len(bids) < MIN_ORDERBOOK_LEVELS or len(asks) < MIN_ORDERBOOK_LEVELS:
+                                logger.info(f"Skipping thin orderbook: {ticker} (bids={len(bids)}, asks={len(asks)} levels)")
+                                filtered_breakdown["orderbook_levels"] = filtered_breakdown.get("orderbook_levels", 0) + 1
+                                orderbook_check_passed = False
+                                break
+
+                            # Calculate actual USDT depth (price × quantity)
+                            try:
+                                bid_depth_usdt = sum(float(bid[0]) * float(bid[1]) for bid in bids)
+                                ask_depth_usdt = sum(float(ask[0]) * float(ask[1]) for ask in asks)
+
+                                if bid_depth_usdt < MIN_ORDERBOOK_DEPTH_USDT or ask_depth_usdt < MIN_ORDERBOOK_DEPTH_USDT:
+                                    logger.info(f"Skipping low liquidity: {ticker} (bid_depth={bid_depth_usdt:.0f} USDT, ask_depth={ask_depth_usdt:.0f} USDT, min={MIN_ORDERBOOK_DEPTH_USDT:.0f} USDT)")
+                                    filtered_breakdown["orderbook_depth"] = filtered_breakdown.get("orderbook_depth", 0) + 1
+                                    orderbook_check_passed = False
+                                    break
+
+                                logger.debug(f"{ticker} liquidity OK: bids={bid_depth_usdt:.0f} USDT, asks={ask_depth_usdt:.0f} USDT")
+
+                            except (ValueError, TypeError, IndexError) as e:
+                                logger.warning(f"Error calculating orderbook depth for {ticker}: {e}")
+                                filtered_breakdown["orderbook_calc_error"] = filtered_breakdown.get("orderbook_calc_error", 0) + 1
+                                orderbook_check_passed = False
+                                break
+                    else:
+                        logger.warning(f"Failed to fetch orderbook for {ticker}: {orderbook_res.get('msg')}")
+                        filtered_breakdown["orderbook_fetch_error"] = filtered_breakdown.get("orderbook_fetch_error", 0) + 1
+                        orderbook_check_passed = False
+                        break
+                except Exception as e:
+                    logger.warning(f"Error checking orderbook depth for {ticker}: {e}")
+                    filtered_breakdown["orderbook_fetch_error"] = filtered_breakdown.get("orderbook_fetch_error", 0) + 1
+                    orderbook_check_passed = False
+                    break
+
+            if not orderbook_check_passed:
+                continue  # Skip this pair
 
             min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
             min_cap_2 = symbol_meta.get(sym_2, {}).get("min_capital", 0.0) or 0.0

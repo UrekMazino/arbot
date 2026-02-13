@@ -1,5 +1,5 @@
 {
-    "last_switch_time": 1770054652.4959776,
+    "last_switch_time": 1770394631.7165005,
     "graveyard": {
         "BIO-USDT-SWAP/CFX-USDT-SWAP": {
             "ts": 1769966267.510994,
@@ -80,32 +80,134 @@
             "ts": 1770036948.2898123,
             "reason": "cointegration_lost_bad_history",
             "ttl_days": 7
+        },
+        "BAND-USDT-SWAP/CRO-USDT-SWAP": {
+            "ts": 1770080727.7001016,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "SUSHI-USDT-SWAP/XLM-USDT-SWAP": {
+            "ts": 1770090644.0980027,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "XRP-USDT-SWAP/LPT-USDT-SWAP": {
+            "ts": 1770095818.3374789,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ENA-USDT-SWAP/GMT-USDT-SWAP": {
+            "ts": 1770098207.0464938,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "IOTA-USDT-SWAP/MINA-USDT-SWAP": {
+            "ts": 1770104185.4386005,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "ALGO-USDT-SWAP/IOTA-USDT-SWAP": {
+            "ts": 1770108142.5017226,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "LPT-USDT-SWAP/NEO-USDT-SWAP": {
+            "ts": 1770111753.80294,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "AVAX-USDT-SWAP/ETC-USDT-SWAP": {
+            "ts": 1770167528.3700647,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "RAVE-USDT-SWAP/SENT-USDT-SWAP": {
+            "ts": 1770169768.6131346,
+            "reason": "zero_liquidity_dead_orderbook",
+            "ttl_days": null
+        },
+        "MET-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1770182450.0369346,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ASTER-USDT-SWAP/OP-USDT-SWAP": {
+            "ts": 1770201799.9647593,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "OP-USDT-SWAP/YB-USDT-SWAP": {
+            "ts": 1770204155.6306348,
+            "reason": "orderbook_dead",
+            "ttl_days": 30
+        },
+        "SKY-USDT-SWAP/YB-USDT-SWAP": {
+            "ts": 1770206428.5582495,
+            "reason": "orderbook_dead",
+            "ttl_days": 30
+        },
+        "SKY-USDT-SWAP/THETA-USDT-SWAP": {
+            "ts": 1770210426.5350065,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "FIL-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1770231325.7884045,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "ETHFI-USDT-SWAP/KAITO-USDT-SWAP": {
+            "ts": 1770237566.6754441,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "ASTER-USDT-SWAP/ETHW-USDT-SWAP": {
+            "ts": 1770248228.8241837,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "ts": 1770269897.8132493,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "1INCH-USDT-SWAP/ENA-USDT-SWAP": {
+            "ts": 1770272974.5408363,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "1INCH-USDT-SWAP/ALGO-USDT-SWAP": {
+            "ts": 1770304375.4230678,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
+        },
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
+            "ts": 1770306083.0445716,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "QTUM-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1770312748.1908362,
+            "reason": "idle_timeout_bad_history",
+            "ttl_days": 7
+        },
+        "CHZ-USDT-SWAP/IOTA-USDT-SWAP": {
+            "ts": 1770390031.4060411,
+            "reason": "bad_history",
+            "ttl_days": 7
+        },
+        "TON-USDT-SWAP/LIT-USDT-SWAP": {
+            "ts": 1770394235.3333898,
+            "reason": "cointegration_lost_bad_history",
+            "ttl_days": 7
         }
     },
     "hospital": {
-        "CELO-USDT-SWAP/ZETA-USDT-SWAP": {
-            "ts": 1769967051.3572068,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
-        "ENA-USDT-SWAP/GMT-USDT-SWAP": {
-            "ts": 1769991163.9386399,
-            "cooldown": 3600,
-            "reason": "cointegration_lost",
-            "visits": 3
-        },
         "SKY-USDT-SWAP/XLM-USDT-SWAP": {
             "ts": 1769997580.5243552,
             "cooldown": 3600,
             "reason": "idle_timeout",
             "visits": 3
-        },
-        "CHZ-USDT-SWAP/IOTA-USDT-SWAP": {
-            "ts": 1769988354.3812551,
-            "cooldown": 3600,
-            "reason": "cointegration_lost",
-            "visits": 1
         },
         "CRV-USDT-SWAP/XLM-USDT-SWAP": {
             "ts": 1769990863.0947766,
@@ -113,17 +215,11 @@
             "reason": "cointegration_lost",
             "visits": 1
         },
-        "ETHW-USDT-SWAP/YGG-USDT-SWAP": {
-            "ts": 1769991465.3909655,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
         "OP-USDT-SWAP/THETA-USDT-SWAP": {
-            "ts": 1769992016.8946397,
+            "ts": 1770209138.2370727,
             "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
+            "reason": "idle_timeout",
+            "visits": 4
         },
         "SKY-USDT-SWAP/YGG-USDT-SWAP": {
             "ts": 1770012511.074997,
@@ -131,47 +227,11 @@
             "reason": "cointegration_lost",
             "visits": 3
         },
-        "ASTER-USDT-SWAP/OP-USDT-SWAP": {
-            "ts": 1770015007.8864722,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 3
-        },
-        "FIL-USDT-SWAP/SUI-USDT-SWAP": {
-            "ts": 1770015446.2301023,
-            "cooldown": 3600,
-            "reason": "cointegration_lost",
-            "visits": 3
-        },
-        "LQTY-USDT-SWAP/LRC-USDT-SWAP": {
-            "ts": 1770008876.4565325,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
-        "MAJOR-USDT-SWAP/YGG-USDT-SWAP": {
-            "ts": 1770009180.8536496,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
         "DOT-USDT-SWAP/XRP-USDT-SWAP": {
             "ts": 1770054349.3408692,
             "cooldown": 3600,
             "reason": "cointegration_lost",
             "visits": 7
-        },
-        "OP-USDT-SWAP/XPL-USDT-SWAP": {
-            "ts": 1770011931.2690783,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
-        "HBAR-USDT-SWAP/LRC-USDT-SWAP": {
-            "ts": 1770054652.4887414,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 6
         },
         "DOGE-USDT-SWAP/YGG-USDT-SWAP": {
             "ts": 1770051412.150195,
@@ -185,17 +245,107 @@
             "reason": "cointegration_lost",
             "visits": 4
         },
-        "BAND-USDT-SWAP/GMT-USDT-SWAP": {
-            "ts": 1770051715.5806148,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 2
-        },
         "ASTER-USDT-SWAP/KAITO-USDT-SWAP": {
-            "ts": 1770052020.1007528,
+            "ts": 1770322381.473928,
+            "cooldown": 3600,
+            "reason": "idle_timeout",
+            "visits": 13
+        },
+        "BNB-USDT-SWAP/ETH-USDT-SWAP": {
+            "ts": 1770138932.0467665,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 9
+        },
+        "ASTER-USDT-SWAP/AXS-USDT-SWAP": {
+            "ts": 1770139336.0984404,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 5
+        },
+        "OP-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1770210728.2155843,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 7
+        },
+        "AXS-USDT-SWAP/NEO-USDT-SWAP": {
+            "ts": 1770177685.795925,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 1
+        },
+        "SUI-USDT-SWAP/TON-USDT-SWAP": {
+            "ts": 1770221032.9296842,
+            "cooldown": 3600,
+            "reason": "idle_timeout",
+            "visits": 1
+        },
+        "ASTER-USDT-SWAP/LDO-USDT-SWAP": {
+            "ts": 1770233987.3767009,
             "cooldown": 3600,
             "reason": "cointegration_lost",
             "visits": 2
+        },
+        "ASTER-USDT-SWAP/ETHFI-USDT-SWAP": {
+            "ts": 1770308153.976472,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 8
+        },
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1770303470.0774086,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 6
+        },
+        "ASTER-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1770390841.0360894,
+            "cooldown": 3600,
+            "reason": "cointegration_lost",
+            "visits": 2
+        },
+        "ASTER-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1770319675.8548014,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "KSM-USDT-SWAP/LINK-USDT-SWAP": {
+            "ts": 1770386478.8160284,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "DOT-USDT-SWAP/LIT-USDT-SWAP": {
+            "ts": 1770391224.9570577,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "ETHW-USDT-SWAP/KAITO-USDT-SWAP": {
+            "ts": 1770391601.6925342,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "ETHW-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "ts": 1770392173.4407265,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
+            "ts": 1770392474.5863254,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
+        },
+        "ETHFI-USDT-SWAP/XTZ-USDT-SWAP": {
+            "ts": 1770394631.7165005,
+            "cooldown": 3600,
+            "reason": "cointegration_lost_unproven",
+            "visits": 1
         }
     },
     "pair_history": {
@@ -223,21 +373,13 @@
             "trades": 1,
             "last_trade_ts": 1769974650.4345407
         },
-        "CFX-USDT-SWAP/CHZ-USDT-SWAP": {
-            "wins": 0,
-            "losses": 2,
-            "win_usdt": 0.0,
-            "loss_usdt": 0.09797111499938183,
-            "trades": 2,
-            "last_trade_ts": 1769977861.1564944
-        },
         "ENA-USDT-SWAP/GMT-USDT-SWAP": {
             "wins": 1,
-            "losses": 0,
+            "losses": 1,
             "win_usdt": 1.4046996299935017,
-            "loss_usdt": 0.0,
-            "trades": 1,
-            "last_trade_ts": 1769978680.5747159
+            "loss_usdt": 2.288485415001105,
+            "trades": 2,
+            "last_trade_ts": 1770097644.879599
         },
         "SKY-USDT-SWAP/XLM-USDT-SWAP": {
             "wins": 1,
@@ -265,11 +407,11 @@
         },
         "CHZ-USDT-SWAP/IOTA-USDT-SWAP": {
             "wins": 1,
-            "losses": 0,
+            "losses": 2,
             "win_usdt": 0.3635907499997302,
-            "loss_usdt": 0.0,
-            "trades": 1,
-            "last_trade_ts": 1769988323.7703571
+            "loss_usdt": 4.371488600000154,
+            "trades": 3,
+            "last_trade_ts": 1770390026.9886534
         },
         "CRV-USDT-SWAP/XLM-USDT-SWAP": {
             "wins": 2,
@@ -280,12 +422,12 @@
             "last_trade_ts": 1769990834.1887043
         },
         "FIL-USDT-SWAP/SUI-USDT-SWAP": {
-            "wins": 1,
-            "losses": 0,
-            "win_usdt": 0.3031617000001461,
-            "loss_usdt": 0.0,
-            "trades": 1,
-            "last_trade_ts": 1770000842.298832
+            "wins": 2,
+            "losses": 2,
+            "win_usdt": 0.9908238800003346,
+            "loss_usdt": 5.743331285000295,
+            "trades": 4,
+            "last_trade_ts": 1770229687.1720507
         },
         "SKY-USDT-SWAP/YGG-USDT-SWAP": {
             "wins": 4,
@@ -384,12 +526,12 @@
             "last_trade_ts": 1770036930.8656392
         },
         "ASTER-USDT-SWAP/KAITO-USDT-SWAP": {
-            "wins": 2,
-            "losses": 0,
-            "win_usdt": 0.8715653999997812,
-            "loss_usdt": 0.0,
-            "trades": 2,
-            "last_trade_ts": 1770045710.5495348
+            "wins": 9,
+            "losses": 3,
+            "win_usdt": 2.001819699999487,
+            "loss_usdt": 1.1937061000003268,
+            "trades": 12,
+            "last_trade_ts": 1770314623.5000362
         },
         "ASTER-USDT-SWAP/CRV-USDT-SWAP": {
             "wins": 2,
@@ -398,6 +540,230 @@
             "loss_usdt": 0.0,
             "trades": 2,
             "last_trade_ts": 1770052159.3672562
+        },
+        "BAND-USDT-SWAP/CRO-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 2.1211646000001565,
+            "trades": 1,
+            "last_trade_ts": 1770080724.7961714
+        },
+        "SUSHI-USDT-SWAP/XLM-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 8.912469399999736,
+            "trades": 2,
+            "last_trade_ts": 1770090640.1559908
+        },
+        "IOTA-USDT-SWAP/MINA-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.15510993999942002,
+            "loss_usdt": 0.10741757499999949,
+            "trades": 2,
+            "last_trade_ts": 1770104167.3357313
+        },
+        "ALGO-USDT-SWAP/IOTA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.12114619999965726,
+            "trades": 1,
+            "last_trade_ts": 1770107131.0717552
+        },
+        "LPT-USDT-SWAP/NEO-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.04950799999960509,
+            "loss_usdt": 0.05679705000011381,
+            "trades": 2,
+            "last_trade_ts": 1770110841.250782
+        },
+        "BNB-USDT-SWAP/ETH-USDT-SWAP": {
+            "wins": 4,
+            "losses": 0,
+            "win_usdt": 35.152742675000354,
+            "loss_usdt": 0.0,
+            "trades": 4,
+            "last_trade_ts": 1770129338.35262
+        },
+        "ASTER-USDT-SWAP/AXS-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.9985076500001924,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1770124434.1946158
+        },
+        "AVAX-USDT-SWAP/ETC-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.009445050000067567,
+            "trades": 1,
+            "last_trade_ts": 1770167016.683619
+        },
+        "OP-USDT-SWAP/XTZ-USDT-SWAP": {
+            "wins": 2,
+            "losses": 0,
+            "win_usdt": 0.5638673999997081,
+            "loss_usdt": 0.0,
+            "trades": 2,
+            "last_trade_ts": 1770204403.216699
+        },
+        "AXS-USDT-SWAP/NEO-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.0331459049998557,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1770177668.5079277
+        },
+        "MET-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.28248695000002044,
+            "trades": 1,
+            "last_trade_ts": 1770181706.662824
+        },
+        "ASTER-USDT-SWAP/OP-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 0.22776650000014342,
+            "loss_usdt": 0.15471713499982798,
+            "trades": 2,
+            "last_trade_ts": 1770201778.6360123
+        },
+        "OP-USDT-SWAP/YB-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.7943232999996326,
+            "trades": 1,
+            "last_trade_ts": 1770202239.6264932
+        },
+        "OP-USDT-SWAP/THETA-USDT-SWAP": {
+            "wins": 2,
+            "losses": 1,
+            "win_usdt": 1.4155617000001257,
+            "loss_usdt": 0.7406194500003949,
+            "trades": 3,
+            "last_trade_ts": 1770208547.7601724
+        },
+        "SKY-USDT-SWAP/THETA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 21.454482000000098,
+            "trades": 1,
+            "last_trade_ts": 1770209870.6938827
+        },
+        "SUI-USDT-SWAP/TON-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.294534085000123,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1770219437.861171
+        },
+        "ASTER-USDT-SWAP/LDO-USDT-SWAP": {
+            "wins": 3,
+            "losses": 1,
+            "win_usdt": 1.6005012999999053,
+            "loss_usdt": 0.05681009999989328,
+            "trades": 4,
+            "last_trade_ts": 1770228556.5864346
+        },
+        "ETHFI-USDT-SWAP/KAITO-USDT-SWAP": {
+            "wins": 1,
+            "losses": 2,
+            "win_usdt": 0.3680042500000127,
+            "loss_usdt": 0.7544035499990969,
+            "trades": 3,
+            "last_trade_ts": 1770237563.325553
+        },
+        "ASTER-USDT-SWAP/ETHW-USDT-SWAP": {
+            "wins": 3,
+            "losses": 2,
+            "win_usdt": 0.2583217349992992,
+            "loss_usdt": 0.03048108500024682,
+            "trades": 5,
+            "last_trade_ts": 1770248225.2491143
+        },
+        "ASTER-USDT-SWAP/ETHFI-USDT-SWAP": {
+            "wins": 5,
+            "losses": 0,
+            "win_usdt": 2.1085966000000553,
+            "loss_usdt": 0.0,
+            "trades": 5,
+            "last_trade_ts": 1770296664.6202295
+        },
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": {
+            "wins": 7,
+            "losses": 2,
+            "win_usdt": 0.49446655000019746,
+            "loss_usdt": 0.10308424999993804,
+            "trades": 9,
+            "last_trade_ts": 1770303452.8543358
+        },
+        "QTUM-USDT-SWAP/SUI-USDT-SWAP": {
+            "wins": 1,
+            "losses": 1,
+            "win_usdt": 2.2615273449996494,
+            "loss_usdt": 25.52502444000038,
+            "trades": 2,
+            "last_trade_ts": 1770312735.1382923
+        },
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.623856749999959,
+            "trades": 1,
+            "last_trade_ts": 1770269894.319318
+        },
+        "1INCH-USDT-SWAP/ENA-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.8743030362497848,
+            "trades": 1,
+            "last_trade_ts": 1770272961.1295369
+        },
+        "1INCH-USDT-SWAP/ALGO-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.023260299999947165,
+            "trades": 1,
+            "last_trade_ts": 1770304358.7061796
+        },
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
+            "wins": 0,
+            "losses": 2,
+            "win_usdt": 0.0,
+            "loss_usdt": 2.705147449999913,
+            "trades": 2,
+            "last_trade_ts": 1770306078.3337324
+        },
+        "ASTER-USDT-SWAP/XTZ-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 0.9694259000002603,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1770315942.058079
+        },
+        "LIT-USDT-SWAP/TON-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 2.3782404000003226,
+            "trades": 1,
+            "last_trade_ts": 1770394214.668773
         }
     },
     "restricted_tickers": {
@@ -407,8 +773,8 @@
             "msg": "You can't trade this pair or borrow this crypto due to local compliance restrictions. "
         }
     },
-    "consecutive_losses": 1,
-    "last_health_score": 30,
+    "consecutive_losses": 0,
+    "last_health_score": 85,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
@@ -419,381 +785,74 @@
     "stall_warning_marks": [],
     "health_failures": {
         "BIO-USDT-SWAP/CFX-USDT-SWAP": 0,
-        "CELO-USDT-SWAP/ZETA-USDT-SWAP": 0,
         "ETHW-USDT-SWAP/SYRUP-USDT-SWAP": 0,
         "ICP-USDT-SWAP/INJ-USDT-SWAP": 0,
         "SKY-USDT-SWAP/XPL-USDT-SWAP": 0,
         "CRV-USDT-SWAP/XPL-USDT-SWAP": 0,
-        "CFX-USDT-SWAP/CHZ-USDT-SWAP": 0,
         "ENA-USDT-SWAP/GMT-USDT-SWAP": 0,
         "SKY-USDT-SWAP/XLM-USDT-SWAP": 0,
         "ADA-USDT-SWAP/ENA-USDT-SWAP": 0,
         "CHZ-USDT-SWAP/IOTA-USDT-SWAP": 0,
         "CRV-USDT-SWAP/XLM-USDT-SWAP": 0,
-        "ETHW-USDT-SWAP/YGG-USDT-SWAP": 0,
         "OP-USDT-SWAP/THETA-USDT-SWAP": 0,
         "SKY-USDT-SWAP/YGG-USDT-SWAP": 0,
         "ETHFI-USDT-SWAP/LDO-USDT-SWAP": 0,
         "ASTER-USDT-SWAP/OP-USDT-SWAP": 0,
         "FIL-USDT-SWAP/SUI-USDT-SWAP": 0,
         "LDO-USDT-SWAP/YB-USDT-SWAP": 0,
-        "LQTY-USDT-SWAP/LRC-USDT-SWAP": 0,
-        "MAJOR-USDT-SWAP/YGG-USDT-SWAP": 0,
         "DOT-USDT-SWAP/XRP-USDT-SWAP": 0,
-        "OP-USDT-SWAP/XPL-USDT-SWAP": 0,
         "ETHFI-USDT-SWAP/SYRUP-USDT-SWAP": 0,
         "LDO-USDT-SWAP/SUSHI-USDT-SWAP": 0,
         "ETHW-USDT-SWAP/XTZ-USDT-SWAP": 0,
-        "HBAR-USDT-SWAP/LRC-USDT-SWAP": 0,
         "SPK-USDT-SWAP/ZIL-USDT-SWAP": 0,
         "SKY-USDT-SWAP/SPK-USDT-SWAP": 0,
         "DOGE-USDT-SWAP/YGG-USDT-SWAP": 0,
         "FIL-USDT-SWAP/QTUM-USDT-SWAP": 0,
         "ETHW-USDT-SWAP/YB-USDT-SWAP": 0,
         "ASTER-USDT-SWAP/CRV-USDT-SWAP": 0,
-        "BAND-USDT-SWAP/GMT-USDT-SWAP": 0,
-        "ASTER-USDT-SWAP/KAITO-USDT-SWAP": 0
+        "ASTER-USDT-SWAP/KAITO-USDT-SWAP": 0,
+        "ALGO-USDT-SWAP/IOTA-USDT-SWAP": 0,
+        "BAND-USDT-SWAP/CRO-USDT-SWAP": 0,
+        "IOTA-USDT-SWAP/MINA-USDT-SWAP": 0,
+        "SUSHI-USDT-SWAP/XLM-USDT-SWAP": 0,
+        "BNB-USDT-SWAP/ETH-USDT-SWAP": 0,
+        "LPT-USDT-SWAP/NEO-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/AXS-USDT-SWAP": 0,
+        "MET-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "AVAX-USDT-SWAP/ETC-USDT-SWAP": 0,
+        "RAVE-USDT-SWAP/SENT-USDT-SWAP": 0,
+        "OP-USDT-SWAP/XTZ-USDT-SWAP": 0,
+        "AXS-USDT-SWAP/NEO-USDT-SWAP": 0,
+        "SKY-USDT-SWAP/THETA-USDT-SWAP": 0,
+        "OP-USDT-SWAP/YB-USDT-SWAP": 0,
+        "SKY-USDT-SWAP/YB-USDT-SWAP": 0,
+        "SUI-USDT-SWAP/TON-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/LDO-USDT-SWAP": 0,
+        "ETHFI-USDT-SWAP/KAITO-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/ETHW-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/ETHFI-USDT-SWAP": 0,
+        "LDO-USDT-SWAP/XTZ-USDT-SWAP": 0,
+        "QTUM-USDT-SWAP/SUI-USDT-SWAP": 0,
+        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": 0,
+        "1INCH-USDT-SWAP/ENA-USDT-SWAP": 0,
+        "1INCH-USDT-SWAP/ALGO-USDT-SWAP": 0,
+        "KAITO-USDT-SWAP/LDO-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/XTZ-USDT-SWAP": 0,
+        "ASTER-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "KSM-USDT-SWAP/LINK-USDT-SWAP": 0,
+        "DOT-USDT-SWAP/LIT-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/KAITO-USDT-SWAP": 0,
+        "ETHW-USDT-SWAP/SUSHI-USDT-SWAP": 0,
+        "NEAR-USDT-SWAP/SUI-USDT-SWAP": 0,
+        "LIT-USDT-SWAP/TON-USDT-SWAP": 0,
+        "ETHFI-USDT-SWAP/XTZ-USDT-SWAP": 0
     },
     "persistence_history": [
-        -1.4190528927525976,
-        -1.751751493545154,
-        -1.7519808534656145,
-        -1.377915805613196,
-        -1.5348642089609819
+        -0.6460863901587177,
+        -3.123626426145803,
+        -3.133734788571189,
+        -1.8205997877694464
     ],
-    "last_exit_time": 1770053990.8538852,
-    "z_history": [
-        {
-            "ts": 1770054000.1442065,
-            "z": 1.6362067045857587
-        },
-        {
-            "ts": 1770054004.2524366,
-            "z": 1.4562359680733532
-        },
-        {
-            "ts": 1770054008.351966,
-            "z": 1.1513088317945288
-        },
-        {
-            "ts": 1770054012.4489388,
-            "z": 0.6878517760812742
-        },
-        {
-            "ts": 1770054016.546064,
-            "z": 1.7319679899067737
-        },
-        {
-            "ts": 1770054020.6451557,
-            "z": 1.7224642107634378
-        },
-        {
-            "ts": 1770054025.1960628,
-            "z": 1.6531061144157086
-        },
-        {
-            "ts": 1770054029.2966413,
-            "z": 1.3836994314149256
-        },
-        {
-            "ts": 1770054033.4986663,
-            "z": 1.320948283977928
-        },
-        {
-            "ts": 1770054037.5922647,
-            "z": 0.9633619336393023
-        },
-        {
-            "ts": 1770054041.6983685,
-            "z": 1.3722064171352626
-        },
-        {
-            "ts": 1770054045.8001318,
-            "z": 1.3722993164513746
-        },
-        {
-            "ts": 1770054049.8962588,
-            "z": 1.3753952189035954
-        },
-        {
-            "ts": 1770054054.0074034,
-            "z": 1.669048502470797
-        },
-        {
-            "ts": 1770054058.4064133,
-            "z": 1.6668228416342565
-        },
-        {
-            "ts": 1770054062.5166216,
-            "z": 1.8466290116672117
-        },
-        {
-            "ts": 1770054066.6008277,
-            "z": 1.8466290116672117
-        },
-        {
-            "ts": 1770054070.9523387,
-            "z": 1.8466290116672117
-        },
-        {
-            "ts": 1770054075.0430818,
-            "z": 1.8466290116672117
-        },
-        {
-            "ts": 1770054079.1498344,
-            "z": 1.8247637497203442
-        },
-        {
-            "ts": 1770054083.2396724,
-            "z": 1.825039367961365
-        },
-        {
-            "ts": 1770054087.335519,
-            "z": 1.8149980548168692
-        },
-        {
-            "ts": 1770054091.4372,
-            "z": 1.8491345483969805
-        },
-        {
-            "ts": 1770054095.5454268,
-            "z": 1.8488652212121912
-        },
-        {
-            "ts": 1770054100.114891,
-            "z": 1.6597663968113245
-        },
-        {
-            "ts": 1770054104.296751,
-            "z": 1.8401647260362213
-        },
-        {
-            "ts": 1770054108.3906684,
-            "z": 1.542604803221946
-        },
-        {
-            "ts": 1770054112.5005162,
-            "z": 1.5655046195119633
-        },
-        {
-            "ts": 1770054116.5934541,
-            "z": 1.858860514976148
-        },
-        {
-            "ts": 1770054120.7023723,
-            "z": 2.0024956979875626
-        },
-        {
-            "ts": 1770054124.7959955,
-            "z": 1.8487028988943277
-        },
-        {
-            "ts": 1770054128.9103973,
-            "z": 1.839494612138484
-        },
-        {
-            "ts": 1770054133.046733,
-            "z": 1.5275087662997102
-        },
-        {
-            "ts": 1770054137.1405056,
-            "z": 1.9987606323637477
-        },
-        {
-            "ts": 1770054141.2484362,
-            "z": 2.0311623133298826
-        },
-        {
-            "ts": 1770054145.5955212,
-            "z": 2.0022066465856376
-        },
-        {
-            "ts": 1770054149.6862335,
-            "z": 1.6521621375721556
-        },
-        {
-            "ts": 1770054153.7988105,
-            "z": 1.579916367756733
-        },
-        {
-            "ts": 1770054157.9439523,
-            "z": 1.2470413757900445
-        },
-        {
-            "ts": 1770054162.0468135,
-            "z": 1.701704264804304
-        },
-        {
-            "ts": 1770054166.1571636,
-            "z": 2.0304227021622605
-        },
-        {
-            "ts": 1770054170.2332919,
-            "z": 2.032270916902269
-        },
-        {
-            "ts": 1770054174.3427548,
-            "z": 1.6582534927431454
-        },
-        {
-            "ts": 1770054178.6031508,
-            "z": 1.660599152583455
-        },
-        {
-            "ts": 1770054182.7499354,
-            "z": 1.8778380205087386
-        },
-        {
-            "ts": 1770054186.851611,
-            "z": 2.1377357028083264
-        },
-        {
-            "ts": 1770054191.097073,
-            "z": 2.1724799675968196
-        },
-        {
-            "ts": 1770054195.204614,
-            "z": 2.1722601089193305
-        },
-        {
-            "ts": 1770054199.342923,
-            "z": 2.06135092967774
-        },
-        {
-            "ts": 1770054203.4994998,
-            "z": 1.7472291235384747
-        },
-        {
-            "ts": 1770054207.5927732,
-            "z": 1.3563340052745054
-        },
-        {
-            "ts": 1770054211.687841,
-            "z": 1.7357410898124737
-        },
-        {
-            "ts": 1770054215.7958267,
-            "z": 1.712491280479103
-        },
-        {
-            "ts": 1770054220.1061795,
-            "z": 1.700872516756446
-        },
-        {
-            "ts": 1770054224.3075597,
-            "z": 1.2545728631495892
-        },
-        {
-            "ts": 1770054228.3906171,
-            "z": 0.8394153856417095
-        },
-        {
-            "ts": 1770054232.4922266,
-            "z": 0.402902154978874
-        },
-        {
-            "ts": 1770054236.598664,
-            "z": 1.5574281498642133
-        },
-        {
-            "ts": 1770054240.6863704,
-            "z": 1.7952926139734777
-        },
-        {
-            "ts": 1770054244.7928283,
-            "z": 2.2003404695818065
-        },
-        {
-            "ts": 1770054248.8928883,
-            "z": 2.189171351335935
-        },
-        {
-            "ts": 1770054252.9983544,
-            "z": 2.1675017738867677
-        },
-        {
-            "ts": 1770054257.0946891,
-            "z": 2.1673147192926057
-        },
-        {
-            "ts": 1770054261.1877236,
-            "z": 1.353063905067026
-        },
-        {
-            "ts": 1770054265.696445,
-            "z": 1.353063905067026
-        },
-        {
-            "ts": 1770054269.7812436,
-            "z": 2.0567653879397434
-        },
-        {
-            "ts": 1770054274.044513,
-            "z": 1.9900925944184698
-        },
-        {
-            "ts": 1770054278.141379,
-            "z": 1.954353987853651
-        },
-        {
-            "ts": 1770054282.2458923,
-            "z": 1.9508015049057164
-        },
-        {
-            "ts": 1770054286.349851,
-            "z": 1.0800185107045925
-        },
-        {
-            "ts": 1770054290.5012953,
-            "z": 1.1644524338386533
-        },
-        {
-            "ts": 1770054294.6528187,
-            "z": 1.8657853151071515
-        },
-        {
-            "ts": 1770054299.044026,
-            "z": 1.89701965058629
-        },
-        {
-            "ts": 1770054303.1423585,
-            "z": 1.975051779252071
-        },
-        {
-            "ts": 1770054307.2484236,
-            "z": 2.004008286879524
-        },
-        {
-            "ts": 1770054311.3432164,
-            "z": 1.0457771467474288
-        },
-        {
-            "ts": 1770054315.443312,
-            "z": 1.0457771467474288
-        },
-        {
-            "ts": 1770054319.546703,
-            "z": 1.9952047425710262
-        },
-        {
-            "ts": 1770054323.6423807,
-            "z": 1.585654775218889
-        },
-        {
-            "ts": 1770054327.7461445,
-            "z": 0.5494766456763255
-        },
-        {
-            "ts": 1770054331.846785,
-            "z": 0.5716703134380905
-        },
-        {
-            "ts": 1770054335.9992836,
-            "z": 1.447619647161057
-        },
-        {
-            "ts": 1770054340.3343732,
-            "z": 1.439489867357337
-        }
-    ]
+    "last_exit_time": 1770394218.5876079,
+    "z_history": []
 }

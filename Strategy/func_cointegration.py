@@ -566,7 +566,10 @@ def get_cointegrated_pairs(
 
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
-    df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
+
+    # Only sort if DataFrame is not empty
+    if not df_coint.empty and 'zero_crossing' in df_coint.columns:
+        df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
     filtered_count = 0
     liquidity_pct_cutoff = None
     active_liquidity_pct = (

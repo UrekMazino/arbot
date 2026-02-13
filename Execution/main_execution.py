@@ -796,6 +796,19 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                            sym_1, sym_2, sym_2, get_blacklist_reason(sym_2))
                 continue
 
+            # Skip pairs with zero/missing liquidity data (dead orderbooks)
+            avg_vol_1 = row.get("avg_quote_volume_1")
+            avg_vol_2 = row.get("avg_quote_volume_2")
+            pair_liq_min = row.get("pair_liquidity_min")
+
+            if pd.isna(avg_vol_1) or pd.isna(avg_vol_2) or pd.isna(pair_liq_min):
+                logger.info("Skipping pair %s/%s - missing liquidity data (likely delisted/illiquid)", sym_1, sym_2)
+                continue
+
+            if avg_vol_1 == 0 or avg_vol_2 == 0 or pair_liq_min == 0:
+                logger.info("Skipping pair %s/%s - zero liquidity (dead orderbook)", sym_1, sym_2)
+                continue
+
             min_equity = _parse_min_equity(row.get("min_equity_recommended"))
             pair_key = normalize_pair_key(sym_1, sym_2)
             pairs.append(
@@ -1178,6 +1191,39 @@ if __name__ == "__main__":
 
     _start_molt_monitor()
     _start_command_listener()
+
+    # Wait for cointegrated pairs CSV if empty
+    csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
+    max_wait_seconds = 600  # Wait up to 10 minutes for Strategy to populate CSV
+    poll_interval = 10  # Check every 10 seconds
+
+    if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
+        logger.info("Cointegrated pairs CSV is empty or missing. Waiting for Strategy to discover pairs...")
+        print("⏳ Waiting for Strategy to discover cointegrated pairs...")
+        print(f"   CSV path: {csv_path}")
+        print(f"   Will check every {poll_interval}s (max wait: {max_wait_seconds}s)")
+
+        start_wait = time.time()
+        while (time.time() - start_wait) < max_wait_seconds:
+            if csv_path.exists():
+                import pandas as pd
+                try:
+                    df = pd.read_csv(csv_path)
+                    if not df.empty and len(df) > 0:
+                        logger.info(f"✅ CSV populated with {len(df)} pairs. Proceeding with startup...")
+                        print(f"✅ Found {len(df)} cointegrated pairs. Starting bot...")
+                        break
+                except Exception as e:
+                    logger.debug(f"Error reading CSV during polling: {e}")
+
+            time.sleep(poll_interval)
+        else:
+            # Timeout reached
+            logger.error("Timeout waiting for cointegrated pairs CSV. Strategy may still be running.")
+            print("❌ Timeout: No pairs found after 10 minutes.")
+            print("   Strategy may need more time or filters may be too strict.")
+            print("   Check Strategy logs and adjust min_zero_crossings or p_value filters.")
+            exit(1)
 
     # Validate ticker configuration at startup
     try:
@@ -1787,6 +1833,12 @@ if __name__ == "__main__":
 
                 record_trade_result(is_win)
                 result_label = "WIN" if is_win else "LOSS"
+
+                # Log funding fees from reconciliation
+                funding_fees = reconciliation.get("funding", 0.0) if reconciliation else 0.0
+                if abs(funding_fees) > 0.01:  # Log if > 1 cent
+                    logger.info(f"Funding fees paid during trade: {funding_fees:.2f} USDT")
+
                 logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
 
                 # Use equity-based PnL as primary source of truth for alerts and history

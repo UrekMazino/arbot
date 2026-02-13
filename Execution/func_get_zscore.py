@@ -306,8 +306,10 @@ def get_latest_zscore(
         series_2_const = sm.add_constant(series_2_log)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
+            from statsmodels.tools.sm_exceptions import CollinearityWarning
+            warnings.filterwarnings("ignore", category=CollinearityWarning)
             model = sm.OLS(series_1_log, series_2_const).fit()
-            
+
             # Perform cointegration test
             adf_statistic, p_value, critical_values = sm.tsa.stattools.coint(series_1_log, series_2_log)
             coint_flag = 1 if (p_value < P_VALUE_CRITICAL and adf_statistic < critical_values[1]) else 0

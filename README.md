@@ -184,8 +184,11 @@ Behavior:
 - If the ratio still fails, the bot progressively relaxes the min ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
 - If the adjusted target drops below the exchange min order size, the entry is skipped.
 
-### Regime Router (V1 Phase 0)
-Phase 0 is **evaluation-only**. It does not change entry, exit, sizing, or kill-switch behavior.
+### Regime Router (V1 Phase 1)
+Phase 1 is **gate-only enforcement** in `active` mode:
+- `shadow`: evaluation/logging only.
+- `active`: skips **new entries** when regime policy sets `allow_new_entries=0`.
+- Existing monitoring/exit/kill-switch behavior is unchanged.
 
 Enable shadow mode:
 ```env
@@ -205,11 +208,12 @@ STATBOT_REGIME_THIN_DEPTH_RATIO=1.2
 STATBOT_REGIME_RISKOFF_DRAWDOWN_PCT=1.5
 ```
 
-Expected logs in shadow mode:
+Expected logs:
 - `REGIME_STATUS`
 - `REGIME_CHANGE`
 - `REGIME_POLICY`
-- `REGIME_GATE` (informational only in shadow mode)
+- `REGIME_GATE` (policy signal in shadow/active)
+- `REGIME_GATE_ENFORCED` (only when active mode blocks new entries)
 
 Smoke test:
 ```bash

@@ -7,7 +7,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from regime_router import RegimeInput, RegimeRouter
+from regime_router import RegimeInput, RegimeRouter, should_block_new_entries
 
 
 class _MemoryStateStore:
@@ -172,6 +172,14 @@ class TestRegimeRouter(unittest.TestCase):
         third = router.evaluate(_input(ts=1705.0))
         self.assertEqual(third.regime, "TREND")
         self.assertTrue(third.changed)
+
+    def test_gate_helper_blocks_only_active_mode(self):
+        decision = {"allow_new_entries": False}
+        self.assertFalse(should_block_new_entries("off", decision))
+        self.assertFalse(should_block_new_entries("shadow", decision))
+        self.assertTrue(should_block_new_entries("active", decision))
+        self.assertFalse(should_block_new_entries("active", {"allow_new_entries": True}))
+        self.assertFalse(should_block_new_entries("active", None))
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
 from func_save_status import save_status
-from regime_router import RegimeInput, RegimeRouter
+from regime_router import RegimeInput, RegimeRouter, should_block_new_entries
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
@@ -1313,6 +1313,7 @@ if __name__ == "__main__":
     regime_market_symbol = _get_regime_market_symbol()
     last_regime_eval_ts = 0.0
     last_regime_decision = None
+    last_regime_gate_log_ts = 0.0
 
     if regime_mode == "off":
         logger.info("Regime router disabled (STATBOT_REGIME_ROUTER_MODE=off).")
@@ -1321,10 +1322,7 @@ if __name__ == "__main__":
             "Regime router enabled in SHADOW mode: evaluation/logging only (no execution changes)."
         )
     else:
-        logger.warning(
-            "Regime router mode '%s' enabled in evaluation-only phase (no execution changes yet).",
-            regime_mode,
-        )
+        logger.warning("Regime router ACTIVE mode enabled: gate-only enforcement is on.")
 
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
@@ -1654,12 +1652,13 @@ if __name__ == "__main__":
                             decision.min_liquidity_ratio,
                             decision.size_multiplier,
                         )
-                        if regime_mode == "shadow" and not decision.allow_new_entries:
+                        if regime_mode in ("shadow", "active") and not decision.allow_new_entries:
                             gate_reason = decision.reason_codes[0] if decision.reason_codes else "n/a"
                             logger.info(
-                                "REGIME_GATE: regime=%s allow_new_entries=0 reason=%s mode=shadow",
+                                "REGIME_GATE: regime=%s allow_new_entries=0 reason=%s mode=%s",
                                 decision.regime,
                                 gate_reason,
+                                regime_mode,
                             )
                     except Exception as regime_exc:
                         logger.warning("Regime router evaluation failed: %s", regime_exc)
@@ -1853,15 +1852,38 @@ if __name__ == "__main__":
 
             # 4. Check for signal and place new trades
             if is_manage_new_trades and kill_switch == 0:
-                status_dict["message"] = "Managing new trades..."
-                save_status(status_dict)
-                res_ks, sig_seen, tr_placed = manage_new_trades(kill_switch, health_check_due, zscore_results)
-                kill_switch = res_ks
-                if sig_seen: signals_seen += 1
-                if tr_placed:
-                    trades_executed += 1
-                    if equity_usdt is not None:
-                        set_entry_equity(equity_usdt)
+                blocked_by_regime = should_block_new_entries(regime_mode, last_regime_decision)
+                if blocked_by_regime:
+                    gate_reason = "n/a"
+                    gate_regime = "unknown"
+                    if last_regime_decision is not None:
+                        reasons = list(getattr(last_regime_decision, "reason_codes", []) or [])
+                        gate_reason = reasons[0] if reasons else "n/a"
+                        gate_regime = str(getattr(last_regime_decision, "regime", "unknown") or "unknown")
+                    status_dict["message"] = "Regime gate active; skipping new entries."
+                    save_status(status_dict)
+                    if (current_time - last_regime_gate_log_ts) >= 60:
+                        logger.warning(
+                            "REGIME_GATE_ENFORCED: mode=active regime=%s reason=%s action=skip_new_entries",
+                            gate_regime,
+                            gate_reason,
+                        )
+                        last_regime_gate_log_ts = current_time
+                else:
+                    status_dict["message"] = "Managing new trades..."
+                    save_status(status_dict)
+                    res_ks, sig_seen, tr_placed = manage_new_trades(
+                        kill_switch,
+                        health_check_due,
+                        zscore_results,
+                    )
+                    kill_switch = res_ks
+                    if sig_seen:
+                        signals_seen += 1
+                    if tr_placed:
+                        trades_executed += 1
+                        if equity_usdt is not None:
+                            set_entry_equity(equity_usdt)
             
             # 5. Monitoring existing trades / Mean reversion exit
             if not is_manage_new_trades or kill_switch == 1:

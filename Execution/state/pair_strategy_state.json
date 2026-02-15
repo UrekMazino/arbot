@@ -1,140 +1,15 @@
 {
-    "last_switch_time": 1770394631.7165005,
+    "last_switch_time": 1771159899.0844142,
     "graveyard": {
         "BIO-USDT-SWAP/CFX-USDT-SWAP": {
             "ts": 1769966267.510994,
             "reason": "compliance_restricted",
             "ttl_days": null
         },
-        "ICP-USDT-SWAP/INJ-USDT-SWAP": {
-            "ts": 1769969429.552577,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "SKY-USDT-SWAP/XPL-USDT-SWAP": {
-            "ts": 1769972136.9485998,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ETHW-USDT-SWAP/SYRUP-USDT-SWAP": {
-            "ts": 1769974845.10804,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "CHZ-USDT-SWAP/CFX-USDT-SWAP": {
-            "ts": 1769977873.8067725,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ADA-USDT-SWAP/ENA-USDT-SWAP": {
-            "ts": 1769984726.1776075,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "CRV-USDT-SWAP/XPL-USDT-SWAP": {
-            "ts": 1769987736.446628,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ETHFI-USDT-SWAP/LDO-USDT-SWAP": {
-            "ts": 1770014706.4342823,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "LDO-USDT-SWAP/YB-USDT-SWAP": {
-            "ts": 1770016689.2787719,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "ETHW-USDT-SWAP/XTZ-USDT-SWAP": {
-            "ts": 1770019849.1192274,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "SPK-USDT-SWAP/ZIL-USDT-SWAP": {
-            "ts": 1770021123.8254046,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "ETHFI-USDT-SWAP/SYRUP-USDT-SWAP": {
-            "ts": 1770022345.382348,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "LDO-USDT-SWAP/SUSHI-USDT-SWAP": {
-            "ts": 1770025052.06967,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ETHW-USDT-SWAP/YB-USDT-SWAP": {
-            "ts": 1770031035.7118824,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "SKY-USDT-SWAP/SPK-USDT-SWAP": {
-            "ts": 1770035449.5472445,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "FIL-USDT-SWAP/QTUM-USDT-SWAP": {
-            "ts": 1770036948.2898123,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "BAND-USDT-SWAP/CRO-USDT-SWAP": {
-            "ts": 1770080727.7001016,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "SUSHI-USDT-SWAP/XLM-USDT-SWAP": {
-            "ts": 1770090644.0980027,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "XRP-USDT-SWAP/LPT-USDT-SWAP": {
-            "ts": 1770095818.3374789,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ENA-USDT-SWAP/GMT-USDT-SWAP": {
-            "ts": 1770098207.0464938,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "IOTA-USDT-SWAP/MINA-USDT-SWAP": {
-            "ts": 1770104185.4386005,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "ALGO-USDT-SWAP/IOTA-USDT-SWAP": {
-            "ts": 1770108142.5017226,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "LPT-USDT-SWAP/NEO-USDT-SWAP": {
-            "ts": 1770111753.80294,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "AVAX-USDT-SWAP/ETC-USDT-SWAP": {
-            "ts": 1770167528.3700647,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
         "RAVE-USDT-SWAP/SENT-USDT-SWAP": {
             "ts": 1770169768.6131346,
             "reason": "zero_liquidity_dead_orderbook",
             "ttl_days": null
-        },
-        "MET-USDT-SWAP/SUSHI-USDT-SWAP": {
-            "ts": 1770182450.0369346,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ASTER-USDT-SWAP/OP-USDT-SWAP": {
-            "ts": 1770201799.9647593,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
         },
         "OP-USDT-SWAP/YB-USDT-SWAP": {
             "ts": 1770204155.6306348,
@@ -146,59 +21,9 @@
             "reason": "orderbook_dead",
             "ttl_days": 30
         },
-        "SKY-USDT-SWAP/THETA-USDT-SWAP": {
-            "ts": 1770210426.5350065,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "FIL-USDT-SWAP/SUI-USDT-SWAP": {
-            "ts": 1770231325.7884045,
+        "DOT-USDT-SWAP/LIT-USDT-SWAP": {
+            "ts": 1771149062.6063094,
             "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "ETHFI-USDT-SWAP/KAITO-USDT-SWAP": {
-            "ts": 1770237566.6754441,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "ASTER-USDT-SWAP/ETHW-USDT-SWAP": {
-            "ts": 1770248228.8241837,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "MASK-USDT-SWAP/SYRUP-USDT-SWAP": {
-            "ts": 1770269897.8132493,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "1INCH-USDT-SWAP/ENA-USDT-SWAP": {
-            "ts": 1770272974.5408363,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "1INCH-USDT-SWAP/ALGO-USDT-SWAP": {
-            "ts": 1770304375.4230678,
-            "reason": "cointegration_lost_bad_history",
-            "ttl_days": 7
-        },
-        "KAITO-USDT-SWAP/LDO-USDT-SWAP": {
-            "ts": 1770306083.0445716,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "QTUM-USDT-SWAP/SUI-USDT-SWAP": {
-            "ts": 1770312748.1908362,
-            "reason": "idle_timeout_bad_history",
-            "ttl_days": 7
-        },
-        "CHZ-USDT-SWAP/IOTA-USDT-SWAP": {
-            "ts": 1770390031.4060411,
-            "reason": "bad_history",
-            "ttl_days": 7
-        },
-        "TON-USDT-SWAP/LIT-USDT-SWAP": {
-            "ts": 1770394235.3333898,
-            "reason": "cointegration_lost_bad_history",
             "ttl_days": 7
         }
     },
@@ -300,10 +125,10 @@
             "visits": 6
         },
         "ASTER-USDT-SWAP/XTZ-USDT-SWAP": {
-            "ts": 1770390841.0360894,
+            "ts": 1771146356.3194034,
             "cooldown": 3600,
-            "reason": "cointegration_lost",
-            "visits": 2
+            "reason": "idle_timeout",
+            "visits": 3
         },
         "ASTER-USDT-SWAP/SUSHI-USDT-SWAP": {
             "ts": 1770319675.8548014,
@@ -317,35 +142,29 @@
             "reason": "cointegration_lost_unproven",
             "visits": 1
         },
-        "DOT-USDT-SWAP/LIT-USDT-SWAP": {
-            "ts": 1770391224.9570577,
-            "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
-        },
         "ETHW-USDT-SWAP/KAITO-USDT-SWAP": {
-            "ts": 1770391601.6925342,
+            "ts": 1771151769.7331264,
             "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
+            "reason": "idle_timeout_unproven",
+            "visits": 2
         },
         "ETHW-USDT-SWAP/SUSHI-USDT-SWAP": {
-            "ts": 1770392173.4407265,
+            "ts": 1771154477.2708914,
             "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
+            "reason": "idle_timeout",
+            "visits": 2
         },
         "NEAR-USDT-SWAP/SUI-USDT-SWAP": {
-            "ts": 1770392474.5863254,
+            "ts": 1771157188.240833,
             "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
+            "reason": "idle_timeout_unproven",
+            "visits": 2
         },
         "ETHFI-USDT-SWAP/XTZ-USDT-SWAP": {
-            "ts": 1770394631.7165005,
+            "ts": 1771159899.077415,
             "cooldown": 3600,
-            "reason": "cointegration_lost_unproven",
-            "visits": 1
+            "reason": "idle_timeout_unproven",
+            "visits": 2
         }
     },
     "pair_history": {
@@ -750,12 +569,12 @@
             "last_trade_ts": 1770306078.3337324
         },
         "ASTER-USDT-SWAP/XTZ-USDT-SWAP": {
-            "wins": 1,
+            "wins": 2,
             "losses": 0,
-            "win_usdt": 0.9694259000002603,
+            "win_usdt": 1.2116329999998925,
             "loss_usdt": 0.0,
-            "trades": 1,
-            "last_trade_ts": 1770315942.058079
+            "trades": 2,
+            "last_trade_ts": 1771144291.39707
         },
         "LIT-USDT-SWAP/TON-USDT-SWAP": {
             "wins": 0,
@@ -764,6 +583,22 @@
             "loss_usdt": 2.3782404000003226,
             "trades": 1,
             "last_trade_ts": 1770394214.668773
+        },
+        "DOT-USDT-SWAP/LIT-USDT-SWAP": {
+            "wins": 0,
+            "losses": 1,
+            "win_usdt": 0.0,
+            "loss_usdt": 0.48258609999993496,
+            "trades": 1,
+            "last_trade_ts": 1771147087.4796019
+        },
+        "ETHW-USDT-SWAP/SUSHI-USDT-SWAP": {
+            "wins": 1,
+            "losses": 0,
+            "win_usdt": 1.3248696000000564,
+            "loss_usdt": 0.0,
+            "trades": 1,
+            "last_trade_ts": 1771152009.0366564
         }
     },
     "restricted_tickers": {
@@ -774,13 +609,13 @@
         }
     },
     "consecutive_losses": 0,
-    "last_health_score": 85,
+    "last_health_score": 70,
     "price_fetch_failures": 0,
     "entry_z_score": null,
     "entry_time": null,
     "entry_equity": null,
     "entry_notional": null,
-    "last_switch_reason": "cointegration_lost",
+    "last_switch_reason": "idle_timeout",
     "min_capital_cooldowns": {},
     "stall_warning_marks": [],
     "health_failures": {
@@ -848,11 +683,12 @@
         "ETHFI-USDT-SWAP/XTZ-USDT-SWAP": 0
     },
     "persistence_history": [
-        -0.6460863901587177,
-        -3.123626426145803,
-        -3.133734788571189,
-        -1.8205997877694464
+        0.8725743049772884,
+        1.6164759604899575,
+        1.6164759604899575,
+        1.1065700825159555,
+        0.9496262398676788
     ],
-    "last_exit_time": 1770394218.5876079,
+    "last_exit_time": 1771152012.9321513,
     "z_history": []
 }

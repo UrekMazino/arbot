@@ -504,3 +504,16 @@ class RegimeRouter:
             "min_liquidity_ratio": max(base_liq_ratio, 1.5),
             "size_multiplier": 1.0,
         }
+
+
+def should_block_new_entries(mode, decision) -> bool:
+    """Return True only for active-mode decisions that disallow entries."""
+    if str(mode or "").strip().lower() != "active":
+        return False
+    if decision is None:
+        return False
+    if isinstance(decision, dict):
+        allow_new = decision.get("allow_new_entries", True)
+    else:
+        allow_new = getattr(decision, "allow_new_entries", True)
+    return not bool(allow_new)

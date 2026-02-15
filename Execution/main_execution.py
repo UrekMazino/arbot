@@ -1322,7 +1322,7 @@ if __name__ == "__main__":
             "Regime router enabled in SHADOW mode: evaluation/logging only (no execution changes)."
         )
     else:
-        logger.warning("Regime router ACTIVE mode enabled: gate-only enforcement is on.")
+        logger.warning("Regime router ACTIVE mode enabled: gate + policy enforcement is on.")
 
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
@@ -1876,6 +1876,8 @@ if __name__ == "__main__":
                         kill_switch,
                         health_check_due,
                         zscore_results,
+                        regime_mode=regime_mode,
+                        regime_decision=last_regime_decision,
                     )
                     kill_switch = res_ks
                     if sig_seen:

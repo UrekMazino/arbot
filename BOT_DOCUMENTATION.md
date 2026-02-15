@@ -39,7 +39,7 @@ StatBot employs a dual-process architecture (`main_execution.py`):
 2.  **Market Data Update**: Fetches 1m Klines and live Orderbook (5-level depth) mid-prices.
 3.  **Circuit Breaker**: Evaluates cumulative P&L against `tradeable_capital_usdt`.
 4.  **Decision Engine**: Evaluates Z-score against persistence requirements and health metrics.
-5.  **Regime Router (Phase 1, Optional)**: Evaluates market regime and, in `active` mode, applies gate-only enforcement by skipping new entries when policy disallows entries.
+5.  **Regime Router (Phase 2, Optional)**: Evaluates market regime and, in `active` mode, applies gate enforcement plus entry-policy overrides for new positions.
 
 ---
 
@@ -166,9 +166,10 @@ Each trading cycle logs comprehensive performance metrics:
 - **PNL Alerts**: `PNL_ALERT` fires on session threshold breaches and trade closes; trade-close alerts log after positions close and equity refresh
 
 **Additional Enhancements (2026-02):**
-- **Regime Router V1 Phase 1**: Added optional regime evaluation module with `off|shadow|active` modes and gate-only enforcement in `active`.
+- **Regime Router V1 Phase 2**: Added optional regime evaluation module with `off|shadow|active` modes and active-mode policy enforcement.
 - **Structured Regime Logs**: `REGIME_STATUS`, `REGIME_CHANGE`, `REGIME_POLICY`, and `REGIME_GATE` for attribution and verification.
 - **Gate Enforcement Log**: `REGIME_GATE_ENFORCED` when active mode blocks new entries.
+- **Policy Application Logs**: Active mode entry sizing traces include `Regime size multiplier applied` when regime policy scales position size.
 - **Regime State Persistence**: Router state is persisted in `Execution/state/regime_state.json` (`current_regime`, `candidate_regime`, confidence, pending state, diagnostics).
 - **Conservative Router Inputs**: `pnl_fallback` contributes to risk only while in-position; thin-liquidity classification is depth-ratio-led.
 
@@ -194,17 +195,19 @@ Runtime state is stored under `OKXStatBot/Execution/state`:
 - `pair_strategy_state.json`
 - `regime_state.json` (Regime Router V1 state when enabled)
 
-### Regime Router V1 Phase 1 (Gate-Only Enforcement)
-Regime Router is currently integrated in **Phase 1**. It is safe for staged rollout because enforcement is limited to skipping new entries when regime policy disallows entries.
+### Regime Router V1 Phase 2 (Gate + Entry Policy Enforcement)
+Regime Router is currently integrated in **Phase 2**. In `active` mode it both blocks disallowed entries and applies regime policy overrides to new-entry execution.
 
 Modes:
 - `STATBOT_REGIME_ROUTER_MODE=off`: disabled.
 - `STATBOT_REGIME_ROUTER_MODE=shadow`: evaluate + log + persist state; no enforcement.
-- `STATBOT_REGIME_ROUTER_MODE=active`: gate-only enforcement (skip new entries on disallowed regime).
+- `STATBOT_REGIME_ROUTER_MODE=active`: gate enforcement plus active policy overrides for new entries.
+  Overrides applied in active mode: `entry_z`, `entry_z_max`, `min_persist_bars`, `min_liquidity_ratio` floor, `size_multiplier`.
 
 Expected verification artifacts:
 - Log lines: `REGIME_STATUS`, `REGIME_CHANGE`, `REGIME_POLICY`, `REGIME_GATE`.
 - Enforcement log in active mode: `REGIME_GATE_ENFORCED`.
+- Execution log when active policy scales size: `Regime size multiplier applied`.
 - State file updates: `Execution/state/regime_state.json`.
 
 ### Reports (V1 Evidence Pack)

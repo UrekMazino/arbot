@@ -184,10 +184,11 @@ Behavior:
 - If the ratio still fails, the bot progressively relaxes the min ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
 - If the adjusted target drops below the exchange min order size, the entry is skipped.
 
-### Regime Router (V1 Phase 1)
-Phase 1 is **gate-only enforcement** in `active` mode:
+### Regime Router (V1 Phase 2)
+Phase 2 applies **entry gating + policy overrides** in `active` mode:
 - `shadow`: evaluation/logging only.
-- `active`: skips **new entries** when regime policy sets `allow_new_entries=0`.
+- `active`: skips new entries when `allow_new_entries=0` and applies policy overrides for new entries:
+  `entry_z`, `entry_z_max`, `min_persist_bars`, `min_liquidity_ratio` floor, and `size_multiplier`.
 - Existing monitoring/exit/kill-switch behavior is unchanged.
 
 Enable shadow mode:
@@ -214,6 +215,7 @@ Expected logs:
 - `REGIME_POLICY`
 - `REGIME_GATE` (policy signal in shadow/active)
 - `REGIME_GATE_ENFORCED` (only when active mode blocks new entries)
+- `Regime size multiplier applied` (when active policy changes per-leg size)
 
 Smoke test:
 ```bash

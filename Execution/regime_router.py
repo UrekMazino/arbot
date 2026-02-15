@@ -517,3 +517,58 @@ def should_block_new_entries(mode, decision) -> bool:
     else:
         allow_new = getattr(decision, "allow_new_entries", True)
     return not bool(allow_new)
+
+
+def _decision_get(decision, key, default=None):
+    if isinstance(decision, dict):
+        return decision.get(key, default)
+    return getattr(decision, key, default)
+
+
+def resolve_regime_policy_overrides(mode, decision):
+    """
+    Return normalized policy overrides for active mode.
+
+    Off/shadow modes always return None overrides to preserve baseline behavior.
+    """
+    overrides = {
+        "active": False,
+        "allow_new_entries": True,
+        "entry_z": None,
+        "entry_z_max": None,
+        "min_persist_bars": None,
+        "min_liquidity_ratio": None,
+        "size_multiplier": None,
+    }
+
+    if str(mode or "").strip().lower() != "active" or decision is None:
+        return overrides
+
+    overrides["active"] = True
+    overrides["allow_new_entries"] = bool(_decision_get(decision, "allow_new_entries", True))
+
+    entry_z = _safe_float(_decision_get(decision, "entry_z", None), None)
+    if entry_z is not None and entry_z > 0:
+        overrides["entry_z"] = entry_z
+
+    entry_z_max = _safe_float(_decision_get(decision, "entry_z_max", None), None)
+    if entry_z_max is not None and entry_z_max > 0:
+        if overrides["entry_z"] is not None and entry_z_max < overrides["entry_z"]:
+            entry_z_max = overrides["entry_z"]
+        overrides["entry_z_max"] = entry_z_max
+
+    min_persist_raw = _safe_float(_decision_get(decision, "min_persist_bars", None), None)
+    if min_persist_raw is not None:
+        min_persist = int(min_persist_raw)
+        if min_persist >= 1:
+            overrides["min_persist_bars"] = min_persist
+
+    min_liq = _safe_float(_decision_get(decision, "min_liquidity_ratio", None), None)
+    if min_liq is not None:
+        overrides["min_liquidity_ratio"] = max(min_liq, 0.0)
+
+    size_mult = _safe_float(_decision_get(decision, "size_multiplier", None), None)
+    if size_mult is not None:
+        overrides["size_multiplier"] = max(size_mult, 0.0)
+
+    return overrides

@@ -7,7 +7,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from regime_router import RegimeInput, RegimeRouter, should_block_new_entries
+from regime_router import (
+    RegimeInput,
+    RegimeRouter,
+    resolve_regime_policy_overrides,
+    should_block_new_entries,
+)
 
 
 class _MemoryStateStore:
@@ -180,6 +185,47 @@ class TestRegimeRouter(unittest.TestCase):
         self.assertTrue(should_block_new_entries("active", decision))
         self.assertFalse(should_block_new_entries("active", {"allow_new_entries": True}))
         self.assertFalse(should_block_new_entries("active", None))
+
+    def test_policy_overrides_only_apply_in_active_mode(self):
+        decision = {
+            "allow_new_entries": True,
+            "entry_z": 2.6,
+            "entry_z_max": 3.6,
+            "min_persist_bars": 5,
+            "min_liquidity_ratio": 2.5,
+            "size_multiplier": 0.5,
+        }
+
+        shadow = resolve_regime_policy_overrides("shadow", decision)
+        self.assertFalse(shadow["active"])
+        self.assertIsNone(shadow["entry_z"])
+        self.assertIsNone(shadow["size_multiplier"])
+
+        active = resolve_regime_policy_overrides("active", decision)
+        self.assertTrue(active["active"])
+        self.assertEqual(active["entry_z"], 2.6)
+        self.assertEqual(active["entry_z_max"], 3.6)
+        self.assertEqual(active["min_persist_bars"], 5)
+        self.assertEqual(active["min_liquidity_ratio"], 2.5)
+        self.assertEqual(active["size_multiplier"], 0.5)
+
+    def test_policy_overrides_normalize_invalid_values(self):
+        decision = {
+            "allow_new_entries": 0,
+            "entry_z": -1.0,
+            "entry_z_max": 1.0,
+            "min_persist_bars": 0,
+            "min_liquidity_ratio": -3.0,
+            "size_multiplier": -2.0,
+        }
+        active = resolve_regime_policy_overrides("active", decision)
+        self.assertTrue(active["active"])
+        self.assertFalse(active["allow_new_entries"])
+        self.assertIsNone(active["entry_z"])
+        self.assertEqual(active["entry_z_max"], 1.0)
+        self.assertIsNone(active["min_persist_bars"])
+        self.assertEqual(active["min_liquidity_ratio"], 0.0)
+        self.assertEqual(active["size_multiplier"], 0.0)
 
 
 if __name__ == "__main__":

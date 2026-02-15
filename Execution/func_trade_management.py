@@ -142,6 +142,7 @@ import math
 import logging
 from func_log_setup import get_logger
 import datetime
+from regime_router import resolve_regime_policy_overrides
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
@@ -468,14 +469,20 @@ def _z_at_or_before(z_history, target_ts):
         return None
 
 # Issue #11 Fix: Signal generation with persistence requirement and professional thresholds
-def generate_signal(z_history, cointegration_ok, in_position):
+def generate_signal(
+    z_history,
+    cointegration_ok,
+    in_position,
+    entry_z=None,
+    entry_z_max=None,
+    min_persist_bars=None,
+):
     """
     Generate trading signals with persistence requirement to prevent flash trades.
     
     Implements professional-grade entry/exit logic:
-    - ENTRY_Z = 2.0: Requires Z-score at ±2.0 (2 std deviations from mean)
-    - EXIT_Z = 0.5: Exit when Z-score reverts toward ±0.5
-    - MIN_PERSIST_BARS = 3: Require signal to persist for 3 bars (3 minutes @ 1m candles)
+    - Entry thresholds can be overridden by active regime policy.
+    - Defaults: ENTRY_Z, ENTRY_Z_MAX, EXIT_Z, MIN_PERSIST_BARS.
     
     Parameters:
         z_history (list): Full history of Z-score values
@@ -489,7 +496,36 @@ def generate_signal(z_history, cointegration_ok, in_position):
     """
     if not z_history:
         return None, "No z-score data available"
-    
+
+    effective_entry_z = ENTRY_Z
+    if entry_z is not None:
+        try:
+            parsed_entry_z = float(entry_z)
+            if parsed_entry_z > 0:
+                effective_entry_z = parsed_entry_z
+        except (TypeError, ValueError):
+            pass
+
+    effective_entry_z_max = ENTRY_Z_MAX
+    if entry_z_max is not None:
+        try:
+            parsed_entry_z_max = float(entry_z_max)
+            if parsed_entry_z_max > 0:
+                effective_entry_z_max = parsed_entry_z_max
+        except (TypeError, ValueError):
+            pass
+    if effective_entry_z_max < effective_entry_z:
+        effective_entry_z_max = effective_entry_z
+
+    effective_min_persist_bars = MIN_PERSIST_BARS
+    if min_persist_bars is not None:
+        try:
+            parsed_persist = int(float(min_persist_bars))
+            if parsed_persist >= 1:
+                effective_min_persist_bars = parsed_persist
+        except (TypeError, ValueError):
+            pass
+
     current_z = z_history[-1]
     
     # Hard gate: No trade if cointegration is invalid
@@ -510,22 +546,39 @@ def generate_signal(z_history, cointegration_ok, in_position):
         # Get last N cycles from persistent state
         persistence_history = get_persistence_history()
 
-        if len(persistence_history) >= MIN_PERSIST_BARS:
-            recent_zscores = persistence_history[-MIN_PERSIST_BARS:]
+        if len(persistence_history) >= effective_min_persist_bars:
+            recent_zscores = persistence_history[-effective_min_persist_bars:]
 
             # Check if all recent z-scores are in the same extreme zone
             # Also enforce ENTRY_Z_MAX to avoid regime breaks
-            all_oversold = all(z <= -ENTRY_Z and z >= -ENTRY_Z_MAX for z in recent_zscores)
-            all_overbought = all(z >= ENTRY_Z and z <= ENTRY_Z_MAX for z in recent_zscores)
+            all_oversold = all(
+                z <= -effective_entry_z and z >= -effective_entry_z_max
+                for z in recent_zscores
+            )
+            all_overbought = all(
+                z >= effective_entry_z and z <= effective_entry_z_max
+                for z in recent_zscores
+            )
 
             if all_oversold:
-                return "BUY_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at -ENTRY_Z (oversold, bars={MIN_PERSIST_BARS})"
+                return (
+                    "BUY_SPREAD",
+                    f"Entry signal: Z={current_z:.4f} persistent at -{effective_entry_z:.2f} "
+                    f"(oversold, bars={effective_min_persist_bars})",
+                )
             elif all_overbought:
-                return "SELL_SPREAD", f"Entry signal: Z={current_z:.4f} persistent at +ENTRY_Z (overbought, bars={MIN_PERSIST_BARS})"
+                return (
+                    "SELL_SPREAD",
+                    f"Entry signal: Z={current_z:.4f} persistent at +{effective_entry_z:.2f} "
+                    f"(overbought, bars={effective_min_persist_bars})",
+                )
             else:
                 return None, f"No entry - Z-score not persistent (history: {[round(z, 2) for z in recent_zscores]})"
         else:
-            return None, f"Insufficient history: {len(persistence_history)} cycles < {MIN_PERSIST_BARS} required"
+            return None, (
+                f"Insufficient history: {len(persistence_history)} cycles < "
+                f"{effective_min_persist_bars} required"
+            )
     
     # EXIT LOGIC
     if in_position:
@@ -716,7 +769,13 @@ def _log_hold_position(zscore):
 
 
 # Manage new trade assessment and order placing
-def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
+def manage_new_trades(
+    kill_switch,
+    health_check_due=False,
+    zscore_results=None,
+    regime_mode="off",
+    regime_decision=None,
+):
     """
     Manage trade entry, monitoring, and exit.
     
@@ -750,6 +809,25 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
         return kill_switch, False, False
     
     latest_zscore = valid_zscores[-1]
+
+    regime_policy = resolve_regime_policy_overrides(regime_mode, regime_decision)
+    effective_entry_z = regime_policy.get("entry_z")
+    if effective_entry_z is None:
+        effective_entry_z = ENTRY_Z
+    effective_entry_z_max = regime_policy.get("entry_z_max")
+    if effective_entry_z_max is None:
+        effective_entry_z_max = ENTRY_Z_MAX
+    if effective_entry_z_max < effective_entry_z:
+        effective_entry_z_max = effective_entry_z
+    effective_min_persist_bars = regime_policy.get("min_persist_bars")
+    if effective_min_persist_bars is None:
+        effective_min_persist_bars = MIN_PERSIST_BARS
+    regime_min_liquidity_ratio = regime_policy.get("min_liquidity_ratio")
+    regime_size_multiplier = regime_policy.get("size_multiplier")
+    if regime_size_multiplier is None:
+        regime_size_multiplier = 1.0
+    if regime_size_multiplier < 0:
+        regime_size_multiplier = 0.0
     
     # 1. Log Current Z-score status every cycle
     _log_zscore_status(latest_zscore)
@@ -806,7 +884,14 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             return 3, False, False
     
     # 3. Signal Generation
-    signal, reason = generate_signal(valid_zscores, coint_flag, in_position=False)
+    signal, reason = generate_signal(
+        valid_zscores,
+        coint_flag,
+        in_position=False,
+        entry_z=effective_entry_z,
+        entry_z_max=effective_entry_z_max,
+        min_persist_bars=effective_min_persist_bars,
+    )
     
     if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
         # Activate hot trigger
@@ -840,7 +925,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             _ENTRY_BALANCE_SNAPSHOT_LOGGED = True
     else:
         # Log waiting status
-        if abs(latest_zscore) < ENTRY_Z:
+        if abs(latest_zscore) < effective_entry_z:
             _log_waiting("⏳ WAITING: Not at entry threshold yet")
         else:
             # It's beyond threshold but not persistent yet
@@ -867,7 +952,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 last_price_p or 0,
                 avg_liquidity_ticker_p or 0,
             )
-            return kill_switch
+            return kill_switch, signal_detected, trade_placed
         
         if (last_price_n is None or last_price_n <= 0 or avg_liquidity_ticker_n is None or avg_liquidity_ticker_n <= 0):
             logger.error(
@@ -876,7 +961,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 last_price_n or 0,
                 avg_liquidity_ticker_n or 0,
             )
-            return kill_switch
+            return kill_switch, signal_detected, trade_placed
         
         logger.debug(
             "✓ Price validation passed: %s price=%.4f liq=%.6f, %s price=%.4f liq=%.6f",
@@ -983,6 +1068,35 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             capital_long = effective_capital * 0.5
             capital_short = effective_capital * 0.5
             initial_capital_usdt = capital_long
+
+        if regime_size_multiplier != 1.0:
+            base_position_usdt = initial_capital_usdt
+            initial_capital_usdt = base_position_usdt * regime_size_multiplier
+            if initial_capital_usdt <= 0:
+                logger.info(
+                    "Regime policy reduced size multiplier to %.2f. Skipping entry.",
+                    regime_size_multiplier,
+                )
+                return kill_switch, signal_detected, trade_placed
+
+            max_per_leg = effective_capital * 0.5
+            if max_per_leg > 0 and initial_capital_usdt > max_per_leg:
+                logger.warning(
+                    "Regime size multiplier %.2f exceeded per-leg capital cap. Capping %.2f -> %.2f.",
+                    regime_size_multiplier,
+                    initial_capital_usdt,
+                    max_per_leg,
+                )
+                initial_capital_usdt = max_per_leg
+
+            capital_long = initial_capital_usdt
+            capital_short = initial_capital_usdt
+            logger.info(
+                "Regime size multiplier applied: %.2fx (per_leg %.2f -> %.2f).",
+                regime_size_multiplier,
+                base_position_usdt,
+                initial_capital_usdt,
+            )
         
         # Log position sizing with 2% rule
         logger.info(
@@ -1090,6 +1204,8 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
             min_liquidity_ratio = float(ratio_env)
         except (TypeError, ValueError):
             min_liquidity_ratio = 0.0
+        if regime_min_liquidity_ratio is not None:
+            min_liquidity_ratio = max(min_liquidity_ratio, regime_min_liquidity_ratio)
 
         def _liq_ratio(liquidity_usdt, target_usdt):
             if target_usdt <= 0:
@@ -1523,7 +1639,7 @@ def manage_new_trades(kill_switch, health_check_due=False, zscore_results=None):
                 logger.info("Z-score update: %.4f", latest_zscore)
 
                 # Check if Z-score still supports the position (within 90% of entry threshold)
-                if abs(latest_zscore) > ENTRY_Z * 0.9 and signal_sign_positive_new == signal_sign_positive:
+                if abs(latest_zscore) > effective_entry_z * 0.9 and signal_sign_positive_new == signal_sign_positive:
 
                     # Check long order status
                     if count_long == 1:

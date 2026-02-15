@@ -45,6 +45,7 @@ wheels/
 
 *.pdf
 status.json
+Execution/state/regime_state.json
 
 # Testing
 .pytest_cache/

@@ -23,6 +23,9 @@ MIN_CAPITAL_SHORTAGE_MEDIUM = 0.20
 MIN_CAPITAL_SHORTAGE_HIGH = 0.50
 Z_HISTORY_MAX_AGE_SECONDS = 14400
 Z_HISTORY_MAX_LEN = 5000
+SWITCH_RATE_WINDOW_SECONDS = 3600
+DEFAULT_MAX_SWITCHES_PER_HOUR = 5
+DEFAULT_SWITCH_COOLDOWN_SECONDS = 3600
 GRAVEYARD_DEFAULT_DAYS = 7
 GRAVEYARD_REASON_DAYS = {
     "cointegration_lost": 7,  # Changed from 5min to 7 days
@@ -92,6 +95,8 @@ def load_pair_state():
     if not STATE_FILE.exists():
         return {
             "last_switch_time": 0,
+            "switch_events": [],
+            "switch_rate_limit_until_ts": 0.0,
             "graveyard": {}, # { "ticker_1/ticker_2": fail_timestamp }
             "hospital": {}, # { "ticker_1/ticker_2": {"ts": float, "cooldown": int, "reason": str} }
             "pair_history": {}, # { "ticker_1/ticker_2": {wins, losses, win_usdt, loss_usdt, trades} }
@@ -101,6 +106,8 @@ def load_pair_state():
             "price_fetch_failures": 0,
             "entry_z_score": None,
             "entry_time": None,
+            "coint_lost_since_ts": None,
+            "coint_lost_confirm_count": 0,
             "entry_equity": None,
             "entry_notional": None,
             "last_switch_reason": "",
@@ -114,6 +121,10 @@ def load_pair_state():
             # Ensure consecutive_losses exists
             if "consecutive_losses" not in state:
                 state["consecutive_losses"] = 0
+            if "switch_events" not in state:
+                state["switch_events"] = []
+            if "switch_rate_limit_until_ts" not in state:
+                state["switch_rate_limit_until_ts"] = 0.0
             if "restricted_tickers" not in state:
                 state["restricted_tickers"] = {}
             if "hospital" not in state:
@@ -133,6 +144,10 @@ def load_pair_state():
                 state["entry_z_score"] = None
             if "entry_time" not in state:
                 state["entry_time"] = None
+            if "coint_lost_since_ts" not in state:
+                state["coint_lost_since_ts"] = None
+            if "coint_lost_confirm_count" not in state:
+                state["coint_lost_confirm_count"] = 0
             if "entry_equity" not in state:
                 state["entry_equity"] = None
             if "entry_notional" not in state:
@@ -145,7 +160,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
+        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
 
 def save_pair_state(state):
     try:
@@ -154,6 +169,31 @@ def save_pair_state(state):
             json.dump(state, f, indent=4)
     except Exception as e:
         print(f"Error saving pair state: {e}")
+
+
+def _switch_limit_settings():
+    max_switches = _env_int("STATBOT_MAX_SWITCHES_PER_HOUR", DEFAULT_MAX_SWITCHES_PER_HOUR)
+    cooldown_seconds = _env_int("STATBOT_SWITCH_COOLDOWN_SECONDS", DEFAULT_SWITCH_COOLDOWN_SECONDS)
+    if max_switches < 0:
+        max_switches = 0
+    if cooldown_seconds < 0:
+        cooldown_seconds = 0
+    return max_switches, cooldown_seconds
+
+
+def _prune_switch_events(events, now_ts, window_seconds=SWITCH_RATE_WINDOW_SECONDS):
+    pruned = []
+    if not isinstance(events, list):
+        return pruned
+    cutoff = now_ts - max(float(window_seconds), 0.0)
+    for ts in events:
+        try:
+            value = float(ts)
+        except (TypeError, ValueError):
+            continue
+        if value >= cutoff:
+            pruned.append(value)
+    return pruned
 
 def normalize_pair_key(t1, t2):
     if not t1 or not t2:
@@ -530,7 +570,11 @@ def set_last_switch_time(timestamp=None):
     if timestamp is None:
         timestamp = time.time()
     state = load_pair_state()
-    state["last_switch_time"] = timestamp
+    ts_value = float(timestamp)
+    state["last_switch_time"] = ts_value
+    events = _prune_switch_events(state.get("switch_events", []), ts_value)
+    events.append(ts_value)
+    state["switch_events"] = events
     save_pair_state(state)
 
 def set_last_switch_reason(reason):
@@ -541,6 +585,23 @@ def set_last_switch_reason(reason):
 def get_last_switch_reason():
     state = load_pair_state()
     return state.get("last_switch_reason", "")
+
+
+def get_switch_rate_limit_remaining():
+    state = load_pair_state()
+    now = time.time()
+    try:
+        until_ts = float(state.get("switch_rate_limit_until_ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        until_ts = 0.0
+
+    remaining = until_ts - now
+    if remaining <= 0:
+        if until_ts > 0:
+            state["switch_rate_limit_until_ts"] = 0.0
+            save_pair_state(state)
+        return 0.0
+    return float(remaining)
 
 def calculate_min_capital_cooldown(required, allocated):
     try:
@@ -635,6 +696,8 @@ def set_entry_z_score(z_score):
     state = load_pair_state()
     state["entry_z_score"] = float(z_score)
     state["entry_time"] = time.time()
+    state["coint_lost_since_ts"] = None
+    state["coint_lost_confirm_count"] = 0
     save_pair_state(state)
 
     # Verify write was successful
@@ -653,6 +716,69 @@ def get_entry_time():
     """Get the timestamp of position entry."""
     state = load_pair_state()
     return state.get("entry_time")
+
+
+def get_coint_lost_since_ts():
+    """Get cointegration-lost timer start timestamp."""
+    state = load_pair_state()
+    value = state.get("coint_lost_since_ts")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def set_coint_lost_since_ts(timestamp=None):
+    """Set cointegration-lost timer start timestamp."""
+    state = load_pair_state()
+    if timestamp is None:
+        timestamp = time.time()
+    try:
+        state["coint_lost_since_ts"] = float(timestamp)
+    except (TypeError, ValueError):
+        state["coint_lost_since_ts"] = time.time()
+    save_pair_state(state)
+
+
+def clear_coint_lost_since_ts():
+    """Clear cointegration-lost timer start timestamp."""
+    state = load_pair_state()
+    if state.get("coint_lost_since_ts") is not None:
+        state["coint_lost_since_ts"] = None
+        save_pair_state(state)
+
+
+def get_coint_lost_confirm_count():
+    """Get consecutive monitor cycles with coint_flag == 0."""
+    state = load_pair_state()
+    try:
+        value = int(state.get("coint_lost_confirm_count", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return max(value, 0)
+
+
+def set_coint_lost_confirm_count(count):
+    """Set consecutive monitor cycles with coint_flag == 0."""
+    state = load_pair_state()
+    try:
+        value = int(count)
+    except (TypeError, ValueError):
+        value = 0
+    if value < 0:
+        value = 0
+    state["coint_lost_confirm_count"] = value
+    save_pair_state(state)
+
+
+def clear_coint_lost_confirm_count():
+    """Reset coint lost confirmation counter."""
+    state = load_pair_state()
+    if int(state.get("coint_lost_confirm_count", 0) or 0) != 0:
+        state["coint_lost_confirm_count"] = 0
+        save_pair_state(state)
 
 def set_entry_equity(equity_usdt):
     """Record equity at the time of position entry."""
@@ -681,6 +807,8 @@ def clear_entry_tracking():
     state = load_pair_state()
     state["entry_z_score"] = None
     state["entry_time"] = None
+    state["coint_lost_since_ts"] = None
+    state["coint_lost_confirm_count"] = 0
     state["entry_equity"] = None
     state["entry_notional"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
@@ -804,8 +932,34 @@ def can_switch(cooldown_hours=24, health_score=None, emergency_threshold=25):
     Returns:
         bool: True if switching is allowed, False otherwise
     """
+    state = load_pair_state()
+    now_ts = time.time()
+
+    # 1) Hard block while switch rate-limit cooldown is active.
+    try:
+        until_ts = float(state.get("switch_rate_limit_until_ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        until_ts = 0.0
+    if until_ts > now_ts:
+        return False
+
+    # 2) Sliding-window rate limiter.
+    max_switches, switch_cooldown_seconds = _switch_limit_settings()
+    events = _prune_switch_events(state.get("switch_events", []), now_ts)
+    if max_switches > 0 and len(events) >= max_switches:
+        if switch_cooldown_seconds > 0:
+            state["switch_rate_limit_until_ts"] = now_ts + switch_cooldown_seconds
+        else:
+            state["switch_rate_limit_until_ts"] = 0.0
+        state["switch_events"] = events
+        save_pair_state(state)
+        return False
+    if events != state.get("switch_events", []):
+        state["switch_events"] = events
+        save_pair_state(state)
+
     last_switch = get_last_switch_time()
-    time_since_switch = time.time() - last_switch
+    time_since_switch = now_ts - last_switch
     cooldown_seconds = cooldown_hours * 60 * 60
 
     # Emergency override: health is critically bad, ignore cooldown

@@ -25,6 +25,7 @@ from func_pair_state import (
     get_consecutive_losses,
     set_last_health_score,
     set_last_switch_reason,
+    get_switch_rate_limit_remaining,
     set_min_capital_cooldown,
     add_restricted_ticker,
     is_restricted_ticker,
@@ -45,6 +46,11 @@ Z_STALL_LATE_STRICT_MINUTES = 120
 Z_STALL_TRIGGER_ABS = 1.5
 Z_STALL_WARN_ABS = 1.0
 DEFAULT_LIQUIDITY_RATIO_STEPS = [3.0, 2.5, 2.0, 1.5, 1.0]
+LIQUIDITY_RATIO_CAP = 3.0
+HYBRID_EXIT_PROFIT_USDT = 10.0
+HYBRID_EXIT_HARD_STOP_PNL_PCT = -5.0
+HYBRID_EXIT_COINT_GRACE_SECONDS = 300
+HYBRID_EXIT_DIVERGENCE_DELTA_Z = 1.5
 COMPLIANCE_RESTRICTION_CODE = "51155"
 _ENTRY_BALANCE_SNAPSHOT_LOGGED = False
 _ZSCORE_LOG_INTERVAL_SECONDS = 60
@@ -55,6 +61,7 @@ _LAST_ZSCORE_LOG_TS = 0.0
 _LAST_WAITING_LOG_TS = 0.0
 _LAST_WAITING_MSG = ""
 _LAST_HOLD_LOG_TS = 0.0
+_LAST_SWITCH_LIMIT_LOG_TS = 0.0
 
 
 def _get_health_switch_settings():
@@ -84,6 +91,28 @@ def _env_float(name, default=None):
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _env_int(name, default=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return default
 
 
 def _env_float_list(name, default_list):
@@ -387,6 +416,28 @@ def _build_liquidity_ratio_steps(base_ratio):
             _add_step(value)
 
     return steps or [base_ratio]
+
+
+def _resolve_adaptive_profit_target_usdt(entry_notional):
+    target_pct = _env_float("STATBOT_PROFIT_TARGET_PCT", 0.5)
+    if target_pct is None or target_pct <= 0:
+        target_pct = 0.5
+    target_min = _env_float("STATBOT_PROFIT_TARGET_MIN_USDT", 5.0)
+    target_max = _env_float("STATBOT_PROFIT_TARGET_MAX_USDT", 50.0)
+    if target_min is None or target_min < 0:
+        target_min = 0.0
+    if target_max is None or target_max < target_min:
+        target_max = target_min
+
+    base_target = HYBRID_EXIT_PROFIT_USDT
+    try:
+        notional_val = float(entry_notional)
+    except (TypeError, ValueError):
+        notional_val = 0.0
+    if notional_val > 0:
+        base_target = notional_val * (target_pct / 100.0)
+
+    return min(max(base_target, target_min), target_max)
 
 def _z_history_values(z_history):
     values = []
@@ -810,6 +861,19 @@ def manage_new_trades(
     
     latest_zscore = valid_zscores[-1]
 
+    # Defensive mode: when switch rate limiter is active, block new entries.
+    switch_limit_remaining = get_switch_rate_limit_remaining()
+    if switch_limit_remaining > 0:
+        global _LAST_SWITCH_LIMIT_LOG_TS
+        now_ts = time.time()
+        if (now_ts - _LAST_SWITCH_LIMIT_LOG_TS) >= 60:
+            logger.warning(
+                "DEFENSIVE_MODE: switch limiter active (%.0fs remaining). Skipping new entries.",
+                switch_limit_remaining,
+            )
+            _LAST_SWITCH_LIMIT_LOG_TS = now_ts
+        return kill_switch, False, False
+
     regime_policy = resolve_regime_policy_overrides(regime_mode, regime_decision)
     effective_entry_z = regime_policy.get("entry_z")
     if effective_entry_z is None:
@@ -1206,6 +1270,13 @@ def manage_new_trades(
             min_liquidity_ratio = 0.0
         if regime_min_liquidity_ratio is not None:
             min_liquidity_ratio = max(min_liquidity_ratio, regime_min_liquidity_ratio)
+        if min_liquidity_ratio > LIQUIDITY_RATIO_CAP:
+            logger.info(
+                "Liquidity ratio capped: requested=%.2fx cap=%.2fx",
+                min_liquidity_ratio,
+                LIQUIDITY_RATIO_CAP,
+            )
+            min_liquidity_ratio = LIQUIDITY_RATIO_CAP
 
         def _liq_ratio(liquidity_usdt, target_usdt):
             if target_usdt <= 0:
@@ -1713,153 +1784,239 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     """
     Monitor open positions for mean reversion or stop-loss.
     """
-    # Get latest data
     if zscore_results:
         zscore, signal_sign_positive_new, metrics = zscore_results
     else:
         zscore, signal_sign_positive_new, metrics = get_latest_zscore()
-        
+
     coint_flag = metrics.get("coint_flag", 0)
-    
+
     valid_zscores = [z for z in zscore if not math.isnan(z)]
     if not valid_zscores:
         return kill_switch
-        
+
     latest_zscore = valid_zscores[-1]
     _log_zscore_status(latest_zscore)
 
-    # Track Z-score history for stall detection
-    from func_pair_state import add_to_z_history
+    from func_pair_state import (
+        add_to_z_history,
+        clear_coint_lost_since_ts,
+        clear_coint_lost_confirm_count,
+        get_coint_lost_since_ts,
+        get_coint_lost_confirm_count,
+        get_entry_equity,
+        get_entry_notional,
+        get_entry_time,
+        get_entry_z_score,
+        set_coint_lost_confirm_count,
+        set_coint_lost_since_ts,
+    )
+    from func_position_calls import get_account_state
+
     add_to_z_history(latest_zscore)
 
-    # 1. Periodic Health Check with Trade PnL Context
-    # Pass current trade PnL to enable adaptive health thresholds
-    if health_check_due:
-        # Calculate current trade PnL percentage
-        trade_pnl_pct = 0.0
-        entry_equity = None
-        try:
-            from func_pair_state import get_entry_equity
-            entry_equity = get_entry_equity()
-
-            if entry_equity is not None and entry_equity > 0:
-                balance_res = account_session.get_account_balance()
-                if balance_res.get("code") == "0":
-                    details = balance_res.get("data", [{}])[0].get("details", [])
-                    for det in details:
-                        if det.get("ccy") == "USDT":
-                            current_equity = float(det.get("eq", 0))
-                            trade_pnl = current_equity - entry_equity
-                            trade_pnl_pct = (trade_pnl / entry_equity) * 100
-                            break
-        except Exception as e:
-            logger.debug(f"Could not calculate trade PnL for health check: {e}")
-
-        # Call health check with trade context
-        should_switch, score, rec = check_pair_health(
-            metrics,
-            latest_zscore,
-            silent=False,
-            in_active_trade=True,  # We're always in a trade when monitor_exit is called
-            trade_pnl_pct=trade_pnl_pct
-        )
-
-        if should_switch:
-            # Log the health degradation but DO NOT force immediate exit
-            logger.warning(f"⚠️  Pair health degraded (score={score}) while in position.")
-            logger.warning("This pair will be blacklisted after position closes normally.")
-            logger.warning("Health checks do NOT force immediate exit - only price-based rules can.")
-            # Mark pair for graveyard after position closes
-            # (main_execution will handle this after normal exit)
-            
-    # 2. Stop Loss Check (Hard Stop)
-    # Check if position has exceeded stop loss threshold
-    from func_pair_state import get_entry_equity
-
     entry_equity = get_entry_equity()
+    entry_z = get_entry_z_score()
+    entry_time = get_entry_time()
+
+    account_state = get_account_state()
+    positions = account_state.get("positions", []) if isinstance(account_state, dict) else []
+
+    total_unrealized_pnl = 0.0
+    total_funding_cost = 0.0
+    for pos in positions:
+        try:
+            upl = float(pos.get("upl", 0) or 0)
+        except (TypeError, ValueError):
+            upl = 0.0
+        try:
+            funding = float(pos.get("fundingFee", 0) or 0)
+        except (TypeError, ValueError):
+            funding = 0.0
+        total_unrealized_pnl += upl
+        total_funding_cost += abs(funding) if funding < 0 else 0.0
+
+    floating_pnl_usdt = None
+    pnl_pct = None
     if entry_equity is not None and entry_equity > 0:
-        # Get current equity (account_session already imported at top of file)
         try:
             balance_res = account_session.get_account_balance()
             if balance_res.get("code") == "0":
                 details = balance_res.get("data", [{}])[0].get("details", [])
                 for det in details:
                     if det.get("ccy") == "USDT":
-                        current_equity = float(det.get("eq", 0))
-
-                        # Calculate position loss
-                        position_loss = current_equity - entry_equity
-                        position_loss_pct = (position_loss / entry_equity) * 100
-
-                        # Check against stop loss threshold
-                        if position_loss_pct < -stop_loss_fail_safe * 100:
-                            msg = f"🔴 STOP LOSS TRIGGERED: Loss={position_loss:.2f} USDT ({position_loss_pct:.2f}%) exceeds {stop_loss_fail_safe*100:.1f}% limit"
-                            logger.error(msg)
-                            print(msg)
-                            _close_trade_manager()
-                            return 2
+                        current_equity = float(det.get("eq", 0) or 0)
+                        floating_pnl_usdt = current_equity - entry_equity
+                        pnl_pct = (floating_pnl_usdt / entry_equity) * 100
                         break
-        except Exception as e:
-            logger.warning(f"Failed to check stop loss: {e}")
+        except Exception as exc:
+            logger.debug("Failed equity-based PnL snapshot in monitor_exit: %s", exc)
 
-    # 3. Advanced trade manager exit logic
-    from func_pair_state import get_entry_z_score, get_entry_time
-    entry_z = get_entry_z_score()
-    entry_time = get_entry_time()
+    if floating_pnl_usdt is None:
+        floating_pnl_usdt = total_unrealized_pnl
+    if pnl_pct is None and entry_equity is not None and entry_equity > 0:
+        pnl_pct = (floating_pnl_usdt / entry_equity) * 100
 
+    coint_lost_seconds = 0.0
+    coint_lost_confirm_count = 0
+    if coint_flag == 0:
+        coint_lost_since_ts = get_coint_lost_since_ts()
+        now = time.time()
+        if coint_lost_since_ts is None:
+            coint_lost_since_ts = now
+            set_coint_lost_since_ts(now)
+        coint_lost_seconds = max(0.0, now - coint_lost_since_ts)
+        coint_lost_confirm_count = get_coint_lost_confirm_count() + 1
+        set_coint_lost_confirm_count(coint_lost_confirm_count)
+    else:
+        clear_coint_lost_since_ts()
+        clear_coint_lost_confirm_count()
+
+    # Advisory only while in position.
+    if health_check_due:
+        trade_pnl_pct = pnl_pct if pnl_pct is not None else 0.0
+        should_switch, score, rec = check_pair_health(
+            metrics,
+            latest_zscore,
+            silent=False,
+            in_active_trade=True,
+            trade_pnl_pct=trade_pnl_pct,
+        )
+        if should_switch:
+            logger.warning("Pair health degraded (score=%s) while in position.", score)
+            logger.warning("Health checks stay advisory during open positions.")
+
+    entry_notional = get_entry_notional()
+    profit_target_usdt = _resolve_adaptive_profit_target_usdt(entry_notional)
+    hard_stop_loss_pct = _env_float("STATBOT_HARD_STOP_PNL_PCT", abs(HYBRID_EXIT_HARD_STOP_PNL_PCT))
+    if hard_stop_loss_pct is None or hard_stop_loss_pct <= 0:
+        hard_stop_loss_pct = abs(HYBRID_EXIT_HARD_STOP_PNL_PCT)
+    hard_stop_threshold_pct = -abs(hard_stop_loss_pct)
+    enable_coint_exit_tiers = _env_flag("STATBOT_ENABLE_COINT_EXIT_TIERS", False)
+    tier2_confirmation_count = _env_int("STATBOT_TIER2_CONFIRMATION_COUNT", 3)
+    if tier2_confirmation_count is None or tier2_confirmation_count < 1:
+        tier2_confirmation_count = 1
+    tier2_min_loss_pct = _env_float("STATBOT_TIER2_MIN_LOSS_PCT", 1.5)
+    if tier2_min_loss_pct is None or tier2_min_loss_pct <= 0:
+        tier2_min_loss_pct = 1.5
+
+    # Tier 5: Profit take.
+    if floating_pnl_usdt is not None and floating_pnl_usdt >= profit_target_usdt:
+        msg = (
+            "HYBRID_EXIT Tier5 TAKE_PROFIT: floating_pnl=%.2f >= %.2f USDT (adaptive target)"
+            % (floating_pnl_usdt, profit_target_usdt)
+        )
+        logger.info(msg)
+        print(msg)
+        set_last_switch_reason("")
+        _close_trade_manager()
+        return 2
+
+    # Tier 1: Hard stop.
+    if pnl_pct is not None and pnl_pct <= hard_stop_threshold_pct:
+        msg = (
+            "HYBRID_EXIT Tier1 HARD_STOP: pnl_pct=%.2f%% <= %.2f%%"
+            % (pnl_pct, hard_stop_threshold_pct)
+        )
+        logger.error(msg)
+        print(msg)
+        set_last_switch_reason("exit_tier_1_stop_loss")
+        set_last_health_score(0)
+        _close_trade_manager()
+        return 2
+
+    # Tier 2-4: optional cointegration-driven exits (disabled by default).
+    if (
+        enable_coint_exit_tiers
+        and coint_flag == 0
+        and pnl_pct is not None
+        and (
+            (pnl_pct < 0 and coint_lost_confirm_count >= tier2_confirmation_count)
+            or pnl_pct <= -abs(tier2_min_loss_pct)
+        )
+    ):
+        msg = (
+            "HYBRID_EXIT Tier2 COINT_LOST_LOSING: pnl_pct=%.2f%% coint_flag=%s confirms=%d/%d min_loss=%.2f%%"
+            % (pnl_pct, coint_flag, coint_lost_confirm_count, tier2_confirmation_count, tier2_min_loss_pct)
+        )
+        logger.warning(msg)
+        print(msg)
+        set_last_switch_reason("exit_tier_2_coint_losing")
+        set_last_health_score(0)
+        _close_trade_manager()
+        return 2
+
+    # Tier 3: Cointegration lost beyond grace period.
+    if enable_coint_exit_tiers and coint_flag == 0 and coint_lost_seconds >= HYBRID_EXIT_COINT_GRACE_SECONDS:
+        msg = (
+            "HYBRID_EXIT Tier3 COINT_GRACE_TIMEOUT: coint_lost=%.1fs >= %ss"
+            % (coint_lost_seconds, HYBRID_EXIT_COINT_GRACE_SECONDS)
+        )
+        logger.warning(msg)
+        print(msg)
+        set_last_switch_reason("exit_tier_3_coint_grace")
+        set_last_health_score(0)
+        _close_trade_manager()
+        return 2
+
+    # Tier 4: Cointegration lost and spread diverging from entry.
+    if enable_coint_exit_tiers and coint_flag == 0 and entry_z is not None:
+        try:
+            divergence = abs(float(latest_zscore) - float(entry_z))
+        except (TypeError, ValueError):
+            divergence = 0.0
+        if divergence > HYBRID_EXIT_DIVERGENCE_DELTA_Z:
+            msg = (
+                "HYBRID_EXIT Tier4 RUNAWAY_DIVERGENCE: |z-entry_z|=%.2f > %.2f"
+                % (divergence, HYBRID_EXIT_DIVERGENCE_DELTA_Z)
+            )
+            logger.warning(msg)
+            print(msg)
+            set_last_switch_reason("exit_tier_4_divergence")
+            set_last_health_score(0)
+            _close_trade_manager()
+            return 2
+
+    # Tier 6: Advanced trade manager.
     if entry_z is not None:
         _ensure_trade_manager_state(entry_z, entry_time)
         tm_result = trade_manager.update(latest_zscore)
 
-        if tm_result.get('action') == 'EXIT':
-            msg = "KILL-SWITCH TRIGGERED: " + str(tm_result.get('message', tm_result.get('reason')))
+        if tm_result.get("action") == "EXIT":
+            msg = "KILL-SWITCH TRIGGERED: " + str(tm_result.get("message", tm_result.get("reason")))
             logger.warning(msg)
             print(msg)
+            set_last_switch_reason("")
             _close_trade_manager()
             return 2
 
-        if tm_result.get('action') == 'PARTIAL_EXIT':
-            percentage = tm_result.get('percentage', 0.0)
+        if tm_result.get("action") == "PARTIAL_EXIT":
+            percentage = tm_result.get("percentage", 0.0)
             if _execute_partial_exit(percentage):
                 trade_manager.execute_partial_exit(pnl=0.0)
                 logger.info("Partial exit completed (%.0f%%).", percentage * 100)
             else:
                 logger.warning("Partial exit skipped (size below min or no position).")
                 if trade_manager.trade_state is not None:
-                    trade_manager.trade_state.partial_exits.append(
-                        {"time": time.time(), "skipped": True}
-                    )
+                    trade_manager.trade_state.partial_exits.append({"time": time.time(), "skipped": True})
 
-        if tm_result.get('action') == 'WARNING':
-            logger.warning(tm_result.get('reason', 'Trade manager warning'))
+        if tm_result.get("action") == "WARNING":
+            logger.warning(tm_result.get("reason", "Trade manager warning"))
     else:
         _close_trade_manager()
-        # NO ENTRY TRACKING (bot restarted with open positions)
-        # CRITICAL: Don't apply regime break logic without entry context!
-        # Only apply VERY conservative stops for true catastrophic scenarios
-        logger.warning(f"⚠️  No entry Z-score tracked (restart scenario). Current Z={latest_zscore:.2f}")
-
-        # Only trigger on EXTREME divergence (much higher threshold)
+        logger.warning("No entry Z-score tracked (restart scenario). Current Z=%.2f", latest_zscore)
         if abs(latest_zscore) > 8.0:
-            msg = f"🔴 KILL-SWITCH TRIGGERED: Catastrophic Z-score ({latest_zscore:.2f}) without entry context"
+            msg = (
+                "KILL-SWITCH TRIGGERED: Catastrophic Z-score (%.2f) without entry context"
+                % latest_zscore
+            )
             logger.error(msg)
             print(msg)
+            set_last_switch_reason("")
             return 2
-        else:
-            logger.info(f"Holding position (no entry context). Will close on mean reversion only.")
-        
-    # 3. FUNDING BLEED GUARD (lowest priority)
-    from func_position_calls import get_account_state
-    state = get_account_state()
-    total_unrealized_pnl = 0.0
-    total_funding_cost = 0.0
+        logger.info("Holding position (no entry context). Will close on mean reversion only.")
 
-    for pos in state.get("positions", []):
-        upl = float(pos.get("upl", 0))
-        funding = float(pos.get("fundingFee", 0))
-        total_unrealized_pnl += upl
-        total_funding_cost += abs(funding) if funding < 0 else 0
-
+    # Funding bleed guard (lowest priority).
     if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:
         funding_ratio = (total_funding_cost / total_unrealized_pnl) * 100
         if funding_ratio > 30:
@@ -1869,16 +2026,17 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             )
             logger.warning(msg)
             print(msg)
+            set_last_switch_reason("")
             _close_trade_manager()
             return 2
 
-    # 4. MEAN REVERSION (no entry context)
+    # Mean reversion when no entry context exists.
     if entry_z is None and abs(latest_zscore) <= EXIT_Z:
-        msg = f"🟢 KILL-SWITCH TRIGGERED: Mean reversion exit (no entry context) - Z={latest_zscore:.4f}"
+        msg = "KILL-SWITCH TRIGGERED: Mean reversion exit (no entry context) - Z=%.4f" % latest_zscore
         logger.info(msg)
         print(msg)
+        set_last_switch_reason("")
         return 2
 
-    # 5. MONITORING: Hold position
     _log_hold_position(latest_zscore)
     return kill_switch

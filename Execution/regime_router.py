@@ -478,13 +478,18 @@ class RegimeRouter:
         except (TypeError, ValueError):
             base_liq_ratio = 0.0
 
+        liq_ratio_cap = 3.0
+
+        def _capped_min_ratio(floor_ratio):
+            return min(max(base_liq_ratio, floor_ratio), liq_ratio_cap)
+
         if regime == "TREND":
             return {
                 "allow_new_entries": True,
                 "entry_z": 2.6,
                 "entry_z_max": 3.6,
                 "min_persist_bars": 5,
-                "min_liquidity_ratio": max(base_liq_ratio, 2.5),
+                "min_liquidity_ratio": _capped_min_ratio(2.0),
                 "size_multiplier": 0.5,
             }
         if regime == "RISK_OFF":
@@ -493,7 +498,7 @@ class RegimeRouter:
                 "entry_z": 999.0,
                 "entry_z_max": 999.0,
                 "min_persist_bars": 6,
-                "min_liquidity_ratio": max(base_liq_ratio, 3.0),
+                "min_liquidity_ratio": _capped_min_ratio(3.0),
                 "size_multiplier": 0.0,
             }
         return {
@@ -501,7 +506,7 @@ class RegimeRouter:
             "entry_z": 2.0,
             "entry_z_max": 3.0,
             "min_persist_bars": 4,
-            "min_liquidity_ratio": max(base_liq_ratio, 1.5),
+            "min_liquidity_ratio": _capped_min_ratio(1.5),
             "size_multiplier": 1.0,
         }
 
@@ -565,7 +570,7 @@ def resolve_regime_policy_overrides(mode, decision):
 
     min_liq = _safe_float(_decision_get(decision, "min_liquidity_ratio", None), None)
     if min_liq is not None:
-        overrides["min_liquidity_ratio"] = max(min_liq, 0.0)
+        overrides["min_liquidity_ratio"] = min(max(min_liq, 0.0), 3.0)
 
     size_mult = _safe_float(_decision_get(decision, "size_multiplier", None), None)
     if size_mult is not None:

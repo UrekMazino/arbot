@@ -52,9 +52,19 @@ StatBot employs a dual-process architecture (`main_execution.py`):
     *   **Positive Z (> 2.0)**: Sell the spread (Short Asset A, Long Asset B).
     *   **Negative Z (< -2.0)**: Buy the spread (Long Asset A, Short Asset B).
 
-### Exit Criteria (🟢)
-*   **Mean Reversion**: `|Z-Score| <= 0.5`.
-*   **Sustained Sign Flip**: Exits only after the Z-score crosses the opposite zone and persists there for ~5 minutes, avoiding false exits on brief oscillations.
+### Exit Criteria (Current Runtime Order)
+Exits are evaluated as a priority stack while in position:
+
+1. **Tier 5 Profit Take (adaptive)**: Exit when floating PnL reaches a dynamic USDT target based on entry notional.
+2. **Tier 1 Hard Stop**: Exit when trade PnL% reaches the configured hard-stop threshold.
+3. **Tier 2-4 Cointegration Exits (optional)**: Disabled by default; can be enabled via env flags.
+4. **ATM Dynamic Exit**: Advanced Trade Manager handles trailing stop, partial exit, max hold, and mean-reversion logic.
+5. **Funding Bleed Guard**: Exit if funding cost materially erodes unrealized gains.
+6. **No-entry-context fallback**: Conservative catastrophic-stop and mean-reversion fallback when entry context is missing (e.g., restart with open positions).
+
+Notes:
+* In normal operation, mean reversion is primarily handled by ATM.
+* Hard-stop exits can trigger a post-close pair switch.
 
 ---
 
@@ -88,17 +98,23 @@ A periodic health check (default every 1 hour) calculates a score based on the f
 
 ### Safety Exits
 
-#### Advanced Trade Manager (Dynamic Exits)
-The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry context and recent Z-history to avoid false exits.
+#### Hybrid Exit Stack + ATM
+The runtime exit controller applies a hybrid stack before/with ATM:
 
-**Exit conditions (priority order):**
-1. **Max Hold**: Default 6 hours (warning at 4 hours).
-2. **Regime Break**: Sustained sign flip or divergence > 1.5 sigma from entry.
-3. **Trailing Stop**: Activates near the mean and trails by 0.5 sigma.
-4. **Partial Exit**: Default 50% when `|Z| < 1.0` (skips if below min/lot size).
-5. **Mean Reversion**: `|Z| <= EXIT_Z`.
-6. **Dynamic Stall**: Adaptive window (30-120 min) and epsilon (0.2-0.5 sigma); warns above 1.0 and exits above 1.5 when improvement is insufficient.
-7. **Funding Bleed Guard**: Exits when funding costs materially erode unrealized gains.
+1. **Tier 5 Profit Take (adaptive)**
+   - Target USDT = `clamp(entry_notional * STATBOT_PROFIT_TARGET_PCT, STATBOT_PROFIT_TARGET_MIN_USDT, STATBOT_PROFIT_TARGET_MAX_USDT)`
+   - Defaults: `0.5%`, min `5`, max `50`.
+2. **Tier 1 Hard Stop**
+   - Triggers at `-STATBOT_HARD_STOP_PNL_PCT` (default `-5%`).
+3. **Tier 2-4 Cointegration tiers (optional, default OFF)**
+   - Controlled by `STATBOT_ENABLE_COINT_EXIT_TIERS=1`.
+   - Tier 2 includes flicker protection:
+     - confirm count: `STATBOT_TIER2_CONFIRMATION_COUNT` (default `3`)
+     - min-loss override: `STATBOT_TIER2_MIN_LOSS_PCT` (default `1.5`)
+4. **ATM Dynamic Exits**
+   - Trailing stop, partial exits, mean reversion, max hold, and stall logic.
+5. **Funding Bleed Guard**
+6. **No-entry-context fallback**
 
 **Not exits:**
 - Z oscillating near entry or improving toward the mean.
@@ -109,7 +125,7 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
 - Funding fees and unrealized PnL are pulled from OKX position data.
 - Warnings are logged at 1h/2h/3h trade duration milestones.
 
-*   **Fail-Safe Stop Loss**: Hard 3% price move limit per asset.
+*   **Fail-Safe Stop Loss**: 3% fail-safe remains in sizing/safety checks; in-position hybrid hard-stop defaults to 5% PnL unless overridden by env.
 *   **Circuit Breaker**: 5% total account drawdown triggers a "Panic Close" of all positions and system halt.
 
 ### Strategy Memory
@@ -122,7 +138,8 @@ The bot delegates exit decisions to `AdvancedTradeManager`, which uses entry con
     - `manual`: 3 days
     - `settle_ccy_filter`: 30 days
     - default: 7 days
-*   **Cooldown**: Mandatory **24-hour wait** between pair switches to prevent over-trading and fee erosion.
+*   **Cooldown**: Base **24-hour wait** between pair switches (with emergency override for critically bad health).
+*   **Switch Rate Limiter / Defensive Mode**: Max switches per hour (`STATBOT_MAX_SWITCHES_PER_HOUR`, default `5`). If exceeded, switching is blocked for `STATBOT_SWITCH_COOLDOWN_SECONDS` (default `3600s`) and the bot enters defensive mode (skips new entries until cooldown expires).
 *   **Re-Entry Cooldown**: 5-minute wait after exit before re-entering same pair to prevent clustering at same Z-level.
 *   **Pair Universe Refresh**: If a switch finds no eligible replacement, Execution runs `Strategy/main_strategy.py` to regenerate `Strategy/output/2_cointegrated_pairs.csv` and waits 5 minutes before retrying. The refresh loop continues until a valid pair is available.
 *   **Strategy Outputs**: Strategy writes artifacts to `Strategy/output` (`1_price_list.json`, `2_cointegrated_pairs.csv`, `3_backtest_file.csv`, `4_summary_report.csv`).

@@ -64,6 +64,7 @@ from func_pair_state import (
     can_switch,
     set_last_switch_time,
     get_last_switch_time,
+    get_switch_rate_limit_remaining,
     record_trade_result,
     record_pair_trade_result,
     get_pair_history_stats,
@@ -107,6 +108,12 @@ _PNL_FALLBACK_ACTIVE = False
 _PNL_FALLBACK_BASIS = ""
 _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
+FORCED_SWITCH_EXIT_REASONS = {
+    "exit_tier_1_stop_loss",
+    "exit_tier_2_coint_losing",
+    "exit_tier_3_coint_grace",
+    "exit_tier_4_divergence",
+}
 
 
 def _should_log_pnl(total_pnl):
@@ -187,9 +194,46 @@ def _sanitize_run_end_detail(detail, max_len=300):
     return text
 
 
+def _run_end_already_logged():
+    log_path = str(os.getenv("STATBOT_LOG_PATH", "") or "").strip()
+    if not log_path:
+        return False
+    path = Path(log_path)
+    if not path.exists():
+        return False
+    try:
+        with path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 16384)
+            if read_size <= 0:
+                return False
+            f.seek(-read_size, os.SEEK_END)
+            tail = f.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+
+    lines = [line.strip() for line in tail.splitlines() if line.strip()]
+    if not lines:
+        return False
+    for line in reversed(lines[-40:]):
+        if "RUN_END:" in line:
+            try:
+                ts_text = line[:19]
+                ts_dt = datetime.strptime(ts_text, "%Y-%m-%d %H:%M:%S")
+                if abs(time.time() - ts_dt.timestamp()) <= 600:
+                    return True
+            except Exception:
+                return True
+    return False
+
+
 def _log_run_end(reason, detail="", exit_code=None):
     global _RUN_END_LOGGED
     if _RUN_END_LOGGED:
+        return
+    if _run_end_already_logged():
+        _RUN_END_LOGGED = True
         return
     _RUN_END_LOGGED = True
     reason = str(reason or "").strip() or "unknown"
@@ -762,9 +806,17 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     elapsed = (time.time() - last_switch) / 3600
 
     if not can_switch(cooldown_hours=24, health_score=health_score, emergency_threshold=40):
-        logger.warning("Switch aborted: Cooldown active (%.1fh elapsed, 24h required)", elapsed)
-        if health_score is not None:
-            logger.warning("Health score: %s/100 (emergency override requires < 40)", health_score)
+        rate_limit_remaining = get_switch_rate_limit_remaining()
+        if rate_limit_remaining > 0:
+            logger.warning(
+                "Switch aborted: rate limiter active (%.0fs remaining). Entering defensive mode.",
+                rate_limit_remaining,
+            )
+            set_last_switch_reason("switch_rate_limited")
+        else:
+            logger.warning("Switch aborted: Cooldown active (%.1fh elapsed, 24h required)", elapsed)
+            if health_score is not None:
+                logger.warning("Health score: %s/100 (emergency override requires < 40)", health_score)
         return SWITCH_RESULT_BLOCKED
 
     # Log if emergency override was used
@@ -1049,6 +1101,12 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
         if save_active_pair(next_t1, next_t2):
             logger.info("New pair saved to state/active_pair.json")
+            try:
+                from func_regime_state import reset_regime_state
+                reset_regime_state(reason=f"pair_switch:{switch_reason}")
+                logger.info("Regime state reset after pair switch.")
+            except Exception as exc:
+                logger.warning("Failed to reset regime state after pair switch: %s", exc)
             reset_health_failure(curr_t1, curr_t2)
             set_last_switch_time()
             return SWITCH_RESULT_SWITCHED
@@ -1932,17 +1990,20 @@ if __name__ == "__main__":
             if kill_switch == 2:
                 status_dict["message"] = "Closing existing trades..."
                 save_status(status_dict)
-                
-                # Phase 3: Record trade result before closing
-                # total_pnl was calculated at the start of the loop
+
+                # Use post-close realized equity as source of truth for trade outcome.
                 blacklist_pair = False
                 entry_equity = get_entry_equity()
                 entry_notional = get_entry_notional()
-                equity_change = None
+                switch_reason_after_close = get_last_switch_reason() or ""
+                force_switch_after_close = switch_reason_after_close in FORCED_SWITCH_EXIT_REASONS
+                reconciliation = None
+                pre_close_equity = equity_usdt
+                pre_close_equity_change = None
 
-                # Calculate equity change and reconcile with position PnL
-                if entry_equity is not None and equity_usdt is not None and entry_notional:
-                    equity_change = equity_usdt - entry_equity
+                # Pre-close diagnostics (estimate only; not used for trade classification).
+                if entry_equity is not None and pre_close_equity is not None and entry_notional:
+                    pre_close_equity_change = pre_close_equity - entry_equity
 
                     # Fetch actual funding fees from OKX
                     funding_fees = fee_tracker.fetch_funding_fees(account_session, ticker_1, ticker_2)
@@ -1950,7 +2011,7 @@ if __name__ == "__main__":
                         logger.info("Funding fees fetched from OKX: %.4f USDT", funding_fees)
 
                     costs = fee_tracker.record_trade_costs(entry_notional)
-                    reconciliation = fee_tracker.reconcile_equity_drift(total_pnl, equity_change)
+                    reconciliation = fee_tracker.reconcile_equity_drift(total_pnl, pre_close_equity_change)
                     logger.info(
                         "Trade costs: entry_fee=%.4f exit_fee=%.4f slippage=%.4f total=%.4f",
                         costs["entry_fee"],
@@ -1970,13 +2031,13 @@ if __name__ == "__main__":
                         reconciliation["unexplained"],
                     )
 
-                    # Warn if large discrepancy between position PnL and equity change
-                    pnl_diff = abs(total_pnl - equity_change)
+                    # Warn if large discrepancy between position PnL and pre-close equity estimate.
+                    pnl_diff = abs(total_pnl - pre_close_equity_change)
                     if pnl_diff > 0.10:  # 10 cents threshold
                         logger.warning(
-                            "Large PnL discrepancy detected: position_pnl=%.2f equity_change=%.2f diff=%.2f",
+                            "Large PnL discrepancy detected: position_pnl=%.2f pre_close_equity_change=%.2f diff=%.2f",
                             total_pnl,
-                            equity_change,
+                            pre_close_equity_change,
                             pnl_diff,
                         )
 
@@ -1989,13 +2050,37 @@ if __name__ == "__main__":
                             unexplained_pct,
                         )
 
-                # Use equity_change for WIN/LOSS classification (source of truth)
-                # Fall back to total_pnl only if equity_change is unavailable
-                is_win = equity_change > 0 if equity_change is not None else total_pnl > 0
-                actual_pnl = equity_change if equity_change is not None else total_pnl
+                kill_switch = close_all_positions(kill_switch)
 
-                record_trade_result(is_win)
+                post_equity_usdt = None
+                try:
+                    balance_res = account_session.get_account_balance()
+                    if balance_res.get("code") == "0":
+                        details = balance_res.get("data", [{}])[0].get("details", [])
+                        for det in details:
+                            if det.get("ccy") == "USDT":
+                                post_equity_usdt = float(det.get("eq", 0))
+                                break
+                except Exception:
+                    post_equity_usdt = None
+
+                # Realized trade PnL: prefer post-close equity delta vs entry equity.
+                if entry_equity is not None and post_equity_usdt is not None:
+                    actual_pnl = post_equity_usdt - entry_equity
+                elif pre_close_equity_change is not None:
+                    actual_pnl = pre_close_equity_change
+                    logger.warning(
+                        "Post-close equity unavailable; using pre-close equity delta for trade result."
+                    )
+                else:
+                    actual_pnl = total_pnl
+                    logger.warning(
+                        "Entry/post-close equity unavailable; falling back to pair PnL for trade result."
+                    )
+
+                is_win = actual_pnl > 0
                 result_label = "WIN" if is_win else "LOSS"
+                record_trade_result(is_win)
 
                 # Log funding fees from reconciliation
                 funding_fees = reconciliation.get("funding", 0.0) if reconciliation else 0.0
@@ -2004,18 +2089,20 @@ if __name__ == "__main__":
 
                 logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
 
-                # Use equity-based PnL as primary source of truth for alerts and history
+                # Use realized post-close metrics for alert output.
                 alert_pnl = actual_pnl
-                alert_pnl_pct = pnl_pct
-                alert_equity = equity_usdt
+                if tradeable_capital_usdt > 0:
+                    alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
+                else:
+                    alert_pnl_pct = 0.0
+                alert_equity = post_equity_usdt if post_equity_usdt is not None else pre_close_equity
                 alert_session_pnl = session_pnl
                 alert_session_pnl_pct = session_pnl_pct
-                if entry_equity is not None and equity_usdt is not None:
-                    alert_pnl = equity_usdt - entry_equity
-                    if tradeable_capital_usdt > 0:
-                        alert_pnl_pct = (alert_pnl / tradeable_capital_usdt) * 100
+                if alert_equity is not None and starting_equity > 0:
+                    alert_session_pnl = alert_equity - starting_equity
+                    alert_session_pnl_pct = (alert_session_pnl / starting_equity) * 100
 
-                # Use the same actual_pnl for pair history to maintain consistency
+                # Update pair history with realized PnL.
                 history_pnl = actual_pnl
                 if record_pair_trade_result(ticker_1, ticker_2, history_pnl):
                     stats = get_pair_history_stats(ticker_1, ticker_2)
@@ -2047,34 +2134,12 @@ if __name__ == "__main__":
                                 stats["loss_usdt"],
                             )
 
-                kill_switch = close_all_positions(kill_switch)
-
-                post_equity_usdt = None
-                try:
-                    balance_res = account_session.get_account_balance()
-                    if balance_res.get("code") == "0":
-                        details = balance_res.get("data", [{}])[0].get("details", [])
-                        for det in details:
-                            if det.get("ccy") == "USDT":
-                                post_equity_usdt = float(det.get("eq", 0))
-                                break
-                except Exception:
-                    post_equity_usdt = None
-
-                if post_equity_usdt is not None:
-                    # Update session PnL only (don't overwrite per-trade alert_pnl)
-                    if starting_equity > 0:
-                        alert_session_pnl = post_equity_usdt - starting_equity
-                        alert_session_pnl_pct = (alert_session_pnl / starting_equity) * 100
-                    # Note: alert_pnl and alert_pnl_pct already set correctly above (lines 1793-1801)
-                    # DO NOT recalculate here as entry_equity is from previous trade
-
                 logger.warning(
                     "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%)",
                     result_label,
                     alert_pnl,
                     alert_pnl_pct,
-                    alert_equity,
+                    alert_equity if alert_equity is not None else 0.0,
                     alert_session_pnl,
                     alert_session_pnl_pct,
                 )
@@ -2099,6 +2164,33 @@ if __name__ == "__main__":
                             logger.critical("No replacement pairs available after blacklist. Hard stop.")
                             sys.exit(1)
                         logger.error("Pair switch blocked after blacklist.")
+                elif force_switch_after_close:
+                    if lock_on_pair:
+                        logger.warning(
+                            "Forced post-exit pair switch blocked by lock_on_pair (reason=%s).",
+                            switch_reason_after_close,
+                        )
+                    else:
+                        status_dict["message"] = f"Post-exit switch ({switch_reason_after_close}); switching pair..."
+                        save_status(status_dict)
+                        switch_result = _switch_to_next_pair(
+                            health_score=0,
+                            switch_reason=switch_reason_after_close,
+                        )
+                        if switch_result == SWITCH_RESULT_SWITCHED:
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            sys.exit(3)
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after forced post-exit switch.")
+                            sys.exit(1)
+                        logger.error(
+                            "Post-exit forced switch blocked (reason=%s).",
+                            switch_reason_after_close,
+                        )
+                    set_last_switch_reason("")
 
                 # Sleep for 5 seconds
                 time.sleep(5)

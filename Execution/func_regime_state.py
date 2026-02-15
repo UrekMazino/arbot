@@ -123,3 +123,30 @@ def update_regime_state(decision, inputs=None):
 
     save_regime_state(state)
     return state
+
+
+def reset_regime_state(reason="pair_switch", mode=None, regime="RANGE"):
+    previous = load_regime_state()
+    fresh = _default_state()
+
+    if mode is None:
+        mode = previous.get("mode", "off")
+    mode_value = str(mode or "off").strip().lower()
+    if mode_value not in ("off", "shadow", "active"):
+        mode_value = "off"
+
+    regime_value = str(regime or "RANGE").strip().upper()
+    if regime_value not in ("RANGE", "TREND", "RISK_OFF"):
+        regime_value = "RANGE"
+
+    now = time.time()
+    fresh["mode"] = mode_value
+    fresh["current_regime"] = regime_value
+    fresh["candidate_regime"] = regime_value
+    fresh["since_ts"] = now
+    fresh["diagnostics"] = {
+        "reset_reason": str(reason or "pair_switch"),
+        "reset_ts": now,
+    }
+    save_regime_state(fresh)
+    return fresh

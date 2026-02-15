@@ -2,6 +2,22 @@
 
 All notable changes to StatBot are documented in this file.
 
+## [Unreleased]
+
+### Added
+- Regime Router V1 Phase 0 (evaluation-only) with `off|shadow|active` modes.
+- New regime evaluation module: `Execution/regime_router.py`.
+- New regime state persistence module: `Execution/func_regime_state.py`.
+- New runtime state file: `Execution/state/regime_state.json`.
+- Structured regime logs: `REGIME_STATUS`, `REGIME_CHANGE`, `REGIME_POLICY`, `REGIME_GATE`.
+- Regime router environment variables in `Execution/.env.example`.
+- Router test suite: `Execution/tests/test_regime_router.py`.
+
+### Changed
+- Phase 0 uses shadow evaluation only; no entry/exit or kill-switch behavior changes.
+- `pnl_fallback` risk signal now applies only when fallback occurs while in-position.
+- Thin-liquidity classification is now depth-ratio-led (history low label alone does not force `RISK_OFF`).
+
 ## [1.0.0] - 2026-01-29
 
 ### Added

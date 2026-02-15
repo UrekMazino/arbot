@@ -42,12 +42,18 @@ from func_position_calls import (
     check_inst_status,
     get_pos_data_from_state
 )
-from func_price_calls import get_ticker_trade_liquidity
+from func_price_calls import (
+    get_ticker_trade_liquidity,
+    get_ticker_liquidity_analysis,
+    get_price_klines,
+    normalize_candlesticks,
+)
 from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
 from func_save_status import save_status
+from regime_router import RegimeInput, RegimeRouter
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
@@ -152,6 +158,24 @@ def _get_pair_idle_timeout_min():
     if minutes < 0:
         minutes = 0.0
     return minutes
+
+
+def _get_regime_eval_seconds():
+    raw = os.getenv("STATBOT_REGIME_EVAL_SECONDS", "60")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 60
+    if value < 10:
+        value = 10
+    return value
+
+
+def _get_regime_market_symbol():
+    symbol = str(os.getenv("STATBOT_REGIME_MARKET_SYMBOL", "BTC-USDT-SWAP") or "").strip().upper()
+    if not symbol:
+        return "BTC-USDT-SWAP"
+    return symbol
 
 
 def _sanitize_run_end_detail(detail, max_len=300):
@@ -1283,6 +1307,24 @@ if __name__ == "__main__":
     manual_close_clear_count = 0
     manual_close_clear_threshold = 3
     fee_tracker = FeeTracker()
+    regime_router = RegimeRouter()
+    regime_mode = regime_router.mode
+    regime_eval_seconds = _get_regime_eval_seconds()
+    regime_market_symbol = _get_regime_market_symbol()
+    last_regime_eval_ts = 0.0
+    last_regime_decision = None
+
+    if regime_mode == "off":
+        logger.info("Regime router disabled (STATBOT_REGIME_ROUTER_MODE=off).")
+    elif regime_mode == "shadow":
+        logger.info(
+            "Regime router enabled in SHADOW mode: evaluation/logging only (no execution changes)."
+        )
+    else:
+        logger.warning(
+            "Regime router mode '%s' enabled in evaluation-only phase (no execution changes yet).",
+            regime_mode,
+        )
 
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
@@ -1524,6 +1566,103 @@ if __name__ == "__main__":
             session_pnl_pct = (session_pnl / starting_equity * 100) if starting_equity > 0 else 0.0
 
             _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
+
+            if regime_mode != "off":
+                should_eval_regime = (
+                    last_regime_decision is None
+                    or (current_time - last_regime_eval_ts) >= regime_eval_seconds
+                )
+                if should_eval_regime:
+                    try:
+                        market_raw = get_price_klines(
+                            regime_market_symbol,
+                            bar="1m",
+                            limit=180,
+                            use_start_time=False,
+                            ascending=False,
+                        )
+                        market_candles = normalize_candlesticks(market_raw, ascending=True) if market_raw else []
+                        liq_long = get_ticker_liquidity_analysis(signal_positive_ticker)
+                        liq_short = get_ticker_liquidity_analysis(signal_negative_ticker)
+                        # Treat fallback as risk signal only when we are actually in-position.
+                        in_position_now = bool(is_p_open or is_n_open)
+                        fallback_active = bool(
+                            pnl_info
+                            and pnl_info.get("source") == "fallback"
+                            and in_position_now
+                        )
+
+                        per_leg_target_usdt = max(tradeable_capital_usdt * 0.5, 1.0)
+                        entry_notional = get_entry_notional()
+                        if entry_notional:
+                            try:
+                                entry_notional_val = float(entry_notional)
+                            except (TypeError, ValueError):
+                                entry_notional_val = 0.0
+                            if entry_notional_val > 0:
+                                per_leg_target_usdt = max(entry_notional_val * 0.5, 1.0)
+
+                        regime_input = RegimeInput(
+                            ts=current_time,
+                            ticker_1=ticker_1,
+                            ticker_2=ticker_2,
+                            latest_zscore=latest_zscore,
+                            z_metrics=metrics or {},
+                            market_candles=market_candles,
+                            liq_long=liq_long or {},
+                            liq_short=liq_short or {},
+                            per_leg_target_usdt=per_leg_target_usdt,
+                            pnl_fallback_active=fallback_active,
+                            session_drawdown_pct=session_pnl_pct,
+                        )
+                        decision = regime_router.evaluate(regime_input)
+                        prev_regime = last_regime_decision.regime if last_regime_decision else decision.regime
+                        last_regime_decision = decision
+                        last_regime_eval_ts = current_time
+
+                        reasons_joined = "|".join(decision.reason_codes) if decision.reason_codes else "none"
+                        diagnostics = decision.diagnostics or {}
+                        logger.info(
+                            "REGIME_STATUS: mode=%s regime=%s candidate=%s conf=%.2f trend=%.3f vol_pct=%.2f depth=%.2f coint=%d fallback=%d reasons=%s",
+                            decision.mode,
+                            decision.regime,
+                            decision.candidate_regime,
+                            decision.confidence,
+                            diagnostics.get("trend_strength", 0.0),
+                            diagnostics.get("vol_percentile", 0.0),
+                            diagnostics.get("liq_depth_ratio_min", 0.0),
+                            int(metrics.get("coint_flag", 0)),
+                            1 if fallback_active else 0,
+                            reasons_joined,
+                        )
+                        if decision.changed and prev_regime != decision.regime:
+                            logger.warning(
+                                "REGIME_CHANGE: from=%s to=%s conf=%.2f hold=%.0fs reasons=%s",
+                                prev_regime,
+                                decision.regime,
+                                decision.confidence,
+                                diagnostics.get("hold_seconds", 0.0),
+                                reasons_joined,
+                            )
+
+                        logger.info(
+                            "REGIME_POLICY: regime=%s entry_z=%.2f entry_z_max=%.2f min_persist=%d min_liq=%.2f size_mult=%.2f",
+                            decision.regime,
+                            decision.entry_z,
+                            decision.entry_z_max,
+                            decision.min_persist_bars,
+                            decision.min_liquidity_ratio,
+                            decision.size_multiplier,
+                        )
+                        if regime_mode == "shadow" and not decision.allow_new_entries:
+                            gate_reason = decision.reason_codes[0] if decision.reason_codes else "n/a"
+                            logger.info(
+                                "REGIME_GATE: regime=%s allow_new_entries=0 reason=%s mode=shadow",
+                                decision.regime,
+                                gate_reason,
+                            )
+                    except Exception as regime_exc:
+                        logger.warning("Regime router evaluation failed: %s", regime_exc)
 
             # Check per-pair loss limit (2% of tradeable capital)
             per_pair_loss_limit_pct = 0.02  # 2% per pair before forcing switch

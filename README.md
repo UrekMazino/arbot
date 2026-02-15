@@ -133,6 +133,7 @@ Runtime state is stored under `OKXStatBot/Execution/state`:
 - `active_pair.json`
 - `status.json`
 - `pair_strategy_state.json`
+- `regime_state.json` (Regime Router state, when enabled)
 
 ### Reports (v1 evidence packs)
 After each run, StatBot can generate a report pack under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS`:
@@ -182,6 +183,38 @@ Behavior:
 - If a leg fails the ratio, the bot attempts to downsize per-leg capital to meet the minimum.
 - If the ratio still fails, the bot progressively relaxes the min ratio (default steps: 3.0 -> 2.5 -> 2.0 -> 1.5 -> 1.0).
 - If the adjusted target drops below the exchange min order size, the entry is skipped.
+
+### Regime Router (V1 Phase 0)
+Phase 0 is **evaluation-only**. It does not change entry, exit, sizing, or kill-switch behavior.
+
+Enable shadow mode:
+```env
+STATBOT_REGIME_ROUTER_MODE=shadow
+```
+
+Optional tuning:
+```env
+STATBOT_REGIME_MARKET_SYMBOL=BTC-USDT-SWAP
+STATBOT_REGIME_EVAL_SECONDS=60
+STATBOT_REGIME_MIN_HOLD_SECONDS=1200
+STATBOT_REGIME_CONFIRM_COUNT=2
+STATBOT_REGIME_TREND_THRESHOLD=1.2
+STATBOT_REGIME_VOL_SHOCK_PCT=0.95
+STATBOT_REGIME_VOL_EXPANSION=0.5
+STATBOT_REGIME_THIN_DEPTH_RATIO=1.2
+STATBOT_REGIME_RISKOFF_DRAWDOWN_PCT=1.5
+```
+
+Expected logs in shadow mode:
+- `REGIME_STATUS`
+- `REGIME_CHANGE`
+- `REGIME_POLICY`
+- `REGIME_GATE` (informational only in shadow mode)
+
+Smoke test:
+```bash
+python -m pytest -q Execution/tests/test_regime_router.py
+```
 
 ## Features
 

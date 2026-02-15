@@ -39,6 +39,7 @@ StatBot employs a dual-process architecture (`main_execution.py`):
 2.  **Market Data Update**: Fetches 1m Klines and live Orderbook (5-level depth) mid-prices.
 3.  **Circuit Breaker**: Evaluates cumulative P&L against `tradeable_capital_usdt`.
 4.  **Decision Engine**: Evaluates Z-score against persistence requirements and health metrics.
+5.  **Regime Router (Phase 0, Optional)**: Evaluates market regime and writes diagnostics/state logs in `shadow` mode without changing trade behavior.
 
 ---
 
@@ -164,6 +165,12 @@ Each trading cycle logs comprehensive performance metrics:
 - **Entry Signal Snapshots**: One-time startup balance snapshot plus pre-trade snapshots (USDT availBal/availEq) at entry signal
 - **PNL Alerts**: `PNL_ALERT` fires on session threshold breaches and trade closes; trade-close alerts log after positions close and equity refresh
 
+**Additional Enhancements (2026-02):**
+- **Regime Router V1 Phase 0**: Added optional regime evaluation module with `off|shadow|active` modes. Current rollout is evaluation-only.
+- **Structured Regime Logs**: `REGIME_STATUS`, `REGIME_CHANGE`, `REGIME_POLICY`, and `REGIME_GATE` for attribution and verification.
+- **Regime State Persistence**: Router state is persisted in `Execution/state/regime_state.json` (`current_regime`, `candidate_regime`, confidence, pending state, diagnostics).
+- **Conservative Router Inputs**: `pnl_fallback` contributes to risk only while in-position; thin-liquidity classification is depth-ratio-led.
+
 ### Log Rotation and Retention
 StatBot writes per-run logs to `OKXStatBot/Logs/v1` (or `STATBOT_LOG_PATH` if set) with a timestamped filename.
 Rotation prevents indefinite growth. Control it via `.env`:
@@ -184,6 +191,19 @@ Runtime state is stored under `OKXStatBot/Execution/state`:
 - `active_pair.json`
 - `status.json`
 - `pair_strategy_state.json`
+- `regime_state.json` (Regime Router V1 state when enabled)
+
+### Regime Router V1 Phase 0 (Evaluation-Only)
+Regime Router is currently integrated in **Phase 0**. It is safe to run in production-like demo sessions because it does not alter execution behavior yet.
+
+Modes:
+- `STATBOT_REGIME_ROUTER_MODE=off`: disabled.
+- `STATBOT_REGIME_ROUTER_MODE=shadow`: evaluate + log + persist state; no enforcement.
+- `STATBOT_REGIME_ROUTER_MODE=active`: currently still evaluation-only during Phase 0 rollout.
+
+Expected verification artifacts in shadow mode:
+- Log lines: `REGIME_STATUS`, `REGIME_CHANGE`, `REGIME_POLICY`, `REGIME_GATE`.
+- State file updates: `Execution/state/regime_state.json`.
 
 ### Reports (V1 Evidence Pack)
 StatBot can generate a per-run report pack under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS` that captures effectiveness data:

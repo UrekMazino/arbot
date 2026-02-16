@@ -1,5 +1,6 @@
 import datetime
 import math
+import os
 from bisect import bisect_left
 from collections import deque
 
@@ -10,6 +11,21 @@ DEFAULT_BAR = "1m"
 DEFAULT_LIMIT = 200
 MAX_OKX_CANDLE_LIMIT = 100
 _LIQUIDITY_HISTORY = {}
+
+def _get_candle_shortfall_warn_min():
+    """
+    Minimum missing-candle count that should emit a terminal warning.
+    Default 2 suppresses noisy 1-candle shortfalls (e.g., 199/200).
+    """
+    raw = os.getenv("STATBOT_CANDLE_SHORTFALL_WARN_MIN", "2")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 2
+    if value < 1:
+        value = 1
+    return value
+
 
 # Get trade liquidity for ticker
 def get_ticker_trade_liquidity(ticker, limit=50, session=None):
@@ -584,7 +600,13 @@ def get_price_klines(ticker, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, session=None,
             break
 
     if len(data_all) < limit_val:
-        print(f"Warning: Got {len(data_all)} candles, expected {limit_val}")
+        missing = limit_val - len(data_all)
+        warn_min = _get_candle_shortfall_warn_min()
+        if missing >= warn_min:
+            print(
+                f"Warning: Got {len(data_all)} candles, expected {limit_val} "
+                f"(missing {missing}) for {ticker} {bar}"
+            )
 
     data_all = data_all[:limit_val]
     if ascending:

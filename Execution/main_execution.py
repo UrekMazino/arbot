@@ -7,6 +7,7 @@ import math
 import time
 import sys
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 from func_log_setup import get_logger
@@ -53,7 +54,12 @@ from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
 from func_save_status import save_status
-from regime_router import RegimeInput, RegimeRouter, should_block_new_entries
+from regime_router import RegimeInput, RegimeRouter, should_block_new_entries as should_block_regime_entries
+from strategy_router import (
+    StrategyInput,
+    StrategyRouter,
+    should_block_new_entries as should_block_strategy_entries,
+)
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
@@ -110,6 +116,7 @@ _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
 FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_1_stop_loss",
+    "exit_tier_15_riskoff_coint_loss",
     "exit_tier_2_coint_losing",
     "exit_tier_3_coint_grace",
     "exit_tier_4_divergence",
@@ -183,6 +190,53 @@ def _get_regime_market_symbol():
     if not symbol:
         return "BTC-USDT-SWAP"
     return symbol
+
+
+def _get_strategy_eval_seconds():
+    raw = os.getenv("STATBOT_STRATEGY_EVAL_SECONDS", "60")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 60
+    if value < 10:
+        value = 10
+    return value
+
+
+def _get_balance_fetch_timeout_seconds():
+    raw = os.getenv("STATBOT_BALANCE_FETCH_TIMEOUT_SECONDS", "8")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 8.0
+    if value <= 0:
+        value = 8.0
+    return value
+
+
+def _get_account_balance_safe(timeout_seconds=None):
+    timeout = timeout_seconds if timeout_seconds is not None else _get_balance_fetch_timeout_seconds()
+    result = {"response": None, "error": None}
+
+    def _worker():
+        try:
+            result["response"] = account_session.get_account_balance()
+        except Exception as exc:
+            result["error"] = exc
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
+        logger.warning("Account balance request timed out after %.1fs.", timeout)
+        return None
+    if result["error"] is not None:
+        logger.warning("Account balance request failed: %s", result["error"])
+        return None
+    if not isinstance(result["response"], dict):
+        return None
+    return result["response"]
 
 
 def _sanitize_run_end_detail(detail, max_len=300):
@@ -524,30 +578,30 @@ def _set_leverage_for_ticker(ticker, leverage):
 
 
 def _get_available_usdt():
-    try:
-        balance_res = account_session.get_account_balance()
-        if balance_res.get("code") != "0":
-            return 0.0
-        details = balance_res.get("data", [{}])[0].get("details", [])
-        for det in details:
-            if det.get("ccy") == "USDT":
+    balance_res = _get_account_balance_safe()
+    if not balance_res or balance_res.get("code") != "0":
+        return 0.0
+    details = balance_res.get("data", [{}])[0].get("details", [])
+    for det in details:
+        if det.get("ccy") == "USDT":
+            try:
                 return float(det.get("availBal", 0))
-    except Exception as exc:
-        logger.warning("Failed to fetch available USDT: %s", exc)
+            except (TypeError, ValueError):
+                return 0.0
     return 0.0
 
 
 def _get_equity_usdt():
-    try:
-        balance_res = account_session.get_account_balance()
-        if balance_res.get("code") != "0":
-            return 0.0
-        details = balance_res.get("data", [{}])[0].get("details", [])
-        for det in details:
-            if det.get("ccy") == "USDT":
+    balance_res = _get_account_balance_safe()
+    if not balance_res or balance_res.get("code") != "0":
+        return 0.0
+    details = balance_res.get("data", [{}])[0].get("details", [])
+    for det in details:
+        if det.get("ccy") == "USDT":
+            try:
                 return float(det.get("eq", 0))
-    except Exception as exc:
-        logger.warning("Failed to fetch equity USDT: %s", exc)
+            except (TypeError, ValueError):
+                return 0.0
     return 0.0
 
 
@@ -1372,6 +1426,12 @@ if __name__ == "__main__":
     last_regime_eval_ts = 0.0
     last_regime_decision = None
     last_regime_gate_log_ts = 0.0
+    strategy_router = StrategyRouter()
+    strategy_mode = strategy_router.mode
+    strategy_eval_seconds = _get_strategy_eval_seconds()
+    last_strategy_eval_ts = 0.0
+    last_strategy_decision = None
+    last_strategy_gate_log_ts = 0.0
 
     if regime_mode == "off":
         logger.info("Regime router disabled (STATBOT_REGIME_ROUTER_MODE=off).")
@@ -1382,11 +1442,21 @@ if __name__ == "__main__":
     else:
         logger.warning("Regime router ACTIVE mode enabled: gate + policy enforcement is on.")
 
+    if strategy_mode == "off":
+        logger.info("Strategy router disabled (STATBOT_STRATEGY_ROUTER_MODE=off).")
+    elif strategy_mode == "shadow":
+        logger.info(
+            "Strategy router enabled in SHADOW mode: evaluation/logging only (no execution changes)."
+        )
+    else:
+        logger.warning("Strategy router ACTIVE mode enabled: strategy gate + policy enforcement is on.")
+
     # Capture starting equity for session P&L tracking
     starting_equity = 0.0
+    balance_res = None
     try:
-        balance_res = account_session.get_account_balance()
-        if balance_res.get("code") == "0":
+        balance_res = _get_account_balance_safe()
+        if balance_res and balance_res.get("code") == "0":
             details = balance_res.get("data", [{}])[0].get("details", [])
             for det in details:
                 if det.get("ccy") == "USDT":
@@ -1513,6 +1583,8 @@ if __name__ == "__main__":
 
             checks_all = [is_p_open, is_n_open, is_p_active, is_n_active]
             is_manage_new_trades = not any(checks_all)
+            in_position_now = bool(is_p_open or is_n_open)
+            in_position_or_orders = not is_manage_new_trades
 
             if is_restricted_ticker(signal_positive_ticker) or is_restricted_ticker(signal_negative_ticker):
                 if lock_on_pair:
@@ -1606,9 +1678,9 @@ if __name__ == "__main__":
 
             # Get account equity
             try:
-                balance_res = account_session.get_account_balance()
+                balance_res = _get_account_balance_safe()
                 equity_usdt = 0.0
-                if balance_res.get("code") == "0":
+                if balance_res and balance_res.get("code") == "0":
                     details = balance_res.get("data", [{}])[0].get("details", [])
                     for det in details:
                         if det.get("ccy") == "USDT":
@@ -1623,6 +1695,9 @@ if __name__ == "__main__":
 
             _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
 
+            market_candles = None
+            liq_long = None
+            liq_short = None
             if regime_mode != "off":
                 should_eval_regime = (
                     last_regime_decision is None
@@ -1641,7 +1716,6 @@ if __name__ == "__main__":
                         liq_long = get_ticker_liquidity_analysis(signal_positive_ticker)
                         liq_short = get_ticker_liquidity_analysis(signal_negative_ticker)
                         # Treat fallback as risk signal only when we are actually in-position.
-                        in_position_now = bool(is_p_open or is_n_open)
                         fallback_active = bool(
                             pnl_info
                             and pnl_info.get("source") == "fallback"
@@ -1720,6 +1794,91 @@ if __name__ == "__main__":
                             )
                     except Exception as regime_exc:
                         logger.warning("Regime router evaluation failed: %s", regime_exc)
+
+            if strategy_mode != "off":
+                should_eval_strategy = (
+                    last_strategy_decision is None
+                    or (current_time - last_strategy_eval_ts) >= strategy_eval_seconds
+                )
+                if should_eval_strategy:
+                    try:
+                        # Pair spread history is not currently emitted by get_latest_zscore();
+                        # use z-score history as the normalized mean-shift proxy for Phase 3.
+                        spread_history = list(zscore_series or [])
+
+                        strategy_input = StrategyInput(
+                            ts=current_time,
+                            regime_decision=last_regime_decision,
+                            in_position=in_position_or_orders,
+                            coint_flag=int(metrics.get("coint_flag", 0)),
+                            zscore_history=list(zscore_series or []),
+                            spread_history=spread_history or None,
+                        )
+                        strategy_decision = strategy_router.evaluate(strategy_input)
+                        prev_strategy = (
+                            last_strategy_decision.active_strategy
+                            if last_strategy_decision
+                            else strategy_decision.active_strategy
+                        )
+                        last_strategy_decision = strategy_decision
+                        last_strategy_eval_ts = current_time
+
+                        strategy_reasons = (
+                            "|".join(strategy_decision.reason_codes)
+                            if strategy_decision.reason_codes
+                            else "none"
+                        )
+                        strategy_diag = strategy_decision.diagnostics or {}
+                        logger.info(
+                            "STRATEGY_STATUS: mode=%s active=%s desired=%s pending=%s pending_count=%d allow_new=%d coint=%d hold=%.0fs reasons=%s",
+                            strategy_decision.mode,
+                            strategy_decision.active_strategy,
+                            strategy_decision.desired_strategy,
+                            strategy_decision.pending_strategy or "none",
+                            strategy_decision.pending_count,
+                            1 if strategy_decision.allow_new_entries else 0,
+                            int(metrics.get("coint_flag", 0)),
+                            float(strategy_diag.get("hold_seconds", 0.0)),
+                            strategy_reasons,
+                        )
+
+                        if strategy_decision.changed and prev_strategy != strategy_decision.active_strategy:
+                            logger.warning(
+                                "STRATEGY_CHANGE: from=%s to=%s reason=%s in_position=%d",
+                                prev_strategy,
+                                strategy_decision.active_strategy,
+                                strategy_reasons,
+                                1 if in_position_or_orders else 0,
+                            )
+                        elif (
+                            strategy_decision.pending_strategy
+                            and strategy_decision.pending_strategy != strategy_decision.active_strategy
+                        ):
+                            logger.info(
+                                "STRATEGY_PENDING: active=%s desired=%s pending=%s count=%d in_position=%d",
+                                strategy_decision.active_strategy,
+                                strategy_decision.desired_strategy,
+                                strategy_decision.pending_strategy,
+                                strategy_decision.pending_count,
+                                1 if in_position_or_orders else 0,
+                            )
+
+                        if "coint_gate" in strategy_decision.reason_codes:
+                            logger.info(
+                                "COINT_GATE: strategy=%s coint_flag=0 allow_new=0 mode=%s",
+                                strategy_decision.active_strategy,
+                                strategy_mode,
+                            )
+                        if "mean_shift_gate" in strategy_decision.reason_codes:
+                            logger.info(
+                                "MEAN_SHIFT_GATE: strategy=TREND_SPREAD shift_z=%.3f threshold=%.3f allow_new=0 mode=%s basis=%s",
+                                float(strategy_diag.get("mean_shift_z", 0.0)),
+                                float(strategy_diag.get("mean_shift_threshold", 0.0)),
+                                strategy_mode,
+                                str(strategy_diag.get("mean_shift_basis", "n/a")),
+                            )
+                    except Exception as strategy_exc:
+                        logger.warning("Strategy router evaluation failed: %s", strategy_exc)
 
             # Check per-pair loss limit (2% of tradeable capital)
             per_pair_loss_limit_pct = 0.02  # 2% per pair before forcing switch
@@ -1910,23 +2069,40 @@ if __name__ == "__main__":
 
             # 4. Check for signal and place new trades
             if is_manage_new_trades and kill_switch == 0:
-                blocked_by_regime = should_block_new_entries(regime_mode, last_regime_decision)
-                if blocked_by_regime:
+                blocked_by_regime = should_block_regime_entries(regime_mode, last_regime_decision)
+                blocked_by_strategy = should_block_strategy_entries(strategy_mode, last_strategy_decision)
+                if blocked_by_regime or blocked_by_strategy:
                     gate_reason = "n/a"
                     gate_regime = "unknown"
+                    gate_strategy = "unknown"
                     if last_regime_decision is not None:
                         reasons = list(getattr(last_regime_decision, "reason_codes", []) or [])
-                        gate_reason = reasons[0] if reasons else "n/a"
+                        if reasons:
+                            gate_reason = reasons[0]
                         gate_regime = str(getattr(last_regime_decision, "regime", "unknown") or "unknown")
-                    status_dict["message"] = "Regime gate active; skipping new entries."
+                    if last_strategy_decision is not None:
+                        strategy_reasons = list(getattr(last_strategy_decision, "reason_codes", []) or [])
+                        if blocked_by_strategy and strategy_reasons:
+                            gate_reason = strategy_reasons[0]
+                        gate_strategy = str(
+                            getattr(last_strategy_decision, "active_strategy", "unknown") or "unknown"
+                        )
+                    status_dict["message"] = "Entry gate active; skipping new entries."
                     save_status(status_dict)
-                    if (current_time - last_regime_gate_log_ts) >= 60:
+                    if blocked_by_regime and (current_time - last_regime_gate_log_ts) >= 60:
                         logger.warning(
                             "REGIME_GATE_ENFORCED: mode=active regime=%s reason=%s action=skip_new_entries",
                             gate_regime,
                             gate_reason,
                         )
                         last_regime_gate_log_ts = current_time
+                    if blocked_by_strategy and (current_time - last_strategy_gate_log_ts) >= 60:
+                        logger.warning(
+                            "STRATEGY_GATE_ENFORCED: mode=active strategy=%s reason=%s action=skip_new_entries",
+                            gate_strategy,
+                            gate_reason,
+                        )
+                        last_strategy_gate_log_ts = current_time
                 else:
                     status_dict["message"] = "Managing new trades..."
                     save_status(status_dict)
@@ -1936,6 +2112,8 @@ if __name__ == "__main__":
                         zscore_results,
                         regime_mode=regime_mode,
                         regime_decision=last_regime_decision,
+                        strategy_mode=strategy_mode,
+                        strategy_decision=last_strategy_decision,
                     )
                     kill_switch = res_ks
                     if sig_seen:
@@ -1947,7 +2125,15 @@ if __name__ == "__main__":
             
             # 5. Monitoring existing trades / Mean reversion exit
             if not is_manage_new_trades or kill_switch == 1:
-                res_ks = monitor_exit(kill_switch, health_check_due, zscore_results)
+                res_ks = monitor_exit(
+                    kill_switch,
+                    health_check_due,
+                    zscore_results,
+                    regime_mode=regime_mode,
+                    regime_decision=last_regime_decision,
+                    strategy_mode=strategy_mode,
+                    strategy_decision=last_strategy_decision,
+                )
                 kill_switch = res_ks
 
             # Handle pair switch signal (e.g. health check failed)
@@ -2054,8 +2240,8 @@ if __name__ == "__main__":
 
                 post_equity_usdt = None
                 try:
-                    balance_res = account_session.get_account_balance()
-                    if balance_res.get("code") == "0":
+                    balance_res = _get_account_balance_safe()
+                    if balance_res and balance_res.get("code") == "0":
                         details = balance_res.get("data", [{}])[0].get("details", [])
                         for det in details:
                             if det.get("ccy") == "USDT":

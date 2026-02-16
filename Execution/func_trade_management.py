@@ -115,6 +115,20 @@ def _env_flag(name, default=False):
     return default
 
 
+def _env_str(name, default=""):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip()
+    return value if value else default
+
+
+def _decision_get(decision, key, default=None):
+    if isinstance(decision, dict):
+        return decision.get(key, default)
+    return getattr(decision, key, default)
+
+
 def _env_float_list(name, default_list):
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
@@ -172,6 +186,7 @@ import logging
 from func_log_setup import get_logger
 import datetime
 from regime_router import resolve_regime_policy_overrides
+from strategy_router import resolve_strategy_policy_overrides
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
@@ -641,6 +656,32 @@ def generate_signal(
     return None, "No signal generated"
 
 
+def _policy_value_with_precedence(strategy_policy, regime_policy, key, default):
+    strategy_active = bool((strategy_policy or {}).get("active"))
+    if strategy_active:
+        strategy_value = (strategy_policy or {}).get(key)
+        if strategy_value is not None:
+            return strategy_value
+    regime_active = bool((regime_policy or {}).get("active"))
+    if regime_active:
+        regime_value = (regime_policy or {}).get(key)
+        if regime_value is not None:
+            return regime_value
+    return default
+
+
+def _resolve_entry_signal(strategy_name, zscores, coint_flag, entry_z, entry_z_max, min_persist_bars):
+    signal, reason = generate_signal(
+        zscores,
+        coint_flag,
+        in_position=False,
+        entry_z=entry_z,
+        entry_z_max=entry_z_max,
+        min_persist_bars=min_persist_bars,
+    )
+    return signal, reason, strategy_name
+
+
 def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=False, trade_pnl_pct=0.0):
     """
     Evaluate pair health based on statistical metrics.
@@ -826,6 +867,8 @@ def manage_new_trades(
     zscore_results=None,
     regime_mode="off",
     regime_decision=None,
+    strategy_mode="off",
+    strategy_decision=None,
 ):
     """
     Manage trade entry, monitoring, and exit.
@@ -875,23 +918,49 @@ def manage_new_trades(
         return kill_switch, False, False
 
     regime_policy = resolve_regime_policy_overrides(regime_mode, regime_decision)
-    effective_entry_z = regime_policy.get("entry_z")
-    if effective_entry_z is None:
-        effective_entry_z = ENTRY_Z
-    effective_entry_z_max = regime_policy.get("entry_z_max")
-    if effective_entry_z_max is None:
-        effective_entry_z_max = ENTRY_Z_MAX
+    strategy_policy = resolve_strategy_policy_overrides(strategy_mode, strategy_decision)
+    strategy_name = str(strategy_policy.get("strategy_name", "STATARB_MR") or "STATARB_MR")
+
+    effective_entry_z = _policy_value_with_precedence(strategy_policy, regime_policy, "entry_z", ENTRY_Z)
+    effective_entry_z_max = _policy_value_with_precedence(strategy_policy, regime_policy, "entry_z_max", ENTRY_Z_MAX)
     if effective_entry_z_max < effective_entry_z:
         effective_entry_z_max = effective_entry_z
-    effective_min_persist_bars = regime_policy.get("min_persist_bars")
-    if effective_min_persist_bars is None:
-        effective_min_persist_bars = MIN_PERSIST_BARS
-    regime_min_liquidity_ratio = regime_policy.get("min_liquidity_ratio")
-    regime_size_multiplier = regime_policy.get("size_multiplier")
-    if regime_size_multiplier is None:
-        regime_size_multiplier = 1.0
-    if regime_size_multiplier < 0:
-        regime_size_multiplier = 0.0
+    effective_min_persist_bars = _policy_value_with_precedence(
+        strategy_policy,
+        regime_policy,
+        "min_persist_bars",
+        MIN_PERSIST_BARS,
+    )
+    effective_min_liquidity_ratio = _policy_value_with_precedence(
+        strategy_policy,
+        regime_policy,
+        "min_liquidity_ratio",
+        None,
+    )
+    effective_size_multiplier = _policy_value_with_precedence(
+        strategy_policy,
+        regime_policy,
+        "size_multiplier",
+        1.0,
+    )
+    if effective_size_multiplier is None:
+        effective_size_multiplier = 1.0
+    if effective_size_multiplier < 0:
+        effective_size_multiplier = 0.0
+
+    if strategy_policy.get("active") and not strategy_policy.get("allow_new_entries", True):
+        logger.info(
+            "STRATEGY_GATE_ENFORCED: strategy=%s reason=policy_allow_new_entries_false action=skip_new_entries",
+            strategy_name,
+        )
+        return kill_switch, False, False
+    if strategy_policy.get("active") and int(coint_flag) != 1:
+        logger.info(
+            "COINT_GATE: strategy=%s coint_flag=%d allow_new=0 mode=%s",
+            strategy_name,
+            int(coint_flag),
+            strategy_mode,
+        )
     
     # 1. Log Current Z-score status every cycle
     _log_zscore_status(latest_zscore)
@@ -948,16 +1017,25 @@ def manage_new_trades(
             return 3, False, False
     
     # 3. Signal Generation
-    signal, reason = generate_signal(
+    signal, reason, signal_strategy = _resolve_entry_signal(
+        strategy_name,
         valid_zscores,
         coint_flag,
-        in_position=False,
-        entry_z=effective_entry_z,
-        entry_z_max=effective_entry_z_max,
-        min_persist_bars=effective_min_persist_bars,
+        effective_entry_z,
+        effective_entry_z_max,
+        effective_min_persist_bars,
     )
     
     if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
+        logger.info(
+            "STRATEGY_ENTRY_SIGNAL: strategy=%s signal=%s entry_z=%.2f entry_z_max=%.2f min_persist=%d reason=%s",
+            signal_strategy,
+            signal,
+            effective_entry_z,
+            effective_entry_z_max,
+            effective_min_persist_bars,
+            reason,
+        )
         # Activate hot trigger
         hot = True
         signal_detected = True
@@ -988,6 +1066,14 @@ def manage_new_trades(
                 logger.warning("Failed to log pre-trade balance snapshot: %s", exc)
             _ENTRY_BALANCE_SNAPSHOT_LOGGED = True
     else:
+        logger.info(
+            "STRATEGY_ENTRY_REJECT: strategy=%s reason=%s entry_z=%.2f min_persist=%d coint=%d",
+            strategy_name,
+            reason,
+            effective_entry_z,
+            effective_min_persist_bars,
+            int(coint_flag),
+        )
         # Log waiting status
         if abs(latest_zscore) < effective_entry_z:
             _log_waiting("⏳ WAITING: Not at entry threshold yet")
@@ -1133,21 +1219,22 @@ def manage_new_trades(
             capital_short = effective_capital * 0.5
             initial_capital_usdt = capital_long
 
-        if regime_size_multiplier != 1.0:
+        if effective_size_multiplier != 1.0:
             base_position_usdt = initial_capital_usdt
-            initial_capital_usdt = base_position_usdt * regime_size_multiplier
+            initial_capital_usdt = base_position_usdt * effective_size_multiplier
             if initial_capital_usdt <= 0:
                 logger.info(
-                    "Regime policy reduced size multiplier to %.2f. Skipping entry.",
-                    regime_size_multiplier,
+                    "STRATEGY_SIZE_APPLIED: strategy=%s size_mult=%.2f per_leg=0.00 action=skip_entry",
+                    strategy_name,
+                    effective_size_multiplier,
                 )
                 return kill_switch, signal_detected, trade_placed
 
             max_per_leg = effective_capital * 0.5
             if max_per_leg > 0 and initial_capital_usdt > max_per_leg:
                 logger.warning(
-                    "Regime size multiplier %.2f exceeded per-leg capital cap. Capping %.2f -> %.2f.",
-                    regime_size_multiplier,
+                    "Policy size multiplier %.2f exceeded per-leg capital cap. Capping %.2f -> %.2f.",
+                    effective_size_multiplier,
                     initial_capital_usdt,
                     max_per_leg,
                 )
@@ -1156,8 +1243,9 @@ def manage_new_trades(
             capital_long = initial_capital_usdt
             capital_short = initial_capital_usdt
             logger.info(
-                "Regime size multiplier applied: %.2fx (per_leg %.2f -> %.2f).",
-                regime_size_multiplier,
+                "STRATEGY_SIZE_APPLIED: strategy=%s size_mult=%.2fx per_leg %.2f -> %.2f",
+                strategy_name,
+                effective_size_multiplier,
                 base_position_usdt,
                 initial_capital_usdt,
             )
@@ -1268,8 +1356,8 @@ def manage_new_trades(
             min_liquidity_ratio = float(ratio_env)
         except (TypeError, ValueError):
             min_liquidity_ratio = 0.0
-        if regime_min_liquidity_ratio is not None:
-            min_liquidity_ratio = max(min_liquidity_ratio, regime_min_liquidity_ratio)
+        if effective_min_liquidity_ratio is not None:
+            min_liquidity_ratio = max(min_liquidity_ratio, effective_min_liquidity_ratio)
         if min_liquidity_ratio > LIQUIDITY_RATIO_CAP:
             logger.info(
                 "Liquidity ratio capped: requested=%.2fx cap=%.2fx",
@@ -1780,7 +1868,15 @@ def manage_new_trades(
     return kill_switch, signal_detected, trade_placed
 
 
-def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
+def monitor_exit(
+    kill_switch,
+    health_check_due=False,
+    zscore_results=None,
+    regime_mode="off",
+    regime_decision=None,
+    strategy_mode="off",
+    strategy_decision=None,
+):
     """
     Monitor open positions for mean reversion or stop-loss.
     """
@@ -1818,6 +1914,13 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     entry_equity = get_entry_equity()
     entry_z = get_entry_z_score()
     entry_time = get_entry_time()
+    entry_notional = get_entry_notional()
+    try:
+        entry_notional_val = float(entry_notional)
+        if entry_notional_val <= 0:
+            entry_notional_val = None
+    except (TypeError, ValueError):
+        entry_notional_val = None
 
     account_state = get_account_state()
     positions = account_state.get("positions", []) if isinstance(account_state, dict) else []
@@ -1838,6 +1941,11 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
 
     floating_pnl_usdt = None
     pnl_pct = None
+    pnl_pct_equity = None
+    pnl_pct_notional = None
+    hard_stop_basis = _env_str("STATBOT_HARD_STOP_PNL_BASIS", "notional").strip().lower()
+    if hard_stop_basis not in ("notional", "equity"):
+        hard_stop_basis = "notional"
     if entry_equity is not None and entry_equity > 0:
         try:
             balance_res = account_session.get_account_balance()
@@ -1847,15 +1955,29 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
                     if det.get("ccy") == "USDT":
                         current_equity = float(det.get("eq", 0) or 0)
                         floating_pnl_usdt = current_equity - entry_equity
-                        pnl_pct = (floating_pnl_usdt / entry_equity) * 100
+                        pnl_pct_equity = (floating_pnl_usdt / entry_equity) * 100
                         break
         except Exception as exc:
             logger.debug("Failed equity-based PnL snapshot in monitor_exit: %s", exc)
 
     if floating_pnl_usdt is None:
         floating_pnl_usdt = total_unrealized_pnl
-    if pnl_pct is None and entry_equity is not None and entry_equity > 0:
-        pnl_pct = (floating_pnl_usdt / entry_equity) * 100
+
+    if pnl_pct_equity is None and entry_equity is not None and entry_equity > 0:
+        pnl_pct_equity = (floating_pnl_usdt / entry_equity) * 100
+    if entry_notional_val is not None:
+        pnl_pct_notional = (floating_pnl_usdt / entry_notional_val) * 100
+
+    if hard_stop_basis == "notional" and pnl_pct_notional is not None:
+        pnl_pct = pnl_pct_notional
+    elif hard_stop_basis == "equity" and pnl_pct_equity is not None:
+        pnl_pct = pnl_pct_equity
+    elif pnl_pct_notional is not None:
+        hard_stop_basis = "notional"
+        pnl_pct = pnl_pct_notional
+    elif pnl_pct_equity is not None:
+        hard_stop_basis = "equity"
+        pnl_pct = pnl_pct_equity
 
     coint_lost_seconds = 0.0
     coint_lost_confirm_count = 0
@@ -1886,12 +2008,22 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
             logger.warning("Pair health degraded (score=%s) while in position.", score)
             logger.warning("Health checks stay advisory during open positions.")
 
-    entry_notional = get_entry_notional()
     profit_target_usdt = _resolve_adaptive_profit_target_usdt(entry_notional)
     hard_stop_loss_pct = _env_float("STATBOT_HARD_STOP_PNL_PCT", abs(HYBRID_EXIT_HARD_STOP_PNL_PCT))
     if hard_stop_loss_pct is None or hard_stop_loss_pct <= 0:
         hard_stop_loss_pct = abs(HYBRID_EXIT_HARD_STOP_PNL_PCT)
     hard_stop_threshold_pct = -abs(hard_stop_loss_pct)
+    riskoff_regime = str(_decision_get(regime_decision, "regime", "") or "").strip().upper() == "RISK_OFF"
+    enable_riskoff_coint_early_exit = _env_flag("STATBOT_ENABLE_RISKOFF_COINT_EARLY_EXIT", True)
+    riskoff_coint_confirm_count = _env_int("STATBOT_RISKOFF_COINT_CONFIRM_COUNT", 3)
+    if riskoff_coint_confirm_count is None or riskoff_coint_confirm_count < 1:
+        riskoff_coint_confirm_count = 1
+    riskoff_coint_min_loss_pct = _env_float("STATBOT_RISKOFF_COINT_MIN_LOSS_PCT", 0.25)
+    if riskoff_coint_min_loss_pct is None or riskoff_coint_min_loss_pct <= 0:
+        riskoff_coint_min_loss_pct = 0.25
+    riskoff_coint_grace_seconds = _env_float("STATBOT_RISKOFF_COINT_GRACE_SECONDS", 90.0)
+    if riskoff_coint_grace_seconds is None or riskoff_coint_grace_seconds < 0:
+        riskoff_coint_grace_seconds = 90.0
     enable_coint_exit_tiers = _env_flag("STATBOT_ENABLE_COINT_EXIT_TIERS", False)
     tier2_confirmation_count = _env_int("STATBOT_TIER2_CONFIRMATION_COUNT", 3)
     if tier2_confirmation_count is None or tier2_confirmation_count < 1:
@@ -1915,12 +2047,45 @@ def monitor_exit(kill_switch, health_check_due=False, zscore_results=None):
     # Tier 1: Hard stop.
     if pnl_pct is not None and pnl_pct <= hard_stop_threshold_pct:
         msg = (
-            "HYBRID_EXIT Tier1 HARD_STOP: pnl_pct=%.2f%% <= %.2f%%"
-            % (pnl_pct, hard_stop_threshold_pct)
+            "HYBRID_EXIT Tier1 HARD_STOP: pnl_pct=%.2f%% basis=%s <= %.2f%%"
+            % (pnl_pct, hard_stop_basis, hard_stop_threshold_pct)
         )
         logger.error(msg)
         print(msg)
         set_last_switch_reason("exit_tier_1_stop_loss")
+        set_last_health_score(0)
+        _close_trade_manager()
+        return 2
+
+    # Tier 1.5: Risk-off + cointegration-lost + losing trade (guarded early exit).
+    if (
+        enable_riskoff_coint_early_exit
+        and str(regime_mode or "").strip().lower() == "active"
+        and riskoff_regime
+        and coint_flag == 0
+        and floating_pnl_usdt is not None
+        and floating_pnl_usdt < 0
+        and pnl_pct is not None
+        and pnl_pct <= -abs(riskoff_coint_min_loss_pct)
+        and coint_lost_seconds >= riskoff_coint_grace_seconds
+        and coint_lost_confirm_count >= riskoff_coint_confirm_count
+    ):
+        msg = (
+            "HYBRID_EXIT Tier1.5 RISKOFF_COINT_LOSS: pnl_pct=%.2f%% basis=%s floating_pnl=%.2f "
+            "coint_lost=%.1fs confirms=%d/%d min_loss=%.2f%%"
+            % (
+                pnl_pct,
+                hard_stop_basis,
+                floating_pnl_usdt,
+                coint_lost_seconds,
+                coint_lost_confirm_count,
+                riskoff_coint_confirm_count,
+                riskoff_coint_min_loss_pct,
+            )
+        )
+        logger.warning(msg)
+        print(msg)
+        set_last_switch_reason("exit_tier_15_riskoff_coint_loss")
         set_last_health_score(0)
         _close_trade_manager()
         return 2

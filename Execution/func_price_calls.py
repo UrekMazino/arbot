@@ -516,8 +516,7 @@ def get_price_klines(ticker, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, session=None,
         start_ms, _, _ = get_timestamps(bar=bar, limit=limit_val)
 
     remaining = limit_val
-    before = None
-    after = start_ms
+    after_cursor = None
     data_all = []
     seen_ts = set()
 
@@ -527,11 +526,9 @@ def get_price_klines(ticker, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, session=None,
             inst_id=ticker,
             bar=bar,
             limit=page_limit,
-            before=before,
-            after=after,
+            after=after_cursor,
             session=session,
         )
-        after = None
 
         if response.get("code") != "0":
             return []
@@ -541,10 +538,20 @@ def get_price_klines(ticker, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, session=None,
             break
 
         new_rows = []
+        hit_start_boundary = False
         for row in page:
             if not row:
                 continue
             ts = row[0]
+            try:
+                ts_int = int(float(ts))
+            except (TypeError, ValueError):
+                continue
+
+            if start_ms is not None and ts_int < int(start_ms):
+                hit_start_boundary = True
+                continue
+
             if ts in seen_ts:
                 continue
             seen_ts.add(ts)
@@ -559,14 +566,18 @@ def get_price_klines(ticker, bar=DEFAULT_BAR, limit=DEFAULT_LIMIT, session=None,
 
         oldest_ts = None
         try:
-            oldest_ts = int(float(new_rows[-1][0]))
+            oldest_ts = int(float(page[-1][0]))
         except (TypeError, ValueError, IndexError):
             oldest_ts = None
 
         if oldest_ts is None:
             break
 
-        before = oldest_ts - 1
+        if hit_start_boundary or (start_ms is not None and oldest_ts < int(start_ms)):
+            break
+
+        # OKX candle pagination to older rows is driven by `after`.
+        after_cursor = oldest_ts - 1
         remaining = limit_val - len(data_all)
 
         if len(page) < page_limit:

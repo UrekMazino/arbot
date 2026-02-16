@@ -56,14 +56,16 @@ StatBot employs a dual-process architecture (`main_execution.py`):
 Exits are evaluated as a priority stack while in position:
 
 1. **Tier 5 Profit Take (adaptive)**: Exit when floating PnL reaches a dynamic USDT target based on entry notional.
-2. **Tier 1 Hard Stop**: Exit when trade PnL% reaches the configured hard-stop threshold.
-3. **Tier 2-4 Cointegration Exits (optional)**: Disabled by default; can be enabled via env flags.
-4. **ATM Dynamic Exit**: Advanced Trade Manager handles trailing stop, partial exit, max hold, and mean-reversion logic.
-5. **Funding Bleed Guard**: Exit if funding cost materially erodes unrealized gains.
-6. **No-entry-context fallback**: Conservative catastrophic-stop and mean-reversion fallback when entry context is missing (e.g., restart with open positions).
+2. **Tier 1 Hard Stop**: Exit when trade PnL% reaches the configured hard-stop threshold (basis: notional by default, equity optional).
+3. **Tier 1.5 Risk-Off Cointegration Loss**: Exit early when regime is `RISK_OFF`, cointegration is lost, and the trade remains negative after confirm/grace safeguards.
+4. **Tier 2-4 Cointegration Exits (optional)**: Disabled by default; can be enabled via env flags.
+5. **ATM Dynamic Exit**: Advanced Trade Manager handles trailing stop, partial exit, max hold, and mean-reversion target exits.
+6. **Funding Bleed Guard**: Exit if funding cost materially erodes unrealized gains.
+7. **No-entry-context fallback**: Conservative catastrophic-stop and mean-reversion fallback when entry context is missing (e.g., restart with open positions).
 
 Notes:
 * In normal operation, mean reversion is primarily handled by ATM.
+* ATM mean-reversion target hits are signal-based exits and are not guaranteed to be positive realized PnL after fees/slippage.
 * Hard-stop exits can trigger a post-close pair switch.
 
 ---
@@ -106,15 +108,22 @@ The runtime exit controller applies a hybrid stack before/with ATM:
    - Defaults: `0.5%`, min `5`, max `50`.
 2. **Tier 1 Hard Stop**
    - Triggers at `-STATBOT_HARD_STOP_PNL_PCT` (default `-5%`).
-3. **Tier 2-4 Cointegration tiers (optional, default OFF)**
+   - Basis controlled by `STATBOT_HARD_STOP_PNL_BASIS` (`notional` default, `equity` optional).
+3. **Tier 1.5 Risk-Off + Cointegration Lost (default ON)**
+   - Controlled by `STATBOT_ENABLE_RISKOFF_COINT_EARLY_EXIT=1`.
+   - Guardrails:
+     - confirm count: `STATBOT_RISKOFF_COINT_CONFIRM_COUNT` (default `3`)
+     - grace: `STATBOT_RISKOFF_COINT_GRACE_SECONDS` (default `90`)
+     - minimum loss: `STATBOT_RISKOFF_COINT_MIN_LOSS_PCT` (default `0.25`)
+4. **Tier 2-4 Cointegration tiers (optional, default OFF)**
    - Controlled by `STATBOT_ENABLE_COINT_EXIT_TIERS=1`.
    - Tier 2 includes flicker protection:
      - confirm count: `STATBOT_TIER2_CONFIRMATION_COUNT` (default `3`)
      - min-loss override: `STATBOT_TIER2_MIN_LOSS_PCT` (default `1.5`)
-4. **ATM Dynamic Exits**
+5. **ATM Dynamic Exits**
    - Trailing stop, partial exits, mean reversion, max hold, and stall logic.
-5. **Funding Bleed Guard**
-6. **No-entry-context fallback**
+6. **Funding Bleed Guard**
+7. **No-entry-context fallback**
 
 **Not exits:**
 - Z oscillating near entry or improving toward the mean.

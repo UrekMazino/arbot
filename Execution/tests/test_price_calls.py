@@ -62,11 +62,18 @@ class _StubSession:
 class _PagingSession:
     def get_candlesticks(self, **kwargs):
         limit = int(kwargs.get("limit", 100))
+        after = kwargs.get("after")
         before = kwargs.get("before")
-        start = int(before) if before is not None else 200
+        step_ms = 60_000
+        if after is not None:
+            start = int(after)
+        elif before is not None:
+            start = int(before)
+        else:
+            start = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
         data = []
         for idx in range(limit):
-            ts = start - idx
+            ts = start - (idx * step_ms)
             if ts <= 0:
                 break
             data.append([str(ts), "1", "2", "0.5", "1.5", "10", "20", "30", "1"])
@@ -104,8 +111,14 @@ def test_live_candles():
 def test_get_price_klines_paged():
     print("\n[5] Paged get_price_klines (mock)")
     data = get_price_klines("TEST", bar="1m", limit=150, session=_PagingSession(), use_start_time=False)
-    ok = len(data) == 150 and data[0][0] == "200" and data[-1][0] == "51"
-    details = f"rows={len(data)} first={data[0][0]} last={data[-1][0]}"
+    descending = True
+    try:
+        ts_vals = [int(float(row[0])) for row in data]
+        descending = all(ts_vals[i] > ts_vals[i + 1] for i in range(len(ts_vals) - 1))
+    except Exception:
+        descending = False
+    ok = len(data) == 150 and descending
+    details = f"rows={len(data)} descending={descending}"
     return _print_result("Paged get_price_klines", ok, details)
 
 

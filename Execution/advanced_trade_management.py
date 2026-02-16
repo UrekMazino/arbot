@@ -100,8 +100,8 @@ class AdvancedTradeManager:
             'max_hold_hours': 6,  # 6 hours maximum
             'max_hold_warning_hours': 4,  # Warning at 4 hours
             
-            # Take profit
-            'take_profit_z': 0.5,  # Exit at Z < 0.5
+            # Mean-reversion target (legacy key name kept for compatibility)
+            'take_profit_z': 0.5,  # Exit at |Z| < 0.5
             
             # Stall detection
             'stall_z_threshold': 1.5,  # Exit if Z > 1.5 and stalled
@@ -195,12 +195,12 @@ class AdvancedTradeManager:
         if partial_result['action'] == 'PARTIAL_EXIT':
             return partial_result
         
-        # 5. TAKE PROFIT (full exit)
+        # 5. MEAN-REVERSION TARGET HIT (full exit)
         if abs(current_z) < self.config['take_profit_z']:
             return self._create_exit_result(
                 action='EXIT',
                 reason=ExitReason.TAKE_PROFIT,
-                message=f"Take profit: Z={current_z:+.2f} sigma (target: {self.config['take_profit_z']:.2f} sigma)",
+                message=f"Mean-reversion target hit: Z={current_z:+.2f} sigma (target: {self.config['take_profit_z']:.2f} sigma)",
                 percentage=1.0
             )
         

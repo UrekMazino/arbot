@@ -26,8 +26,13 @@ PNL_LINE_RE = re.compile(
 TRADE_CLOSED_RE = re.compile(
     r"PNL_ALERT.*Trade closed (?P<result>WIN|LOSS) \| PnL (?P<pnl>[-+]?\d+\.\d+) USDT \((?P<pnl_pct>[-+]?\d+\.\d+)%\) "
     r"\| Equity (?P<equity>\d+\.\d+) USDT \| Session (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\)"
+    r"(?: \| Strategy (?P<strategy>[A-Z0-9_]+) \| Regime (?P<regime>[A-Z0-9_]+))?"
 )
 POSITION_OPEN_RE = re.compile(r"Position opened: entry_z=(?P<entry_z>[-+]?\d+\.\d+)")
+STRATEGY_TRADE_OPEN_RE = re.compile(
+    r"STRATEGY_TRADE_OPEN: strategy=(?P<strategy>[A-Z0-9_]+) regime=(?P<regime>[A-Z0-9_]+) "
+    r"entry_z=(?P<entry_z>[-+]?\d+\.\d+) size_mult=(?P<size_mult>[-+]?\d+\.\d+)"
+)
 LIQUIDITY_RE = re.compile(
     r"Liquidity check: long_target=(?P<long_target>[-+]?\d+\.\d+) short_target=(?P<short_target>[-+]?\d+\.\d+) "
     r"liquidity_long=(?P<liquidity_long>[-+]?\d+\.\d+) liquidity_short=(?P<liquidity_short>[-+]?\d+\.\d+)"
@@ -66,6 +71,25 @@ PNL_FALLBACK_CLEARED_RE = re.compile(r"PnL fallback cleared", re.IGNORECASE)
 ORDERBOOK_BACKOFF_RE = re.compile(r"Orderbook backoff for (?P<inst>[^:]+): (?P<reason>[^()]+) \((?P<seconds>\d+)s\)")
 ORDERBOOK_BACKOFF_ACTIVE_RE = re.compile(r"orderbook backoff active", re.IGNORECASE)
 ORDERBOOK_MID_FAIL_RE = re.compile(r"failed to fetch mid prices", re.IGNORECASE)
+CANDLE_SHORTFALL_RE = re.compile(
+    r"Warning:\s*Got\s+(?P<got>\d+)\s+candles,\s+expected\s+(?P<expected>\d+)",
+    re.IGNORECASE,
+)
+RECON_POST_RE = re.compile(
+    r"Equity reconciliation(?: \(post-close\))?:\s*trade_pnl=(?P<trade_pnl>[-+]?\d+\.\d+)\s+"
+    r"equity_change=(?P<equity_change>[-+]?\d+\.\d+)\s+diff=(?P<diff>[-+]?\d+\.\d+)\s+"
+    r"fees=(?P<fees>[-+]?\d+\.\d+)\s+slippage=(?P<slippage>[-+]?\d+\.\d+)\s+"
+    r"funding=(?P<funding>[-+]?\d+\.\d+)\s+unexplained=(?P<unexplained>[-+]?\d+\.\d+)",
+    re.IGNORECASE,
+)
+RECON_LARGE_DELTA_RE = re.compile(
+    r"(?:Large realized-vs-estimated PnL delta|Large PnL discrepancy detected):.*diff=(?P<diff>[-+]?\d+\.\d+)",
+    re.IGNORECASE,
+)
+RECON_LARGE_UNEXPLAINED_RE = re.compile(
+    r"Large unexplained reconciliation component(?: \(post-close\))?:\s*(?P<unexplained>[-+]?\d+\.\d+)\s+USDT\s+\((?P<pct>[-+]?\d+\.\d+)%",
+    re.IGNORECASE,
+)
 
 ALERT_PATTERNS = [
     re.compile(r"\bERROR\b", re.IGNORECASE),
@@ -78,6 +102,7 @@ ALERT_PATTERNS = [
 ]
 
 RUN_DIR_RE = re.compile(r"^run_(?P<seq>\d+)_\d{8}_\d{6}$")
+REPORT_SCHEMA_VERSION = "1.1.0"
 INDEX_FIELDS = [
     "run_sequence",
     "run_id",
@@ -107,6 +132,17 @@ INDEX_FIELDS = [
     "liquidity_reject_rate_pct",
     "slippage_avg_abs_bps",
     "slippage_max_abs_bps",
+    "strategy_regime_attribution_pct",
+    "strategy_regime_unknown_trades",
+    "reconciliation_checks_total",
+    "reconciliation_checks_fail",
+    "reconciliation_large_delta_warnings",
+    "reconciliation_large_unexplained_warnings",
+    "candle_shortfall_events",
+    "candle_shortfall_missing_total",
+    "data_quality_checks_total",
+    "data_quality_checks_fail",
+    "data_quality_checks_warn",
     "alerts_total",
     "errors_total",
     "version",
@@ -327,13 +363,13 @@ def _resolve_output_dir(repo_root, run_id, output_arg):
     return output_dir, None, report_version
 
 
-def _write_csv(path, rows, fieldnames):
-    if not rows:
+def _write_csv(path, rows, fieldnames, write_header_if_empty=False):
+    if not rows and not write_header_if_empty:
         return
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        for row in rows:
+        for row in rows or []:
             writer.writerow(row)
 
 
@@ -403,7 +439,7 @@ def _write_report_index(report_root):
     index_json = report_root / "index.json"
     index_csv = report_root / "index.csv"
     index_json.write_text(json.dumps(index_payload, indent=2), encoding="utf-8")
-    _write_csv(index_csv, rows, INDEX_FIELDS)
+    _write_csv(index_csv, rows, INDEX_FIELDS, write_header_if_empty=True)
 
 
 def _build_run_comparison(report_root, current_summary):
@@ -487,7 +523,11 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     alerts = []
     liquidity_checks = []
     entry_slippage = []
+    data_quality_checks = []
+    reconciliation_checks = []
+    reconciliation_pending = []
     open_positions = []
+    pending_trade_context = None
     entry_order_map = {}
     pairs_seen = []
     pair_stats = {}
@@ -517,6 +557,10 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     orderbook_backoff_active = 0
     orderbook_mid_failures = 0
     orderbook_backoff_reasons = {}
+    candle_shortfall_events = 0
+    candle_shortfall_missing_total = 0
+    recon_large_delta_warnings = 0
+    recon_large_unexplained_warnings = 0
     active_pair = None
 
     start_ts = None
@@ -661,9 +705,77 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     }
                 )
 
+            shortfall_match = CANDLE_SHORTFALL_RE.search(clean_msg)
+            if shortfall_match:
+                got = int(shortfall_match.group("got"))
+                expected = int(shortfall_match.group("expected"))
+                candle_shortfall_events += 1
+                if expected > got:
+                    candle_shortfall_missing_total += (expected - got)
+
+            recon_post_match = RECON_POST_RE.search(clean_msg)
+            if recon_post_match and ts:
+                reconciliation_pending.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "linked_trade_ts": "",
+                        "pair": active_pair or pair or "unknown",
+                        "entry_strategy": "UNKNOWN",
+                        "entry_regime": "UNKNOWN",
+                        "result": "",
+                        "trade_pnl_estimate": _safe_float(recon_post_match.group("trade_pnl")),
+                        "equity_change_realized": _safe_float(recon_post_match.group("equity_change")),
+                        "diff": _safe_float(recon_post_match.group("diff")),
+                        "fees": _safe_float(recon_post_match.group("fees")),
+                        "slippage": _safe_float(recon_post_match.group("slippage")),
+                        "funding": _safe_float(recon_post_match.group("funding")),
+                        "unexplained": _safe_float(recon_post_match.group("unexplained")),
+                        "large_delta_warning": 0,
+                        "large_unexplained_warning": 0,
+                        "unexplained_pct_warning": None,
+                    }
+                )
+
+            recon_delta_match = RECON_LARGE_DELTA_RE.search(clean_msg)
+            if recon_delta_match:
+                recon_large_delta_warnings += 1
+                if reconciliation_pending:
+                    pending = reconciliation_pending[-1]
+                    pending["large_delta_warning"] = 1
+                    parsed_diff = _safe_float(recon_delta_match.group("diff"))
+                    if parsed_diff is not None:
+                        pending["diff"] = parsed_diff
+
+            recon_unexpl_match = RECON_LARGE_UNEXPLAINED_RE.search(clean_msg)
+            if recon_unexpl_match:
+                recon_large_unexplained_warnings += 1
+                if reconciliation_pending:
+                    pending = reconciliation_pending[-1]
+                    pending["large_unexplained_warning"] = 1
+                    pending["unexplained"] = _safe_float(recon_unexpl_match.group("unexplained"))
+                    pending["unexplained_pct_warning"] = _safe_float(recon_unexpl_match.group("pct"))
+
             open_match = POSITION_OPEN_RE.search(clean_msg)
+            strategy_open_match = STRATEGY_TRADE_OPEN_RE.search(clean_msg)
+            if strategy_open_match and ts:
+                pending_trade_context = {
+                    "strategy": strategy_open_match.group("strategy"),
+                    "regime": strategy_open_match.group("regime"),
+                    "entry_z": strategy_open_match.group("entry_z"),
+                    "timestamp": ts,
+                }
+
             if open_match and ts:
-                open_positions.append({"timestamp": ts, "entry_z": open_match.group("entry_z")})
+                entry_ctx = pending_trade_context or {}
+                open_positions.append(
+                    {
+                        "timestamp": ts,
+                        "entry_z": open_match.group("entry_z"),
+                        "entry_strategy": entry_ctx.get("strategy"),
+                        "entry_regime": entry_ctx.get("regime"),
+                    }
+                )
+                pending_trade_context = None
                 if last_liquidity_min_ratio is not None:
                     entry_liquidity_min_ratios.append(last_liquidity_min_ratio)
                     if last_liquidity_min_ratio < ratio_threshold:
@@ -674,11 +786,25 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             if trade_match and ts:
                 hold_minutes = None
                 entry_z = None
+                entry_strategy = (
+                    str(trade_match.group("strategy") or "").strip().upper() if trade_match.group("strategy") else ""
+                )
+                entry_regime = (
+                    str(trade_match.group("regime") or "").strip().upper() if trade_match.group("regime") else ""
+                )
                 if open_positions:
                     entry = open_positions.pop(0)
                     entry_z = entry.get("entry_z")
+                    if not entry_strategy:
+                        entry_strategy = str(entry.get("entry_strategy") or "").strip().upper()
+                    if not entry_regime:
+                        entry_regime = str(entry.get("entry_regime") or "").strip().upper()
                     delta = ts - entry.get("timestamp")
                     hold_minutes = round(delta.total_seconds() / 60, 2)
+                if not entry_strategy:
+                    entry_strategy = "UNKNOWN"
+                if not entry_regime:
+                    entry_regime = "UNKNOWN"
                 pair_key = active_pair or pair or "unknown"
                 trades.append(
                     {
@@ -692,6 +818,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                         "session_pnl_pct": _safe_float(trade_match.group("session_pct")),
                         "hold_minutes": hold_minutes,
                         "entry_z": entry_z,
+                        "entry_strategy": entry_strategy,
+                        "entry_regime": entry_regime,
                     }
                 )
                 stats_entry = _pair_stats_entry(pair_key)
@@ -708,6 +836,24 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     stats_entry["pnl_loss_usdt"] += pnl_val
                 if hold_minutes is not None:
                     stats_entry["hold_minutes"].append(hold_minutes)
+
+                if reconciliation_pending:
+                    recon_row = reconciliation_pending.pop(0)
+                    recon_row["linked_trade_ts"] = ts.isoformat()
+                    recon_row["pair"] = pair_key
+                    recon_row["entry_strategy"] = entry_strategy
+                    recon_row["entry_regime"] = entry_regime
+                    recon_row["result"] = trade_match.group("result")
+                    diff_abs = abs(recon_row["diff"]) if recon_row["diff"] is not None else 0.0
+                    unexpl_abs = abs(recon_row["unexplained"]) if recon_row["unexplained"] is not None else 0.0
+                    pass_fail = (
+                        recon_row.get("large_delta_warning", 0) == 0
+                        and recon_row.get("large_unexplained_warning", 0) == 0
+                        and diff_abs <= 0.10
+                        and unexpl_abs <= 0.10
+                    )
+                    recon_row["pass_fail"] = "pass" if pass_fail else "fail"
+                    reconciliation_checks.append(recon_row)
 
             if ENTRY_SIGNAL_RE.search(clean_msg):
                 signals_total += 1
@@ -867,6 +1013,18 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     if pnl_fallback_active and pnl_fallback_start and end_ts:
         pnl_fallback_seconds += (end_ts - pnl_fallback_start).total_seconds()
 
+    for recon_row in reconciliation_pending:
+        diff_abs = abs(recon_row["diff"]) if recon_row["diff"] is not None else 0.0
+        unexpl_abs = abs(recon_row["unexplained"]) if recon_row["unexplained"] is not None else 0.0
+        pass_fail = (
+            recon_row.get("large_delta_warning", 0) == 0
+            and recon_row.get("large_unexplained_warning", 0) == 0
+            and diff_abs <= 0.10
+            and unexpl_abs <= 0.10
+        )
+        recon_row["pass_fail"] = "pass" if pass_fail else "fail"
+        reconciliation_checks.append(recon_row)
+
     duration_seconds = None
     if start_ts and end_ts:
         duration_seconds = int((end_ts - start_ts).total_seconds())
@@ -961,6 +1119,61 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         )
     pair_rows.sort(key=lambda row: row.get("trades", 0), reverse=True)
 
+    strategy_regime_stats = {}
+    for trade in trades:
+        strategy_key = str(trade.get("entry_strategy") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        regime_key = str(trade.get("entry_regime") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        key = (strategy_key, regime_key)
+        if key not in strategy_regime_stats:
+            strategy_regime_stats[key] = {
+                "entry_strategy": strategy_key,
+                "entry_regime": regime_key,
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "pnl_usdt": 0.0,
+                "hold_minutes": [],
+            }
+        cell = strategy_regime_stats[key]
+        cell["trades"] += 1
+        result = str(trade.get("result") or "").strip().upper()
+        if result == "WIN":
+            cell["wins"] += 1
+        elif result == "LOSS":
+            cell["losses"] += 1
+        pnl_val = _safe_float(trade.get("pnl_usdt"))
+        if pnl_val is not None:
+            cell["pnl_usdt"] += pnl_val
+        hold_val = _safe_float(trade.get("hold_minutes"))
+        if hold_val is not None:
+            cell["hold_minutes"].append(hold_val)
+
+    strategy_regime_rows = []
+    for _, cell in strategy_regime_stats.items():
+        trades_total = int(cell.get("trades", 0) or 0)
+        pnl_total = float(cell.get("pnl_usdt", 0.0) or 0.0)
+        holds = cell.get("hold_minutes") or []
+        avg_pnl = round(pnl_total / trades_total, 4) if trades_total > 0 else None
+        avg_hold = round(sum(holds) / len(holds), 2) if holds else None
+        win_rate = round((cell.get("wins", 0) / trades_total) * 100, 2) if trades_total > 0 else None
+        strategy_regime_rows.append(
+            {
+                "entry_strategy": cell.get("entry_strategy"),
+                "entry_regime": cell.get("entry_regime"),
+                "trades": trades_total,
+                "wins": int(cell.get("wins", 0) or 0),
+                "losses": int(cell.get("losses", 0) or 0),
+                "win_rate_pct": win_rate,
+                "pnl_usdt": round(pnl_total, 4),
+                "avg_pnl_usdt": avg_pnl,
+                "avg_hold_minutes": avg_hold,
+            }
+        )
+    strategy_regime_rows.sort(
+        key=lambda row: (row.get("trades", 0), row.get("pnl_usdt", 0.0)),
+        reverse=True,
+    )
+
     slippage_samples = len(entry_slippage)
     avg_slippage_bps = None
     avg_slippage_abs_bps = None
@@ -1039,6 +1252,90 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "orderbook_backoff_reasons": orderbook_backoff_reasons,
     }
 
+    strategy_regime_known_trades = sum(
+        1
+        for t in trades
+        if str(t.get("entry_strategy") or "").strip().upper() not in ("", "UNKNOWN")
+        and str(t.get("entry_regime") or "").strip().upper() not in ("", "UNKNOWN")
+    )
+    unknown_strategy_regime_trades = max(trade_count - strategy_regime_known_trades, 0)
+    strategy_regime_attribution_pct = (
+        round((strategy_regime_known_trades / trade_count) * 100, 2) if trade_count else None
+    )
+
+    recon_fail_count = sum(1 for row in reconciliation_checks if row.get("pass_fail") == "fail")
+    recon_pass_count = sum(1 for row in reconciliation_checks if row.get("pass_fail") == "pass")
+    recon_linked_count = sum(1 for row in reconciliation_checks if row.get("linked_trade_ts"))
+
+    def _add_quality_check(check_name, severity, observed, expected, status, context=""):
+        data_quality_checks.append(
+            {
+                "check_name": check_name,
+                "severity": severity,
+                "status": status,
+                "observed": observed,
+                "expected": expected,
+                "context": context,
+            }
+        )
+
+    _add_quality_check(
+        "strategy_regime_attribution",
+        "high",
+        f"{strategy_regime_known_trades}/{trade_count}",
+        "100% trade attribution",
+        "pass" if unknown_strategy_regime_trades == 0 else "fail",
+        f"attribution_pct={strategy_regime_attribution_pct}",
+    )
+    _add_quality_check(
+        "reconciliation_large_delta_warnings",
+        "high",
+        recon_large_delta_warnings,
+        "0",
+        "pass" if recon_large_delta_warnings == 0 else "fail",
+        "from post-close reconciliation warnings",
+    )
+    _add_quality_check(
+        "reconciliation_large_unexplained_warnings",
+        "high",
+        recon_large_unexplained_warnings,
+        "0",
+        "pass" if recon_large_unexplained_warnings == 0 else "fail",
+        "from post-close reconciliation warnings",
+    )
+    _add_quality_check(
+        "reconciliation_rows_linked_to_trades",
+        "medium",
+        f"{recon_linked_count}/{len(reconciliation_checks)}",
+        "all linked when available",
+        "pass" if (len(reconciliation_checks) == 0 or recon_linked_count == len(reconciliation_checks)) else "warn",
+        "older logs may miss linkage fields",
+    )
+    _add_quality_check(
+        "orderbook_midprice_failures",
+        "medium",
+        orderbook_mid_failures,
+        "0",
+        "pass" if orderbook_mid_failures == 0 else "warn",
+        "mid-price fallback pressure indicator",
+    )
+    _add_quality_check(
+        "pnl_fallback_runtime_pct",
+        "medium",
+        pnl_fallback_pct_runtime,
+        "<= 10%",
+        "pass" if (pnl_fallback_pct_runtime is None or pnl_fallback_pct_runtime <= 10.0) else "warn",
+        f"fallback_used={pnl_fallback_count}",
+    )
+    _add_quality_check(
+        "candle_shortfall_events",
+        "low",
+        candle_shortfall_events,
+        "0",
+        "pass" if candle_shortfall_events == 0 else "warn",
+        f"missing_total={candle_shortfall_missing_total}",
+    )
+
     if run_id is None:
         run_id = start_ts.strftime("%Y%m%d_%H%M%S") if start_ts else datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -1051,6 +1348,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
 
     summary = {
         "report_version": report_version,
+        "report_schema_version": REPORT_SCHEMA_VERSION,
         "run_sequence": run_sequence,
         "run_id": run_id,
         "report_folder": report_folder,
@@ -1110,8 +1408,69 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "entry_liquidity_min_ratio_avg": entry_liq_avg,
         "entry_liquidity_min_ratio_min": entry_liq_min,
         "entries_with_fallback_liquidity": entries_with_fallback_liquidity,
+        "strategy_regime_cells": len(strategy_regime_rows),
+        "strategy_regime_known_trades": strategy_regime_known_trades,
+        "strategy_regime_unknown_trades": unknown_strategy_regime_trades,
+        "strategy_regime_attribution_pct": strategy_regime_attribution_pct,
+        "reconciliation_checks_total": len(reconciliation_checks),
+        "reconciliation_checks_pass": recon_pass_count,
+        "reconciliation_checks_fail": recon_fail_count,
+        "reconciliation_large_delta_warnings": recon_large_delta_warnings,
+        "reconciliation_large_unexplained_warnings": recon_large_unexplained_warnings,
+        "candle_shortfall_events": candle_shortfall_events,
+        "candle_shortfall_missing_total": candle_shortfall_missing_total,
+        "data_quality_checks_total": len(data_quality_checks),
+        "data_quality_checks_fail": sum(1 for row in data_quality_checks if row.get("status") == "fail"),
+        "data_quality_checks_warn": sum(1 for row in data_quality_checks if row.get("status") == "warn"),
         "fallback_summary": fallback_summary,
         "run_behavior": run_behavior,
+        "performance": {
+            "session_pnl": session_pnl,
+            "session_pnl_pct": session_pct,
+            "total_pnl": total_pnl,
+            "total_pnl_pct": total_pnl_pct,
+            "trades_total": trade_count,
+            "wins": wins,
+            "losses": losses,
+            "win_rate_pct": win_rate,
+            "avg_trade_pnl_usdt": avg_trade_pnl,
+            "avg_hold_minutes": avg_hold,
+        },
+        "risk": {
+            "max_drawdown_usdt": max_drawdown,
+            "max_drawdown_pct": max_drawdown_pct,
+            "run_end_reason": run_end_reason,
+            "run_end_detail": run_end_detail,
+        },
+        "execution_quality": {
+            "signals_total": signals_total,
+            "entries_total": entries_total,
+            "liquidity_rejects": liquidity_rejects,
+            "liquidity_reject_rate_pct": round((liquidity_rejects / signals_total) * 100, 2)
+            if signals_total
+            else None,
+            "slippage_avg_abs_bps": avg_slippage_abs_bps,
+            "slippage_max_abs_bps": max_slippage_abs_bps,
+            "entry_liquidity_min_ratio_avg": entry_liq_avg,
+            "entry_liquidity_min_ratio_min": entry_liq_min,
+        },
+        "data_quality": {
+            "checks_total": len(data_quality_checks),
+            "checks_fail": sum(1 for row in data_quality_checks if row.get("status") == "fail"),
+            "checks_warn": sum(1 for row in data_quality_checks if row.get("status") == "warn"),
+            "reconciliation_checks_total": len(reconciliation_checks),
+            "reconciliation_checks_fail": recon_fail_count,
+            "reconciliation_large_delta_warnings": recon_large_delta_warnings,
+            "reconciliation_large_unexplained_warnings": recon_large_unexplained_warnings,
+            "candle_shortfall_events": candle_shortfall_events,
+            "orderbook_midprice_failures": orderbook_mid_failures,
+        },
+        "strategy_regime": {
+            "cells": len(strategy_regime_rows),
+            "known_trades": strategy_regime_known_trades,
+            "unknown_trades": unknown_strategy_regime_trades,
+            "attribution_pct": strategy_regime_attribution_pct,
+        },
     }
 
     report_root = _report_root(repo_root)
@@ -1124,18 +1483,26 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     equity_path = output_dir / "equity_curve.csv"
     trades_path = output_dir / "trades.csv"
     pair_perf_path = output_dir / "pair_performance.csv"
+    strategy_regime_path = output_dir / "strategy_regime_scorecard.csv"
+    data_quality_path = output_dir / "data_quality_checks.csv"
+    reconciliation_path = output_dir / "reconciliation_checks.csv"
     liquidity_path = output_dir / "liquidity_checks.csv"
     slippage_path = output_dir / "entry_slippage.csv"
     alerts_path = output_dir / "alerts.txt"
     config_path = output_dir / "config_snapshot.json"
+    manifest_path = output_dir / "report_manifest.json"
 
     summary["equity_curve_path"] = str(equity_path)
     summary["trades_path"] = str(trades_path)
     summary["pair_performance_path"] = str(pair_perf_path)
+    summary["strategy_regime_scorecard_path"] = str(strategy_regime_path)
+    summary["data_quality_checks_path"] = str(data_quality_path)
+    summary["reconciliation_checks_path"] = str(reconciliation_path)
     summary["liquidity_checks_path"] = str(liquidity_path)
     summary["entry_slippage_path"] = str(slippage_path)
     summary["alerts_path"] = str(alerts_path)
     summary["config_snapshot_path"] = str(config_path)
+    summary["report_manifest_path"] = str(manifest_path)
     summary["duration_human"] = _format_duration(duration_seconds)
     if variant_of:
         summary["variant_of"] = variant_of
@@ -1159,6 +1526,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "session_pnl_pct",
             "hold_minutes",
             "entry_z",
+            "entry_strategy",
+            "entry_regime",
         ],
     )
     _write_csv(
@@ -1177,6 +1546,59 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "avg_hold_minutes",
             "pnl_pct_sum",
         ],
+    )
+    _write_csv(
+        strategy_regime_path,
+        strategy_regime_rows,
+        [
+            "entry_strategy",
+            "entry_regime",
+            "trades",
+            "wins",
+            "losses",
+            "win_rate_pct",
+            "pnl_usdt",
+            "avg_pnl_usdt",
+            "avg_hold_minutes",
+        ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        data_quality_path,
+        data_quality_checks,
+        [
+            "check_name",
+            "severity",
+            "status",
+            "observed",
+            "expected",
+            "context",
+        ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        reconciliation_path,
+        reconciliation_checks,
+        [
+            "timestamp",
+            "linked_trade_ts",
+            "pair",
+            "entry_strategy",
+            "entry_regime",
+            "result",
+            "trade_pnl_estimate",
+            "equity_change_realized",
+            "diff",
+            "fees",
+            "slippage",
+            "funding",
+            "unexplained",
+            "large_delta_warning",
+            "large_unexplained_warning",
+            "unexplained_pct_warning",
+            "pass_fail",
+        ],
+        write_header_if_empty=True,
     )
     _write_csv(
         liquidity_path,
@@ -1207,11 +1629,46 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         ],
     )
 
-    if alerts:
-        alerts_path.write_text("\n".join(alerts) + "\n", encoding="utf-8")
+    alerts_payload = "\n".join(alerts)
+    if alerts_payload:
+        alerts_payload += "\n"
+    alerts_path.write_text(alerts_payload, encoding="utf-8")
 
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     config_path.write_text(json.dumps(config_snapshot, indent=2), encoding="utf-8")
+    manifest = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "report_version": report_version,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "run_sequence": run_sequence,
+        "git_sha": git_sha,
+        "files": [
+            {"name": summary_path.name, "path": str(summary_path), "format": "json", "rows": 1},
+            {"name": summary_txt_path.name, "path": str(summary_txt_path), "format": "txt", "rows": None},
+            {"name": config_path.name, "path": str(config_path), "format": "json", "rows": len(config_snapshot)},
+            {"name": equity_path.name, "path": str(equity_path), "format": "csv", "rows": len(equity_curve)},
+            {"name": trades_path.name, "path": str(trades_path), "format": "csv", "rows": len(trades)},
+            {"name": pair_perf_path.name, "path": str(pair_perf_path), "format": "csv", "rows": len(pair_rows)},
+            {
+                "name": strategy_regime_path.name,
+                "path": str(strategy_regime_path),
+                "format": "csv",
+                "rows": len(strategy_regime_rows),
+            },
+            {"name": data_quality_path.name, "path": str(data_quality_path), "format": "csv", "rows": len(data_quality_checks)},
+            {
+                "name": reconciliation_path.name,
+                "path": str(reconciliation_path),
+                "format": "csv",
+                "rows": len(reconciliation_checks),
+            },
+            {"name": liquidity_path.name, "path": str(liquidity_path), "format": "csv", "rows": len(liquidity_checks)},
+            {"name": slippage_path.name, "path": str(slippage_path), "format": "csv", "rows": len(entry_slippage)},
+            {"name": alerts_path.name, "path": str(alerts_path), "format": "txt", "rows": len(alerts)},
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     switch_reason_parts = []
     for reason, count in sorted(pair_switch_reasons.items()):
@@ -1253,9 +1710,13 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         equity_path,
         trades_path,
         pair_perf_path,
+        strategy_regime_path,
+        data_quality_path,
+        reconciliation_path,
         liquidity_path,
         slippage_path,
         alerts_path,
+        manifest_path,
     ]:
         if path.exists():
             files_list.append(path.name)
@@ -1282,6 +1743,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Max drawdown: {summary['max_drawdown_usdt']} ({summary['max_drawdown_pct']}%)",
                 f"Trades: {summary['trades_total']} | Wins: {summary['wins']} | Losses: {summary['losses']} | Win rate: {summary['win_rate_pct']}",
                 f"Avg trade PnL: {summary['avg_trade_pnl_usdt']} | Avg hold (min): {summary['avg_hold_minutes']}",
+                f"Strategy/regime cells: {summary['strategy_regime_cells']} | Attributed trades: {summary['strategy_regime_known_trades']}",
                 "",
                 "EXECUTION QUALITY",
                 f"Signals: {summary['signals_total']} | Entries: {summary['entries_total']}",
@@ -1302,6 +1764,12 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Orderbook backoff events: {fallback_summary['orderbook_backoff_events']} | Active: {fallback_summary['orderbook_backoff_active']}",
                 f"Orderbook mid-price failures: {fallback_summary['orderbook_midprice_failures']}",
                 f"Orderbook backoff reasons: {backoff_reason_line}",
+                "",
+                "DATA QUALITY",
+                f"Checks: {summary['data_quality_checks_total']} | Fail: {summary['data_quality_checks_fail']} | Warn: {summary['data_quality_checks_warn']}",
+                f"Reconciliation rows: {summary['reconciliation_checks_total']} | Pass: {summary['reconciliation_checks_pass']} | Fail: {summary['reconciliation_checks_fail']}",
+                f"Reconciliation warnings (delta/unexplained): {summary['reconciliation_large_delta_warnings']} / {summary['reconciliation_large_unexplained_warnings']}",
+                f"Candle shortfall events: {summary['candle_shortfall_events']} | Missing candles total: {summary['candle_shortfall_missing_total']}",
                 "",
                 "RUN BEHAVIOR",
                 f"Pair switches: {run_behavior['pair_switches']} | Blocked: {run_behavior['pair_switch_blocked']}",

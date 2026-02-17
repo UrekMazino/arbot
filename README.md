@@ -141,14 +141,19 @@ After each run, StatBot can generate a report pack under `OKXStatBot/Reports/v1/
 - `summary.txt` (executive summary + files list)
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `trades.csv` (trade closes with PnL and hold time)
+- `strategy_regime_scorecard.csv` (trade outcomes grouped by entry strategy + entry regime)
+- `data_quality_checks.csv` (structured pass/warn/fail checks for run quality)
+- `reconciliation_checks.csv` (post-close equity reconciliation rows and warning flags)
 - `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)
 - `entry_slippage.csv` (entry fill slippage vs preview price, bps)
 - `alerts.txt` (errors, PNL alerts, critical events)
 - `config_snapshot.json` (redacted .env snapshot)
+- `report_manifest.json` (machine-readable file inventory, schema version, row counts)
 
 At `OKXStatBot/Reports/v1`, an index is maintained for quick review:
 - `index.json` (all runs + key metrics)
 - `index.csv` (same, CSV-friendly)
+  - Includes strategy/regime attribution, reconciliation warning counts, and data-quality counters for cross-run screening.
 
 Manual/analysis runs:
 - If you run `report_generator.py --output` with a name starting with `manual` or `analysis`, it will be saved under `run_XX_.../variants/<name>` to keep run numbers aligned.

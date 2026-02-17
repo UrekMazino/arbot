@@ -346,7 +346,15 @@ class StrategyRouter:
         return decision
 
     def _persist_state(self, decision: StrategyDecision, ts: float, since_ts: float):
-        state = dict(self.state or {})
+        # Reload latest state before writing to avoid overwriting
+        # out-of-band updates like strategy_performance trade counters.
+        latest_state = self._load_state()
+        state = {}
+        if isinstance(latest_state, dict):
+            state.update(latest_state)
+        if isinstance(self.state, dict):
+            for key, value in self.state.items():
+                state.setdefault(key, value)
         previous_active = _normalize_strategy(state.get("active_strategy", "STATARB_MR"))
 
         state["mode"] = self.mode
@@ -430,4 +438,3 @@ def resolve_strategy_policy_overrides(mode, decision):
         overrides["size_multiplier"] = max(size_mult, 0.0)
 
     return overrides
-

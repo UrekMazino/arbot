@@ -178,6 +178,48 @@ def _get_pair_idle_timeout_min():
     return minutes
 
 
+def _env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return bool(default)
+
+
+def _get_switch_precheck_coint_enabled():
+    return _env_flag("STATBOT_SWITCH_PRECHECK_COINT", True)
+
+
+def _get_switch_precheck_fail_open():
+    return _env_flag("STATBOT_SWITCH_PRECHECK_FAIL_OPEN", False)
+
+
+def _get_switch_precheck_limit():
+    raw = os.getenv("STATBOT_SWITCH_PRECHECK_LIMIT", "120")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 120
+    if value < 60:
+        value = 60
+    return value
+
+
+def _get_switch_precheck_window():
+    raw = os.getenv("STATBOT_SWITCH_PRECHECK_WINDOW", "60")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 60
+    if value < 20:
+        value = 20
+    return value
+
+
 def _get_regime_eval_seconds():
     raw = os.getenv("STATBOT_REGIME_EVAL_SECONDS", "60")
     try:
@@ -847,7 +889,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     Includes Graveyard and Cooldown checks with emergency override for critical health.
 
     Args:
-        health_score: Current pair health score (0-100). If below 25, overrides cooldown.
+        health_score: Current pair health score (0-100). If below emergency threshold, can override cooldown.
     """
     import pandas as pd
     from pathlib import Path
@@ -878,20 +920,87 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         return SWITCH_RESULT_BLOCKED
 
     # Log if emergency override was used
-    if health_score is not None and health_score < 40:
-        logger.warning(
-            "EMERGENCY OVERRIDE: Health score %s < 40, bypassing cooldown (%.1fh elapsed)",
-            health_score,
-            elapsed,
-        )
-    elif elapsed < 24:
-        logger.info("Cooldown bypassed but health not critical: %s/100", health_score)
+    if elapsed < 24:
+        is_emergency_reason = str(switch_reason or "").strip().lower() in ("health", "orderbook_dead")
+        if health_score is not None and health_score < 40 and is_emergency_reason:
+            logger.warning(
+                "EMERGENCY OVERRIDE: Health score %s < 40, bypassing cooldown (%.1fh elapsed)",
+                health_score,
+                elapsed,
+            )
+        else:
+            logger.info(
+                "Cooldown bypassed for switch reason=%s (%.1fh elapsed).",
+                switch_reason,
+                elapsed,
+            )
 
     logger.info("Attempting to switch to next pair (reason=%s)...", switch_reason)
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
 
     per_leg_capital = _get_per_leg_allocation()
     logger.info("Per-leg allocation for min-capital filter: %.8f", per_leg_capital)
+    precheck_coint_enabled = _get_switch_precheck_coint_enabled()
+    precheck_fail_open = _get_switch_precheck_fail_open()
+    precheck_limit = _get_switch_precheck_limit()
+    precheck_window = _get_switch_precheck_window()
+    precheck_cache = {}
+    if precheck_coint_enabled:
+        logger.info(
+            "Pair switch pre-check enabled (coint, limit=%d, window=%d, fail_open=%d).",
+            precheck_limit,
+            precheck_window,
+            int(precheck_fail_open),
+        )
+
+    def _pair_passes_switch_precheck(t1, t2):
+        if not precheck_coint_enabled:
+            return True
+
+        pair_key = normalize_pair_key(t1, t2) or f"{t1}/{t2}"
+        cached = precheck_cache.get(pair_key)
+        if cached is not None:
+            return bool(cached)
+
+        try:
+            _zs, _sign, metrics = get_latest_zscore(
+                inst_id_1=t1,
+                inst_id_2=t2,
+                limit=precheck_limit,
+                window=precheck_window,
+                use_orderbook=False,
+            )
+            coint_flag = int(metrics.get("coint_flag", 0))
+            passed = coint_flag == 1
+            if not passed:
+                logger.info(
+                    "Skipping pair %s/%s: switch pre-check failed (coint=%d p=%.4f corr=%.3f).",
+                    t1,
+                    t2,
+                    coint_flag,
+                    float(metrics.get("p_value", 1.0) or 1.0),
+                    float(metrics.get("correlation", 0.0) or 0.0),
+                )
+            precheck_cache[pair_key] = bool(passed)
+            return bool(passed)
+        except Exception as exc:
+            if precheck_fail_open:
+                logger.warning(
+                    "Switch pre-check error for %s/%s: %s (fail-open).",
+                    t1,
+                    t2,
+                    exc,
+                )
+                precheck_cache[pair_key] = True
+                return True
+            logger.warning(
+                "Skipping pair %s/%s: switch pre-check error: %s",
+                t1,
+                t2,
+                exc,
+            )
+            precheck_cache[pair_key] = False
+            return False
 
     def _read_pairs():
         if not csv_path.exists():
@@ -1005,6 +1114,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 min_equity = pair.get("min_equity")
                 if equity_usdt > 0 and min_equity and min_equity > equity_usdt:
                     continue
+                if not _pair_passes_switch_precheck(t1, t2):
+                    continue
                 logger.info("Prioritizing hospital pair %s/%s (cooldown complete).", t1, t2)
                 return t1, t2
 
@@ -1044,6 +1155,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                     min_equity,
                     equity_usdt,
                 )
+                continue
+            if not _pair_passes_switch_precheck(t1, t2):
                 continue
             next_t1, next_t2 = t1, t2
             logger.info("Found healthy replacement at index %d: %s/%s", idx, next_t1, next_t2)

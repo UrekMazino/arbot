@@ -2186,6 +2186,8 @@ if __name__ == "__main__":
                 reconciliation = None
                 pre_close_equity = equity_usdt
                 pre_close_equity_change = None
+                funding_fees = 0.0
+                costs = None
 
                 # Pre-close diagnostics (estimate only; not used for trade classification).
                 if entry_equity is not None and pre_close_equity is not None and entry_notional:
@@ -2197,7 +2199,6 @@ if __name__ == "__main__":
                         logger.info("Funding fees fetched from OKX: %.4f USDT", funding_fees)
 
                     costs = fee_tracker.record_trade_costs(entry_notional)
-                    reconciliation = fee_tracker.reconcile_equity_drift(total_pnl, pre_close_equity_change)
                     logger.info(
                         "Trade costs: entry_fee=%.4f exit_fee=%.4f slippage=%.4f total=%.4f",
                         costs["entry_fee"],
@@ -2205,35 +2206,13 @@ if __name__ == "__main__":
                         costs["slippage"],
                         costs["total_costs"],
                     )
-                    logger.info(
-                        "Equity reconciliation: trade_pnl=%.2f equity_change=%.2f diff=%.2f fees=%.2f "
-                        "slippage=%.2f funding=%.2f unexplained=%.2f",
-                        reconciliation["trade_pnl"],
-                        reconciliation["equity_change"],
-                        reconciliation["difference"],
-                        reconciliation["fees"],
-                        reconciliation["slippage"],
-                        reconciliation["funding"],
-                        reconciliation["unexplained"],
-                    )
-
-                    # Warn if large discrepancy between position PnL and pre-close equity estimate.
-                    pnl_diff = abs(total_pnl - pre_close_equity_change)
-                    if pnl_diff > 0.10:  # 10 cents threshold
-                        logger.warning(
-                            "Large PnL discrepancy detected: position_pnl=%.2f pre_close_equity_change=%.2f diff=%.2f",
+                    pre_close_diff = pre_close_equity_change - total_pnl
+                    if abs(pre_close_diff) > 0.10:  # 10 cents threshold
+                        logger.info(
+                            "Pre-close PnL estimate delta: position_pnl=%.2f pre_close_equity_change=%.2f diff=%.2f",
                             total_pnl,
                             pre_close_equity_change,
-                            pnl_diff,
-                        )
-
-                    # Warn if large unexplained component in reconciliation
-                    unexplained_pct = abs(reconciliation["unexplained"] / reconciliation["difference"]) * 100 if reconciliation["difference"] != 0 else 0
-                    if abs(reconciliation["unexplained"]) > 0.10 and unexplained_pct > 50:
-                        logger.warning(
-                            "Large unexplained reconciliation component: %.2f USDT (%.1f%% of difference)",
-                            reconciliation["unexplained"],
-                            unexplained_pct,
+                            pre_close_diff,
                         )
 
                 kill_switch = close_all_positions(kill_switch)
@@ -2263,6 +2242,49 @@ if __name__ == "__main__":
                     logger.warning(
                         "Entry/post-close equity unavailable; falling back to pair PnL for trade result."
                     )
+
+                # Reconcile estimate vs realized result using per-trade costs.
+                if costs is not None:
+                    reconciliation = fee_tracker.reconcile_equity_drift(
+                        total_pnl,
+                        actual_pnl,
+                        fees=costs["entry_fee"] + costs["exit_fee"],
+                        slippage=costs["slippage"],
+                        funding=funding_fees,
+                    )
+                    logger.info(
+                        "Equity reconciliation (post-close): trade_pnl=%.2f equity_change=%.2f diff=%.2f "
+                        "fees=%.2f slippage=%.2f funding=%.2f unexplained=%.2f",
+                        reconciliation["trade_pnl"],
+                        reconciliation["equity_change"],
+                        reconciliation["difference"],
+                        reconciliation["fees"],
+                        reconciliation["slippage"],
+                        reconciliation["funding"],
+                        reconciliation["unexplained"],
+                    )
+
+                    if post_equity_usdt is not None:
+                        pnl_diff = abs(reconciliation["difference"])
+                        if pnl_diff > 0.10:
+                            logger.warning(
+                                "Large realized-vs-estimated PnL delta: position_pnl=%.2f realized_equity_change=%.2f diff=%.2f",
+                                total_pnl,
+                                actual_pnl,
+                                pnl_diff,
+                            )
+
+                        unexplained_pct = (
+                            abs(reconciliation["unexplained"] / reconciliation["difference"]) * 100
+                            if reconciliation["difference"] != 0
+                            else 0
+                        )
+                        if abs(reconciliation["unexplained"]) > 0.10 and unexplained_pct > 50:
+                            logger.warning(
+                                "Large unexplained reconciliation component (post-close): %.2f USDT (%.1f%% of difference)",
+                                reconciliation["unexplained"],
+                                unexplained_pct,
+                            )
 
                 is_win = actual_pnl > 0
                 result_label = "WIN" if is_win else "LOSS"

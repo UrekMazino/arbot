@@ -30,17 +30,26 @@ class FeeTracker:
             "total_costs": entry_fee + exit_fee + slippage,
         }
 
-    def reconcile_equity_drift(self, trade_pnl, equity_change):
+    def reconcile_equity_drift(self, trade_pnl, equity_change, fees=None, slippage=None, funding=None):
+        """
+        Reconcile trade PnL estimate vs realized equity change.
+
+        When per-trade costs are provided, use them for attribution.
+        Otherwise, fall back to session aggregates for backward compatibility.
+        """
         difference = equity_change - trade_pnl
-        known_costs = self.session_fees + self.session_slippage + self.session_funding
+        fees_used = self.session_fees if fees is None else float(fees)
+        slippage_used = self.session_slippage if slippage is None else float(slippage)
+        funding_used = self.session_funding if funding is None else float(funding)
+        known_costs = fees_used + slippage_used + funding_used
         unexplained = difference + known_costs
         return {
             "trade_pnl": trade_pnl,
             "equity_change": equity_change,
             "difference": difference,
-            "fees": self.session_fees,
-            "slippage": self.session_slippage,
-            "funding": self.session_funding,
+            "fees": fees_used,
+            "slippage": slippage_used,
+            "funding": funding_used,
             "unexplained": unexplained,
         }
 

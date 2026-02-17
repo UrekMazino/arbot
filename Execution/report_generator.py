@@ -139,7 +139,7 @@ ALERT_PATTERNS = [
 ]
 
 RUN_DIR_RE = re.compile(r"^run_(?P<seq>\d+)_\d{8}_\d{6}$")
-REPORT_SCHEMA_VERSION = "1.2.0"
+REPORT_SCHEMA_VERSION = "1.3.0"
 INDEX_FIELDS = [
     "run_sequence",
     "run_id",
@@ -262,6 +262,47 @@ def _git_sha(repo_root):
     if result.returncode != 0:
         return ""
     return (result.stdout or "").strip()
+
+
+def _git_commits_since(repo_root, base_sha, max_count=100):
+    base = str(base_sha or "").strip()
+    if not base:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "log",
+                f"{base}..HEAD",
+                "--date=iso-strict",
+                "--pretty=format:%h|%ad|%s",
+                f"--max-count={int(max_count)}",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    commits = []
+    for raw in (result.stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        commits.append(
+            {
+                "sha": parts[0].strip(),
+                "date": parts[1].strip(),
+                "subject": parts[2].strip(),
+            }
+        )
+    return commits
 
 
 def _read_version(repo_root):
@@ -555,6 +596,15 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     log_path = Path(log_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    existing_summary = {}
+    existing_summary_path = output_dir / "summary.json"
+    if existing_summary_path.exists():
+        try:
+            loaded_existing = json.loads(existing_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_existing, dict):
+                existing_summary = loaded_existing
+        except Exception:
+            existing_summary = {}
     env_values = _load_env_file(env_path) if env_path else {}
     ratio_env = env_values.get("STATBOT_MIN_LIQUIDITY_RATIO") or env_values.get("STATBOT_LIQUIDITY_MIN_RATIO") or ""
     min_liquidity_ratio = _safe_float(ratio_env) if ratio_env else 0.0
@@ -1479,6 +1529,16 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     repo_root = Path(__file__).resolve().parents[1]
     version = _read_version(repo_root)
     git_sha = _git_sha(repo_root)
+    previous_report_git_sha = str(existing_summary.get("git_sha") or "").strip()
+    previous_report_created_at = existing_summary.get("report_created_at")
+    post_run_fixes = []
+    if previous_report_git_sha and git_sha and previous_report_git_sha != git_sha:
+        post_run_fixes = _git_commits_since(repo_root, previous_report_git_sha, max_count=100)
+    report_hardening_fixes = [
+        "entry_slippage_materialized_when_empty",
+        "total_pnl_semantics_clarified",
+        "post_run_fixlog_commits_added",
+    ]
     config_snapshot = _redact_config(env_values)
 
     liquidity_fallback_min_ratio = None
@@ -1642,8 +1702,10 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "session_pnl_pct": session_pct,
         "session_pnl_source": session_pnl_source,
         "session_pnl_equity_delta": equity_session_pnl,
+        "session_pnl_semantics": "Canonical run PnL based on session/equity delta.",
         "total_pnl": total_pnl,
         "total_pnl_pct": total_pnl_pct,
+        "total_pnl_semantics": "Runtime live PnL snapshot from log PnL lines; not cumulative realized PnL.",
         "max_drawdown_usdt": max_drawdown,
         "max_drawdown_pct": max_drawdown_pct,
         "trades_total": trade_count,
@@ -1706,6 +1768,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "session_pnl_pct": session_pct,
             "total_pnl": total_pnl,
             "total_pnl_pct": total_pnl_pct,
+            "total_pnl_semantics": "Runtime live snapshot (not cumulative realized).",
             "trades_total": trade_count,
             "wins": wins,
             "losses": losses,
@@ -1758,6 +1821,12 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "directional_filter_shadow_blocks": directional_filter_shadow_blocks,
             "directional_filter_active_blocks": directional_filter_active_blocks,
         },
+        "report_regenerated": bool(existing_summary),
+        "previous_report_git_sha": previous_report_git_sha or None,
+        "previous_report_created_at": previous_report_created_at or None,
+        "post_run_fixes_count": len(post_run_fixes),
+        "post_run_fixes": post_run_fixes,
+        "report_hardening_fixes": report_hardening_fixes,
     }
 
     report_root = _report_root(repo_root)
@@ -1778,6 +1847,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     reconciliation_path = output_dir / "reconciliation_checks.csv"
     liquidity_path = output_dir / "liquidity_checks.csv"
     slippage_path = output_dir / "entry_slippage.csv"
+    post_run_fixes_path = output_dir / "post_run_fixes.csv"
     alerts_path = output_dir / "alerts.txt"
     config_path = output_dir / "config_snapshot.json"
     manifest_path = output_dir / "report_manifest.json"
@@ -1793,6 +1863,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     summary["reconciliation_checks_path"] = str(reconciliation_path)
     summary["liquidity_checks_path"] = str(liquidity_path)
     summary["entry_slippage_path"] = str(slippage_path)
+    summary["post_run_fixes_path"] = str(post_run_fixes_path)
     summary["alerts_path"] = str(alerts_path)
     summary["config_snapshot_path"] = str(config_path)
     summary["report_manifest_path"] = str(manifest_path)
@@ -1963,6 +2034,17 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "slippage_bps",
             "abs_slippage_bps",
         ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        post_run_fixes_path,
+        post_run_fixes,
+        [
+            "sha",
+            "date",
+            "subject",
+        ],
+        write_header_if_empty=True,
     )
 
     alerts_payload = "\n".join(alerts)
@@ -2019,6 +2101,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             },
             {"name": liquidity_path.name, "path": str(liquidity_path), "format": "csv", "rows": len(liquidity_checks)},
             {"name": slippage_path.name, "path": str(slippage_path), "format": "csv", "rows": len(entry_slippage)},
+            {"name": post_run_fixes_path.name, "path": str(post_run_fixes_path), "format": "csv", "rows": len(post_run_fixes)},
             {"name": alerts_path.name, "path": str(alerts_path), "format": "txt", "rows": len(alerts)},
         ],
     }
@@ -2055,6 +2138,30 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 delta_str = f"{delta:+}"
             comparison_lines.append(f"{metric}: {curr_val} (prev {prev_val}, delta {delta_str})")
 
+    post_run_fix_lines = []
+    if post_run_fixes:
+        post_run_fix_lines.extend(
+            [
+                "POST-RUN FIXES",
+                f"Previous report git: {previous_report_git_sha or 'n/a'}",
+                f"Current git: {git_sha or 'n/a'}",
+                f"Fix commits since previous report: {len(post_run_fixes)}",
+            ]
+        )
+        for item in post_run_fixes:
+            post_run_fix_lines.append(
+                f"- {item.get('sha')} | {item.get('date')} | {item.get('subject')}"
+            )
+    elif existing_summary:
+        post_run_fix_lines.extend(
+            [
+                "POST-RUN FIXES",
+                f"Previous report git: {previous_report_git_sha or 'n/a'}",
+                f"Current git: {git_sha or 'n/a'}",
+                "Fix commits since previous report: 0",
+            ]
+        )
+
     files_list = [
         summary_path.name,
         summary_txt_path.name,
@@ -2072,6 +2179,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         reconciliation_path,
         liquidity_path,
         slippage_path,
+        post_run_fixes_path,
         alerts_path,
         manifest_path,
     ]:
@@ -2096,7 +2204,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Starting equity: {summary['starting_equity']}",
                 f"Ending equity: {summary['ending_equity']}",
                 f"Session PnL: {summary['session_pnl']} ({summary['session_pnl_pct']}%)",
-                f"Total PnL: {summary['total_pnl']} ({summary['total_pnl_pct']}%)",
+                f"Runtime Total PnL snapshot: {summary['total_pnl']} ({summary['total_pnl_pct']}%)",
+                "Total PnL note: runtime live snapshot, not cumulative realized run PnL.",
                 f"Max drawdown: {summary['max_drawdown_usdt']} ({summary['max_drawdown_pct']}%)",
                 f"Trades: {summary['trades_total']} | Wins: {summary['wins']} | Losses: {summary['losses']} | Win rate: {summary['win_rate_pct']}",
                 f"Avg trade PnL: {summary['avg_trade_pnl_usdt']} | Avg hold (min): {summary['avg_hold_minutes']}",
@@ -2148,6 +2257,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Alerts: {summary['alerts_total']} | Errors: {summary['errors_total']}",
                 "",
                 *comparison_lines,
+                "",
+                *post_run_fix_lines,
                 "",
                 "FILES",
                 *[f"- {name}" for name in files_list],

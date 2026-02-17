@@ -110,7 +110,7 @@ class RegimeDecision:
 class RegimeRouter:
     VALID_REGIMES = {"RANGE", "TREND", "RISK_OFF"}
     VALID_MODES = {"off", "shadow", "active"}
-    HARD_RISK_REASONS = {"orderbook_dead", "cointegration_lost", "vol_shock"}
+    HARD_RISK_REASONS = {"vol_shock"}
 
     def __init__(self, state_store=None, config=None):
         self._state_store = state_store
@@ -374,12 +374,6 @@ class RegimeRouter:
         reasons = []
         hard_risk = False
 
-        if features.get("orderbook_dead"):
-            reasons.append("orderbook_dead")
-            hard_risk = True
-        if features.get("coint_flag", 0) != 1:
-            reasons.append("cointegration_lost")
-            hard_risk = True
         if features.get("vol_shock"):
             reasons.append("vol_shock")
             hard_risk = True
@@ -408,7 +402,7 @@ class RegimeRouter:
 
         if candidate == "RISK_OFF":
             confidence = 0.7 + min(0.25, max(len(reason_codes) - 1, 0) * 0.08)
-            if "vol_shock" in reason_codes or "orderbook_dead" in reason_codes:
+            if "vol_shock" in reason_codes:
                 confidence = max(confidence, 0.9)
         elif candidate == "TREND":
             ratio = trend_strength / trend_threshold

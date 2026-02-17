@@ -60,6 +60,7 @@ def _build_candles(count=180, base=100.0, drift=0.25):
 def _input(
     ts=2000.0,
     coint_flag=1,
+    orderbook_dead=False,
     liq_label="high",
     depth=20000.0,
     liq_label_long=None,
@@ -83,7 +84,7 @@ def _input(
         ticker_1="ETH-USDT-SWAP",
         ticker_2="LINK-USDT-SWAP",
         latest_zscore=2.4,
-        z_metrics={"coint_flag": coint_flag, "orderbook_dead": False},
+        z_metrics={"coint_flag": coint_flag, "orderbook_dead": bool(orderbook_dead)},
         market_candles=candles,
         liq_long={"label": liq_label_long, "orderbook_depth_notional": depth_long},
         liq_short={"label": liq_label_short, "orderbook_depth_notional": depth_short},
@@ -104,15 +105,25 @@ class TestRegimeRouter(unittest.TestCase):
         else:
             os.environ["STATBOT_REGIME_ROUTER_MODE"] = self.prev_mode
 
-    def test_cointegration_loss_forces_risk_off(self):
+    def test_cointegration_loss_no_longer_forces_risk_off(self):
         store = _MemoryStateStore()
         router = RegimeRouter(
             state_store=store,
             config={"min_hold_seconds": 1200, "confirm_count": 2},
         )
         decision = router.evaluate(_input(coint_flag=0))
-        self.assertEqual(decision.regime, "RISK_OFF")
-        self.assertIn("cointegration_lost", decision.reason_codes)
+        self.assertNotEqual(decision.regime, "RISK_OFF")
+        self.assertNotIn("cointegration_lost", decision.reason_codes)
+
+    def test_orderbook_dead_no_longer_forces_risk_off(self):
+        store = _MemoryStateStore()
+        router = RegimeRouter(
+            state_store=store,
+            config={"min_hold_seconds": 0, "confirm_count": 1, "trend_threshold": 0.8},
+        )
+        decision = router.evaluate(_input(orderbook_dead=True))
+        self.assertNotEqual(decision.regime, "RISK_OFF")
+        self.assertNotIn("orderbook_dead", decision.reason_codes)
 
     def test_strong_trend_classifies_trend(self):
         store = _MemoryStateStore()

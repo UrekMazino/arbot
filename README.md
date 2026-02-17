@@ -133,6 +133,7 @@ Runtime state is stored under `OKXStatBot/Execution/state`:
 - `active_pair.json`
 - `status.json`
 - `pair_strategy_state.json`
+- `strategy_state.json` (strategy router + rolling strategy performance state)
 - `regime_state.json` (Regime Router state, when enabled)
 
 ### Reports (v1 evidence packs)
@@ -142,6 +143,9 @@ After each run, StatBot can generate a report pack under `OKXStatBot/Reports/v1/
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `trades.csv` (trade closes with PnL and hold time)
 - `strategy_regime_scorecard.csv` (trade outcomes grouped by entry strategy + entry regime)
+- `strategy_performance.csv` (strategy-level PnL, win rate, hold, common exit reason)
+- `strategy_switches.csv` (strategy-router change timeline from logs)
+- `strategy_gates.csv` (strategy gate events: coint/mean-shift/policy and future cooldown/filter events)
 - `data_quality_checks.csv` (structured pass/warn/fail checks for run quality)
 - `reconciliation_checks.csv` (post-close equity reconciliation rows and warning flags)
 - `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)

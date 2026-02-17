@@ -112,6 +112,8 @@ def load_pair_state():
             "entry_notional": None,
             "entry_strategy": None,
             "entry_regime": None,
+            "entry_policy_snapshot": {},
+            "entry_ts": None,
             "last_switch_reason": "",
             "min_capital_cooldowns": {},
             "stall_warning_marks": [],
@@ -158,6 +160,10 @@ def load_pair_state():
                 state["entry_strategy"] = None
             if "entry_regime" not in state:
                 state["entry_regime"] = None
+            if "entry_policy_snapshot" not in state or not isinstance(state.get("entry_policy_snapshot"), dict):
+                state["entry_policy_snapshot"] = {}
+            if "entry_ts" not in state:
+                state["entry_ts"] = None
             if "last_switch_reason" not in state:
                 state["last_switch_reason"] = ""
             if "min_capital_cooldowns" not in state:
@@ -166,7 +172,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
+        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "entry_policy_snapshot": {}, "entry_ts": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
 
 def save_pair_state(state):
     try:
@@ -702,6 +708,7 @@ def set_entry_z_score(z_score):
     state = load_pair_state()
     state["entry_z_score"] = float(z_score)
     state["entry_time"] = time.time()
+    state["entry_ts"] = state["entry_time"]
     state["coint_lost_since_ts"] = None
     state["coint_lost_confirm_count"] = 0
     save_pair_state(state)
@@ -808,13 +815,23 @@ def get_entry_notional():
     state = load_pair_state()
     return state.get("entry_notional")
 
-def set_entry_trade_context(strategy_name=None, regime_name=None):
+def set_entry_trade_context(strategy_name=None, regime_name=None, policy_snapshot=None, entry_ts=None):
     """Persist entry strategy/regime context for close-time attribution."""
     state = load_pair_state()
     strategy = str(strategy_name or "").strip().upper()
     regime = str(regime_name or "").strip().upper()
     state["entry_strategy"] = strategy or None
     state["entry_regime"] = regime or None
+    if isinstance(policy_snapshot, dict):
+        state["entry_policy_snapshot"] = dict(policy_snapshot)
+    elif not isinstance(state.get("entry_policy_snapshot"), dict):
+        state["entry_policy_snapshot"] = {}
+    try:
+        if entry_ts is None:
+            entry_ts = state.get("entry_time")
+        state["entry_ts"] = float(entry_ts) if entry_ts is not None else None
+    except (TypeError, ValueError):
+        state["entry_ts"] = None
     save_pair_state(state)
 
 def get_entry_strategy():
@@ -827,6 +844,25 @@ def get_entry_regime():
     state = load_pair_state()
     return state.get("entry_regime")
 
+def get_entry_policy_snapshot():
+    """Get entry policy snapshot persisted at open."""
+    state = load_pair_state()
+    snapshot = state.get("entry_policy_snapshot")
+    if isinstance(snapshot, dict):
+        return dict(snapshot)
+    return {}
+
+def get_entry_ts():
+    """Get persisted entry timestamp used for strategy attribution."""
+    state = load_pair_state()
+    try:
+        value = state.get("entry_ts")
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
 def clear_entry_tracking():
     """Clear entry tracking when position is closed."""
     state = load_pair_state()
@@ -838,6 +874,8 @@ def clear_entry_tracking():
     state["entry_notional"] = None
     state["entry_strategy"] = None
     state["entry_regime"] = None
+    state["entry_policy_snapshot"] = {}
+    state["entry_ts"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
     state["z_history"] = []  # Clear stall detection history
     state["stall_warning_marks"] = []

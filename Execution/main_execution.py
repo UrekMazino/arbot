@@ -60,6 +60,7 @@ from strategy_router import (
     StrategyRouter,
     should_block_new_entries as should_block_strategy_entries,
 )
+from func_strategy_state import record_strategy_trade_result
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
@@ -2313,7 +2314,30 @@ if __name__ == "__main__":
 
                 is_win = actual_pnl > 0
                 result_label = "WIN" if is_win else "LOSS"
+                exit_reason = switch_reason_after_close or "normal"
                 record_trade_result(is_win)
+                try:
+                    strategy_perf = record_strategy_trade_result(
+                        entry_strategy,
+                        actual_pnl,
+                        regime_name=entry_regime,
+                        hold_minutes=hold_minutes,
+                        exit_reason=exit_reason,
+                    )
+                    logger.info(
+                        "STRATEGY_PERF_UPDATE: strategy=%s trades=%d rolling=%d rolling_pnl=%.2f rolling_win_rate=%s",
+                        entry_strategy,
+                        int(strategy_perf.get("trades_total", 0) or 0),
+                        int(strategy_perf.get("rolling_count", 0) or 0),
+                        float(strategy_perf.get("rolling_pnl_usdt", 0.0) or 0.0),
+                        (
+                            f"{float(strategy_perf.get('rolling_win_rate_pct')):.2f}%"
+                            if strategy_perf.get("rolling_win_rate_pct") is not None
+                            else "n/a"
+                        ),
+                    )
+                except Exception as strategy_state_exc:
+                    logger.warning("Failed to persist strategy performance state: %s", strategy_state_exc)
 
                 # Log funding fees from reconciliation
                 funding_fees = reconciliation.get("funding", 0.0) if reconciliation else 0.0
@@ -2321,7 +2345,6 @@ if __name__ == "__main__":
                     logger.info(f"Funding fees paid during trade: {funding_fees:.2f} USDT")
 
                 hold_label = f"{hold_minutes:.2f}" if hold_minutes is not None else "n/a"
-                exit_reason = switch_reason_after_close or "normal"
                 logger.info(
                     "STRATEGY_TRADE_CLOSE: strategy=%s regime=%s result=%s pnl=%.2f hold_min=%s exit_reason=%s",
                     entry_strategy,

@@ -33,6 +33,43 @@ STRATEGY_TRADE_OPEN_RE = re.compile(
     r"STRATEGY_TRADE_OPEN: strategy=(?P<strategy>[A-Z0-9_]+) regime=(?P<regime>[A-Z0-9_]+) "
     r"entry_z=(?P<entry_z>[-+]?\d+\.\d+) size_mult=(?P<size_mult>[-+]?\d+\.\d+)"
 )
+STRATEGY_TRADE_CLOSE_RE = re.compile(
+    r"STRATEGY_TRADE_CLOSE: strategy=(?P<strategy>[A-Z0-9_]+) regime=(?P<regime>[A-Z0-9_]+) "
+    r"result=(?P<result>WIN|LOSS) pnl=(?P<pnl>[-+]?\d+\.\d+) hold_min=(?P<hold_min>[^\s]+) "
+    r"exit_reason=(?P<exit_reason>[^\s]+)"
+)
+STRATEGY_CHANGE_RE = re.compile(
+    r"STRATEGY_CHANGE: from=(?P<from>[A-Z0-9_]+) to=(?P<to>[A-Z0-9_]+) "
+    r"reason=(?P<reason>[^\s]+) in_position=(?P<in_position>[01])"
+)
+STRATEGY_GATE_ENFORCED_RE = re.compile(
+    r"STRATEGY_GATE_ENFORCED: strategy=(?P<strategy>[A-Z0-9_]+) reason=(?P<reason>[^\s]+) action=(?P<action>[^\s]+)"
+)
+COINT_GATE_RE = re.compile(
+    r"COINT_GATE: strategy=(?P<strategy>[A-Z0-9_]+) coint_flag=(?P<coint_flag>\d+) allow_new=(?P<allow_new>[01]) mode=(?P<mode>[a-z]+)",
+    re.IGNORECASE,
+)
+MEAN_SHIFT_GATE_RE = re.compile(
+    r"MEAN_SHIFT_GATE: strategy=(?P<strategy>[A-Z0-9_]+) shift_z=(?P<shift_z>[-+]?\d+\.\d+) "
+    r"threshold=(?P<threshold>[-+]?\d+\.\d+) allow_new=(?P<allow_new>[01]) mode=(?P<mode>[a-z]+) basis=(?P<basis>[^\s]+)",
+    re.IGNORECASE,
+)
+STRATEGY_COOLDOWN_ON_RE = re.compile(
+    r"STRATEGY_COOLDOWN_ON: strategy=(?P<strategy>[A-Z0-9_]+) reason=(?P<reason>[^\s]+) until_ts=(?P<until_ts>[-+]?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+STRATEGY_COOLDOWN_OFF_RE = re.compile(
+    r"STRATEGY_COOLDOWN_OFF: strategy=(?P<strategy>[A-Z0-9_]+)",
+    re.IGNORECASE,
+)
+DIRECTIONAL_FILTER_SHADOW_RE = re.compile(
+    r"DIRECTIONAL_FILTER_SHADOW: strategy=(?P<strategy>[A-Z0-9_]+) allow_new=(?P<allow_new>[01]) reason=(?P<reason>[^\s]+)",
+    re.IGNORECASE,
+)
+DIRECTIONAL_FILTER_ACTIVE_BLOCK_RE = re.compile(
+    r"DIRECTIONAL_FILTER_ACTIVE_BLOCK: strategy=(?P<strategy>[A-Z0-9_]+) reason=(?P<reason>[^\s]+)",
+    re.IGNORECASE,
+)
 LIQUIDITY_RE = re.compile(
     r"Liquidity check: long_target=(?P<long_target>[-+]?\d+\.\d+) short_target=(?P<short_target>[-+]?\d+\.\d+) "
     r"liquidity_long=(?P<liquidity_long>[-+]?\d+\.\d+) liquidity_short=(?P<liquidity_short>[-+]?\d+\.\d+)"
@@ -102,7 +139,7 @@ ALERT_PATTERNS = [
 ]
 
 RUN_DIR_RE = re.compile(r"^run_(?P<seq>\d+)_\d{8}_\d{6}$")
-REPORT_SCHEMA_VERSION = "1.1.0"
+REPORT_SCHEMA_VERSION = "1.2.0"
 INDEX_FIELDS = [
     "run_sequence",
     "run_id",
@@ -134,6 +171,11 @@ INDEX_FIELDS = [
     "slippage_max_abs_bps",
     "strategy_regime_attribution_pct",
     "strategy_regime_unknown_trades",
+    "strategy_switches_total",
+    "strategy_gates_total",
+    "strategy_cooldown_events",
+    "directional_filter_shadow_blocks",
+    "directional_filter_active_blocks",
     "reconciliation_checks_total",
     "reconciliation_checks_fail",
     "reconciliation_large_delta_warnings",
@@ -526,6 +568,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     data_quality_checks = []
     reconciliation_checks = []
     reconciliation_pending = []
+    strategy_switches = []
+    strategy_gates = []
+    strategy_close_pending = []
     open_positions = []
     pending_trade_context = None
     entry_order_map = {}
@@ -561,6 +606,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     candle_shortfall_missing_total = 0
     recon_large_delta_warnings = 0
     recon_large_unexplained_warnings = 0
+    strategy_cooldown_events = 0
+    directional_filter_shadow_blocks = 0
+    directional_filter_active_blocks = 0
     active_pair = None
 
     start_ts = None
@@ -755,6 +803,140 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     pending["unexplained"] = _safe_float(recon_unexpl_match.group("unexplained"))
                     pending["unexplained_pct_warning"] = _safe_float(recon_unexpl_match.group("pct"))
 
+            strategy_change_match = STRATEGY_CHANGE_RE.search(clean_msg)
+            if strategy_change_match and ts:
+                strategy_switches.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "from_strategy": strategy_change_match.group("from"),
+                        "to_strategy": strategy_change_match.group("to"),
+                        "reason": strategy_change_match.group("reason"),
+                        "in_position": int(strategy_change_match.group("in_position")),
+                    }
+                )
+
+            strategy_gate_match = STRATEGY_GATE_ENFORCED_RE.search(clean_msg)
+            if strategy_gate_match and ts:
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "policy_gate",
+                        "strategy": strategy_gate_match.group("strategy"),
+                        "mode": "active",
+                        "allow_new": 0,
+                        "reason": strategy_gate_match.group("reason"),
+                        "details": f"action={strategy_gate_match.group('action')}",
+                    }
+                )
+
+            coint_gate_match = COINT_GATE_RE.search(clean_msg)
+            if coint_gate_match and ts:
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "coint_gate",
+                        "strategy": coint_gate_match.group("strategy"),
+                        "mode": str(coint_gate_match.group("mode") or "").lower(),
+                        "allow_new": int(coint_gate_match.group("allow_new")),
+                        "reason": "coint_gate",
+                        "details": f"coint_flag={coint_gate_match.group('coint_flag')}",
+                    }
+                )
+
+            mean_shift_gate_match = MEAN_SHIFT_GATE_RE.search(clean_msg)
+            if mean_shift_gate_match and ts:
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "mean_shift_gate",
+                        "strategy": mean_shift_gate_match.group("strategy"),
+                        "mode": str(mean_shift_gate_match.group("mode") or "").lower(),
+                        "allow_new": int(mean_shift_gate_match.group("allow_new")),
+                        "reason": "mean_shift_gate",
+                        "details": (
+                            f"shift_z={mean_shift_gate_match.group('shift_z')} "
+                            f"threshold={mean_shift_gate_match.group('threshold')} "
+                            f"basis={mean_shift_gate_match.group('basis')}"
+                        ),
+                    }
+                )
+
+            cooldown_on_match = STRATEGY_COOLDOWN_ON_RE.search(clean_msg)
+            if cooldown_on_match and ts:
+                strategy_cooldown_events += 1
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "strategy_cooldown_on",
+                        "strategy": cooldown_on_match.group("strategy"),
+                        "mode": "active",
+                        "allow_new": 0,
+                        "reason": cooldown_on_match.group("reason"),
+                        "details": f"until_ts={cooldown_on_match.group('until_ts')}",
+                    }
+                )
+
+            cooldown_off_match = STRATEGY_COOLDOWN_OFF_RE.search(clean_msg)
+            if cooldown_off_match and ts:
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "strategy_cooldown_off",
+                        "strategy": cooldown_off_match.group("strategy"),
+                        "mode": "active",
+                        "allow_new": 1,
+                        "reason": "cooldown_cleared",
+                        "details": "",
+                    }
+                )
+
+            directional_shadow_match = DIRECTIONAL_FILTER_SHADOW_RE.search(clean_msg)
+            if directional_shadow_match and ts:
+                allow_new_val = int(directional_shadow_match.group("allow_new"))
+                if allow_new_val == 0:
+                    directional_filter_shadow_blocks += 1
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "directional_filter_shadow",
+                        "strategy": directional_shadow_match.group("strategy"),
+                        "mode": "shadow",
+                        "allow_new": allow_new_val,
+                        "reason": directional_shadow_match.group("reason"),
+                        "details": "",
+                    }
+                )
+
+            directional_active_match = DIRECTIONAL_FILTER_ACTIVE_BLOCK_RE.search(clean_msg)
+            if directional_active_match and ts:
+                directional_filter_active_blocks += 1
+                strategy_gates.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "gate_type": "directional_filter_active_block",
+                        "strategy": directional_active_match.group("strategy"),
+                        "mode": "active",
+                        "allow_new": 0,
+                        "reason": directional_active_match.group("reason"),
+                        "details": "",
+                    }
+                )
+
+            strategy_close_match = STRATEGY_TRADE_CLOSE_RE.search(clean_msg)
+            if strategy_close_match and ts:
+                hold_value = _safe_float(strategy_close_match.group("hold_min"))
+                strategy_close_pending.append(
+                    {
+                        "timestamp": ts.isoformat(),
+                        "strategy": strategy_close_match.group("strategy"),
+                        "regime": strategy_close_match.group("regime"),
+                        "result": strategy_close_match.group("result"),
+                        "pnl_usdt": _safe_float(strategy_close_match.group("pnl")),
+                        "hold_minutes": hold_value,
+                        "exit_reason": strategy_close_match.group("exit_reason"),
+                    }
+                )
+
             open_match = POSITION_OPEN_RE.search(clean_msg)
             strategy_open_match = STRATEGY_TRADE_OPEN_RE.search(clean_msg)
             if strategy_open_match and ts:
@@ -786,12 +968,23 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             if trade_match and ts:
                 hold_minutes = None
                 entry_z = None
+                exit_reason = "unknown"
+                close_ctx = strategy_close_pending.pop(0) if strategy_close_pending else None
                 entry_strategy = (
                     str(trade_match.group("strategy") or "").strip().upper() if trade_match.group("strategy") else ""
                 )
                 entry_regime = (
                     str(trade_match.group("regime") or "").strip().upper() if trade_match.group("regime") else ""
                 )
+                if close_ctx is not None:
+                    if not entry_strategy:
+                        entry_strategy = str(close_ctx.get("strategy") or "").strip().upper()
+                    if not entry_regime:
+                        entry_regime = str(close_ctx.get("regime") or "").strip().upper()
+                    hold_from_close = _safe_float(close_ctx.get("hold_minutes"))
+                    if hold_from_close is not None:
+                        hold_minutes = hold_from_close
+                    exit_reason = str(close_ctx.get("exit_reason") or "unknown").strip().lower() or "unknown"
                 if open_positions:
                     entry = open_positions.pop(0)
                     entry_z = entry.get("entry_z")
@@ -820,6 +1013,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                         "entry_z": entry_z,
                         "entry_strategy": entry_strategy,
                         "entry_regime": entry_regime,
+                        "exit_reason": exit_reason,
                     }
                 )
                 stats_entry = _pair_stats_entry(pair_key)
@@ -1174,6 +1368,79 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         reverse=True,
     )
 
+    strategy_perf_stats = {}
+    for trade in trades:
+        strategy_key = str(trade.get("entry_strategy") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        if strategy_key not in strategy_perf_stats:
+            strategy_perf_stats[strategy_key] = {
+                "strategy": strategy_key,
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "pnl_usdt": 0.0,
+                "hold_minutes": [],
+                "exit_reasons": {},
+            }
+        row = strategy_perf_stats[strategy_key]
+        row["trades"] += 1
+        result = str(trade.get("result") or "").strip().upper()
+        if result == "WIN":
+            row["wins"] += 1
+        elif result == "LOSS":
+            row["losses"] += 1
+        pnl_val = _safe_float(trade.get("pnl_usdt"))
+        if pnl_val is not None:
+            row["pnl_usdt"] += pnl_val
+        hold_val = _safe_float(trade.get("hold_minutes"))
+        if hold_val is not None:
+            row["hold_minutes"].append(hold_val)
+        reason = str(trade.get("exit_reason") or "unknown").strip().lower() or "unknown"
+        reason_counts = row["exit_reasons"]
+        reason_counts[reason] = int(reason_counts.get(reason, 0) or 0) + 1
+
+    strategy_perf_rows = []
+    for strategy_key, row in strategy_perf_stats.items():
+        trades_total = int(row.get("trades", 0) or 0)
+        wins_total = int(row.get("wins", 0) or 0)
+        losses_total = int(row.get("losses", 0) or 0)
+        pnl_total = float(row.get("pnl_usdt", 0.0) or 0.0)
+        holds = row.get("hold_minutes") or []
+        avg_hold = round(sum(holds) / len(holds), 2) if holds else None
+        avg_pnl = round(pnl_total / trades_total, 4) if trades_total > 0 else None
+        win_rate = round((wins_total / trades_total) * 100, 2) if trades_total > 0 else None
+        top_exit_reason = "unknown"
+        if row.get("exit_reasons"):
+            top_exit_reason = max(
+                row["exit_reasons"].items(),
+                key=lambda item: int(item[1]),
+            )[0]
+        strategy_perf_rows.append(
+            {
+                "strategy": strategy_key,
+                "trades": trades_total,
+                "wins": wins_total,
+                "losses": losses_total,
+                "win_rate_pct": win_rate,
+                "pnl_usdt": round(pnl_total, 4),
+                "avg_pnl_usdt": avg_pnl,
+                "avg_hold_minutes": avg_hold,
+                "top_exit_reason": top_exit_reason,
+            }
+        )
+    strategy_perf_rows.sort(
+        key=lambda row: (row.get("trades", 0), row.get("pnl_usdt", 0.0)),
+        reverse=True,
+    )
+
+    strategy_trade_counts = {}
+    strategy_pnl_usdt = {}
+    strategy_win_rate_pct = {}
+    for row in strategy_perf_rows:
+        key = row.get("strategy")
+        strategy_trade_counts[key] = int(row.get("trades", 0) or 0)
+        strategy_pnl_usdt[key] = float(row.get("pnl_usdt", 0.0) or 0.0)
+        strategy_win_rate_pct[key] = row.get("win_rate_pct")
+
     slippage_samples = len(entry_slippage)
     avg_slippage_bps = None
     avg_slippage_abs_bps = None
@@ -1266,6 +1533,8 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     recon_fail_count = sum(1 for row in reconciliation_checks if row.get("pass_fail") == "fail")
     recon_pass_count = sum(1 for row in reconciliation_checks if row.get("pass_fail") == "pass")
     recon_linked_count = sum(1 for row in reconciliation_checks if row.get("linked_trade_ts"))
+    strategy_switches.sort(key=lambda row: row.get("timestamp") or "")
+    strategy_gates.sort(key=lambda row: row.get("timestamp") or "")
 
     def _add_quality_check(check_name, severity, observed, expected, status, context=""):
         data_quality_checks.append(
@@ -1412,6 +1681,14 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         "strategy_regime_known_trades": strategy_regime_known_trades,
         "strategy_regime_unknown_trades": unknown_strategy_regime_trades,
         "strategy_regime_attribution_pct": strategy_regime_attribution_pct,
+        "strategy_trade_counts": strategy_trade_counts,
+        "strategy_pnl_usdt": strategy_pnl_usdt,
+        "strategy_win_rate_pct": strategy_win_rate_pct,
+        "strategy_switches_total": len(strategy_switches),
+        "strategy_gates_total": len(strategy_gates),
+        "strategy_cooldown_events": strategy_cooldown_events,
+        "directional_filter_shadow_blocks": directional_filter_shadow_blocks,
+        "directional_filter_active_blocks": directional_filter_active_blocks,
         "reconciliation_checks_total": len(reconciliation_checks),
         "reconciliation_checks_pass": recon_pass_count,
         "reconciliation_checks_fail": recon_fail_count,
@@ -1470,6 +1747,16 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "known_trades": strategy_regime_known_trades,
             "unknown_trades": unknown_strategy_regime_trades,
             "attribution_pct": strategy_regime_attribution_pct,
+            "trade_counts": strategy_trade_counts,
+            "pnl_usdt": strategy_pnl_usdt,
+            "win_rate_pct": strategy_win_rate_pct,
+        },
+        "strategy_observability": {
+            "switches_total": len(strategy_switches),
+            "gates_total": len(strategy_gates),
+            "cooldown_events": strategy_cooldown_events,
+            "directional_filter_shadow_blocks": directional_filter_shadow_blocks,
+            "directional_filter_active_blocks": directional_filter_active_blocks,
         },
     }
 
@@ -1484,6 +1771,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     trades_path = output_dir / "trades.csv"
     pair_perf_path = output_dir / "pair_performance.csv"
     strategy_regime_path = output_dir / "strategy_regime_scorecard.csv"
+    strategy_perf_path = output_dir / "strategy_performance.csv"
+    strategy_switches_path = output_dir / "strategy_switches.csv"
+    strategy_gates_path = output_dir / "strategy_gates.csv"
     data_quality_path = output_dir / "data_quality_checks.csv"
     reconciliation_path = output_dir / "reconciliation_checks.csv"
     liquidity_path = output_dir / "liquidity_checks.csv"
@@ -1496,6 +1786,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     summary["trades_path"] = str(trades_path)
     summary["pair_performance_path"] = str(pair_perf_path)
     summary["strategy_regime_scorecard_path"] = str(strategy_regime_path)
+    summary["strategy_performance_path"] = str(strategy_perf_path)
+    summary["strategy_switches_path"] = str(strategy_switches_path)
+    summary["strategy_gates_path"] = str(strategy_gates_path)
     summary["data_quality_checks_path"] = str(data_quality_path)
     summary["reconciliation_checks_path"] = str(reconciliation_path)
     summary["liquidity_checks_path"] = str(liquidity_path)
@@ -1528,6 +1821,7 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "entry_z",
             "entry_strategy",
             "entry_regime",
+            "exit_reason",
         ],
     )
     _write_csv(
@@ -1560,6 +1854,48 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "pnl_usdt",
             "avg_pnl_usdt",
             "avg_hold_minutes",
+        ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        strategy_perf_path,
+        strategy_perf_rows,
+        [
+            "strategy",
+            "trades",
+            "wins",
+            "losses",
+            "win_rate_pct",
+            "pnl_usdt",
+            "avg_pnl_usdt",
+            "avg_hold_minutes",
+            "top_exit_reason",
+        ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        strategy_switches_path,
+        strategy_switches,
+        [
+            "timestamp",
+            "from_strategy",
+            "to_strategy",
+            "reason",
+            "in_position",
+        ],
+        write_header_if_empty=True,
+    )
+    _write_csv(
+        strategy_gates_path,
+        strategy_gates,
+        [
+            "timestamp",
+            "gate_type",
+            "strategy",
+            "mode",
+            "allow_new",
+            "reason",
+            "details",
         ],
         write_header_if_empty=True,
     )
@@ -1656,6 +1992,24 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 "format": "csv",
                 "rows": len(strategy_regime_rows),
             },
+            {
+                "name": strategy_perf_path.name,
+                "path": str(strategy_perf_path),
+                "format": "csv",
+                "rows": len(strategy_perf_rows),
+            },
+            {
+                "name": strategy_switches_path.name,
+                "path": str(strategy_switches_path),
+                "format": "csv",
+                "rows": len(strategy_switches),
+            },
+            {
+                "name": strategy_gates_path.name,
+                "path": str(strategy_gates_path),
+                "format": "csv",
+                "rows": len(strategy_gates),
+            },
             {"name": data_quality_path.name, "path": str(data_quality_path), "format": "csv", "rows": len(data_quality_checks)},
             {
                 "name": reconciliation_path.name,
@@ -1711,6 +2065,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
         trades_path,
         pair_perf_path,
         strategy_regime_path,
+        strategy_perf_path,
+        strategy_switches_path,
+        strategy_gates_path,
         data_quality_path,
         reconciliation_path,
         liquidity_path,
@@ -1744,6 +2101,13 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                 f"Trades: {summary['trades_total']} | Wins: {summary['wins']} | Losses: {summary['losses']} | Win rate: {summary['win_rate_pct']}",
                 f"Avg trade PnL: {summary['avg_trade_pnl_usdt']} | Avg hold (min): {summary['avg_hold_minutes']}",
                 f"Strategy/regime cells: {summary['strategy_regime_cells']} | Attributed trades: {summary['strategy_regime_known_trades']}",
+                "",
+                "STRATEGY OBSERVABILITY",
+                f"Strategy trades: {summary['strategy_trade_counts']}",
+                f"Strategy pnl: {summary['strategy_pnl_usdt']}",
+                f"Strategy win rate: {summary['strategy_win_rate_pct']}",
+                f"Strategy switches: {summary['strategy_switches_total']} | Gates: {summary['strategy_gates_total']}",
+                f"Cooldown events: {summary['strategy_cooldown_events']} | Directional blocks (shadow/active): {summary['directional_filter_shadow_blocks']} / {summary['directional_filter_active_blocks']}",
                 "",
                 "EXECUTION QUALITY",
                 f"Signals: {summary['signals_total']} | Entries: {summary['entries_total']}",

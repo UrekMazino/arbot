@@ -1746,8 +1746,19 @@ def manage_new_trades(
                     else:
                         entry_regime = str(getattr(regime_decision, "regime", "UNKNOWN") or "UNKNOWN").strip().upper()
                 entry_strategy = str(strategy_name or "STATARB_MR").strip().upper()
-                set_entry_trade_context(entry_strategy, entry_regime)
                 set_entry_z_score(latest_zscore)
+                entry_time = get_entry_time()
+                entry_policy_snapshot = {
+                    "entry_z": float(effective_entry_z),
+                    "min_persist_bars": int(effective_min_persist_bars),
+                    "size_multiplier": float(effective_size_multiplier),
+                }
+                set_entry_trade_context(
+                    entry_strategy,
+                    entry_regime,
+                    policy_snapshot=entry_policy_snapshot,
+                    entry_ts=entry_time,
+                )
                 logger.info(
                     "STRATEGY_TRADE_OPEN: strategy=%s regime=%s entry_z=%.4f size_mult=%.2f",
                     entry_strategy,
@@ -1756,8 +1767,6 @@ def manage_new_trades(
                     float(effective_size_multiplier),
                 )
                 logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
-
-                entry_time = get_entry_time()
                 _open_trade_manager(latest_zscore, position_size=initial_capital_usdt * 2, entry_time=entry_time)
                 set_entry_notional(initial_capital_usdt * 2)
 

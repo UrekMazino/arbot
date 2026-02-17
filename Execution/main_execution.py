@@ -1,4 +1,4 @@
-# Remove Pandas Future Warnings
+﻿# Remove Pandas Future Warnings
 import os
 import json
 import warnings
@@ -54,6 +54,7 @@ from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRAD
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
 from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
+from func_event_emitter import emit_event, flush_events, get_event_context
 from func_save_status import save_status
 from regime_router import RegimeInput, RegimeRouter, should_block_new_entries as should_block_regime_entries
 from strategy_router import (
@@ -298,6 +299,17 @@ def _get_strategy_eval_seconds():
         value = 60
     if value < 10:
         value = 10
+    return value
+
+
+def _get_event_heartbeat_seconds():
+    raw = os.getenv("STATBOT_EVENT_HEARTBEAT_SECONDS", "60")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 60
+    if value < 5:
+        value = 5
     return value
 
 
@@ -619,44 +631,44 @@ def _validate_ticker_configuration():
     """
     # Check tickers are configured
     assert ticker_1 and isinstance(ticker_1, str), (
-        f"❌ STARTUP ERROR: ticker_1 must be non-empty string. Got: {ticker_1}"
+        f"âŒ STARTUP ERROR: ticker_1 must be non-empty string. Got: {ticker_1}"
     )
     assert ticker_2 and isinstance(ticker_2, str), (
-        f"❌ STARTUP ERROR: ticker_2 must be non-empty string. Got: {ticker_2}"
+        f"âŒ STARTUP ERROR: ticker_2 must be non-empty string. Got: {ticker_2}"
     )
     
     # Check tickers are different
     assert ticker_1 != ticker_2, (
-        f"❌ STARTUP ERROR: ticker_1 and ticker_2 must be different. Both are: {ticker_1}"
+        f"âŒ STARTUP ERROR: ticker_1 and ticker_2 must be different. Both are: {ticker_1}"
     )
     
     # Check signal tickers are configured
     assert signal_positive_ticker and isinstance(signal_positive_ticker, str), (
-        f"❌ STARTUP ERROR: signal_positive_ticker must be non-empty string. Got: {signal_positive_ticker}"
+        f"âŒ STARTUP ERROR: signal_positive_ticker must be non-empty string. Got: {signal_positive_ticker}"
     )
     assert signal_negative_ticker and isinstance(signal_negative_ticker, str), (
-        f"❌ STARTUP ERROR: signal_negative_ticker must be non-empty string. Got: {signal_negative_ticker}"
+        f"âŒ STARTUP ERROR: signal_negative_ticker must be non-empty string. Got: {signal_negative_ticker}"
     )
     
     # Check signal tickers are different
     assert signal_positive_ticker != signal_negative_ticker, (
-        f"❌ STARTUP ERROR: signal_positive_ticker and signal_negative_ticker must be different. "
+        f"âŒ STARTUP ERROR: signal_positive_ticker and signal_negative_ticker must be different. "
         f"Both are: {signal_positive_ticker}"
     )
     
     # Check signal tickers match configured tickers
     valid_tickers = {ticker_1, ticker_2}
     assert signal_positive_ticker in valid_tickers, (
-        f"❌ STARTUP ERROR: signal_positive_ticker '{signal_positive_ticker}' must be one of "
+        f"âŒ STARTUP ERROR: signal_positive_ticker '{signal_positive_ticker}' must be one of "
         f"['{ticker_1}', '{ticker_2}']"
     )
     assert signal_negative_ticker in valid_tickers, (
-        f"❌ STARTUP ERROR: signal_negative_ticker '{signal_negative_ticker}' must be one of "
+        f"âŒ STARTUP ERROR: signal_negative_ticker '{signal_negative_ticker}' must be one of "
         f"['{ticker_1}', '{ticker_2}']"
     )
     
     logger.info(
-        "✓ Ticker configuration validated: ticker_1=%s, ticker_2=%s, "
+        "âœ“ Ticker configuration validated: ticker_1=%s, ticker_2=%s, "
         "signal_positive=%s, signal_negative=%s",
         ticker_1, ticker_2, signal_positive_ticker, signal_negative_ticker
     )
@@ -736,7 +748,7 @@ def _get_per_leg_allocation():
         # Warn if risk exceeds target
         if actual_risk_pct > RISK_PER_TRADE_PCT * 100:
             logger.warning(
-                "⚠️  Position sizing adjusted: Actual risk=%.2f USDT (%.2f%%) exceeds target %.2f%% due to capital constraints",
+                "âš ï¸  Position sizing adjusted: Actual risk=%.2f USDT (%.2f%%) exceeds target %.2f%% due to capital constraints",
                 actual_risk_usdt,
                 actual_risk_pct,
                 RISK_PER_TRADE_PCT * 100
@@ -916,22 +928,22 @@ States:
 
 State Transitions (deterministic):
 ----------------------------------
-0 → 0: Normal cycle, no signal or cointegration failed
-        → returns 0 to main_execution
+0 â†’ 0: Normal cycle, no signal or cointegration failed
+        â†’ returns 0 to main_execution
 
-0 → 1: Hot trigger activated + cointegration valid + Z-score extreme
-        → manage_new_trades() returns 1 after placing orders
-        → main_execution sees 1, calls close_all_positions()
+0 â†’ 1: Hot trigger activated + cointegration valid + Z-score extreme
+        â†’ manage_new_trades() returns 1 after placing orders
+        â†’ main_execution sees 1, calls close_all_positions()
 
-1 → 2: Close operation complete
-        → close_all_positions() returns 2
-        → circuit breaker also returns 2
-        → hard stop/regime break also returns 2
-        → main_execution exits loop
+1 â†’ 2: Close operation complete
+        â†’ close_all_positions() returns 2
+        â†’ circuit breaker also returns 2
+        â†’ hard stop/regime break also returns 2
+        â†’ main_execution exits loop
 
-0 → 3: Health check failed (Low correlation, trending spread, etc.)
-        → manage_new_trades() returns 3
-        → main_execution sees 3, calls _switch_to_next_pair()
+0 â†’ 3: Health check failed (Low correlation, trending spread, etc.)
+        â†’ manage_new_trades() returns 3
+        â†’ main_execution sees 3, calls _switch_to_next_pair()
 """
 
 
@@ -951,6 +963,17 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             "Pair switch requested (reason=%s) but lock_on_pair is enabled. Staying on current pair.",
             switch_reason,
         )
+        emit_event(
+            "pair_switch",
+            payload={
+                "from_pair": f"{ticker_1}/{ticker_2}",
+                "to_pair": None,
+                "reason": switch_reason,
+                "status": SWITCH_RESULT_BLOCKED,
+            },
+            severity="warn",
+            logger=logger,
+        )
         return SWITCH_RESULT_BLOCKED
 
     # 1. Check Cooldown with emergency override
@@ -969,6 +992,18 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             logger.warning("Switch aborted: Cooldown active (%.1fh elapsed, 24h required)", elapsed)
             if health_score is not None:
                 logger.warning("Health score: %s/100 (emergency override requires < 40)", health_score)
+        emit_event(
+            "pair_switch",
+            payload={
+                "from_pair": f"{ticker_1}/{ticker_2}",
+                "to_pair": None,
+                "reason": switch_reason,
+                "status": SWITCH_RESULT_BLOCKED,
+                "health_score": health_score,
+            },
+            severity="warn",
+            logger=logger,
+        )
         return SWITCH_RESULT_BLOCKED
 
     # Log if emergency override was used
@@ -1332,12 +1367,46 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 logger.warning("Failed to reset regime state after pair switch: %s", exc)
             reset_health_failure(curr_t1, curr_t2)
             set_last_switch_time()
+            emit_event(
+                "pair_switch",
+                payload={
+                    "from_pair": f"{curr_t1}/{curr_t2}",
+                    "to_pair": f"{next_t1}/{next_t2}",
+                    "reason": switch_reason,
+                    "status": SWITCH_RESULT_SWITCHED,
+                    "health_score": health_score,
+                },
+                severity="info",
+                flush=True,
+                logger=logger,
+            )
             return SWITCH_RESULT_SWITCHED
 
         logger.error("Failed to save new pair to state/active_pair.json")
+        emit_event(
+            "pair_switch",
+            payload={
+                "from_pair": f"{curr_t1}/{curr_t2}",
+                "to_pair": f"{next_t1}/{next_t2}",
+                "reason": switch_reason,
+                "status": SWITCH_RESULT_HARD_STOP,
+            },
+            severity="error",
+            logger=logger,
+        )
         return SWITCH_RESULT_HARD_STOP
     except Exception as e:
         logger.error(f"Error switching pair: {e}")
+        emit_event(
+            "risk_alert",
+            payload={
+                "alert_type": "pair_switch_exception",
+                "message": str(e),
+                "pair": f"{ticker_1}/{ticker_2}",
+            },
+            severity="error",
+            logger=logger,
+        )
         return SWITCH_RESULT_HARD_STOP
 
 
@@ -1504,7 +1573,7 @@ if __name__ == "__main__":
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
         logger.info("Cointegrated pairs CSV is empty or missing. Waiting for Strategy to discover pairs...")
-        print("⏳ Waiting for Strategy to discover cointegrated pairs...")
+        print("â³ Waiting for Strategy to discover cointegrated pairs...")
         print(f"   CSV path: {csv_path}")
         print(f"   Will check every {poll_interval}s (max wait: {max_wait_seconds}s)")
 
@@ -1515,8 +1584,8 @@ if __name__ == "__main__":
                 try:
                     df = pd.read_csv(csv_path)
                     if not df.empty and len(df) > 0:
-                        logger.info(f"✅ CSV populated with {len(df)} pairs. Proceeding with startup...")
-                        print(f"✅ Found {len(df)} cointegrated pairs. Starting bot...")
+                        logger.info(f"âœ… CSV populated with {len(df)} pairs. Proceeding with startup...")
+                        print(f"âœ… Found {len(df)} cointegrated pairs. Starting bot...")
                         break
                 except Exception as e:
                     logger.debug(f"Error reading CSV during polling: {e}")
@@ -1525,7 +1594,7 @@ if __name__ == "__main__":
         else:
             # Timeout reached
             logger.error("Timeout waiting for cointegrated pairs CSV. Strategy may still be running.")
-            print("❌ Timeout: No pairs found after 10 minutes.")
+            print("âŒ Timeout: No pairs found after 10 minutes.")
             print("   Strategy may need more time or filters may be too strict.")
             print("   Check Strategy logs and adjust min_zero_crossings or p_value filters.")
             exit(1)
@@ -1601,6 +1670,16 @@ if __name__ == "__main__":
     last_strategy_eval_ts = 0.0
     last_strategy_decision = None
     last_strategy_gate_log_ts = 0.0
+    event_context = get_event_context(logger=logger)
+    event_heartbeat_seconds = _get_event_heartbeat_seconds()
+    last_event_heartbeat_ts = 0.0
+
+    logger.info(
+        "Event emitter status: mode=%s run_id=%s bot_instance_id=%s",
+        event_context.get("mode", "off"),
+        event_context.get("run_id", ""),
+        event_context.get("bot_instance_id", ""),
+    )
 
     if regime_mode == "off":
         logger.info("Regime router disabled (STATBOT_REGIME_ROUTER_MODE=off).")
@@ -1631,7 +1710,7 @@ if __name__ == "__main__":
                 if det.get("ccy") == "USDT":
                     starting_equity = float(det.get("eq", 0))
                     break
-        logger.info(f"📊 Starting equity: {starting_equity:.2f} USDT")
+        logger.info(f"ðŸ“Š Starting equity: {starting_equity:.2f} USDT")
     except Exception as e:
         logger.warning(f"Failed to capture starting equity: {e}")
 
@@ -1647,7 +1726,7 @@ if __name__ == "__main__":
                     avail_eq = float(det.get("availEq", 0))
                     break
         logger.info(
-            "💰 Balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s | pos_mode=%s",
+            "ðŸ’° Balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s | pos_mode=%s",
             avail_bal,
             avail_eq,
             td_mode,
@@ -1658,6 +1737,19 @@ if __name__ == "__main__":
 
     # Save status
     save_status(status_dict)
+
+    emit_event(
+        "status_update",
+        payload={
+            "status": "startup_complete",
+            "pair": f"{ticker_1}/{ticker_2}",
+            "regime_mode": regime_mode,
+            "strategy_mode": strategy_mode,
+            "starting_equity_usdt": starting_equity,
+        },
+        severity="info",
+        logger=logger,
+    )
 
     # Set leverage in case forgotten to do so on the platform
     print("Setting leverage...")
@@ -1817,11 +1909,11 @@ if __name__ == "__main__":
             # 2a. ORDERBOOK DEAD CHECK: Switch if tickers are delisted/illiquid
             if metrics.get("orderbook_dead", False):
                 if lock_on_pair:
-                    logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid, lock_on_pair enabled.")
+                    logger.error("ðŸš¨ ORDERBOOK DEAD: Tickers appear delisted/illiquid, lock_on_pair enabled.")
                     status_dict["message"] = "Orderbook dead; lock_on_pair enabled"
                     save_status(status_dict)
                 else:
-                    logger.error("🚨 ORDERBOOK DEAD: Tickers appear delisted/illiquid. Switching pairs...")
+                    logger.error("ðŸš¨ ORDERBOOK DEAD: Tickers appear delisted/illiquid. Switching pairs...")
                     status_dict["message"] = "Orderbook dead; switching pair..."
                     save_status(status_dict)
 
@@ -1863,6 +1955,32 @@ if __name__ == "__main__":
             session_pnl_pct = (session_pnl / starting_equity * 100) if starting_equity > 0 else 0.0
 
             _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
+            if (current_time - last_event_heartbeat_ts) >= event_heartbeat_seconds:
+                emit_event(
+                    "heartbeat",
+                    payload={
+                        "cycle": cycles_run,
+                        "uptime_seconds": max(current_time - bot_start_time, 0.0),
+                        "in_position": bool(in_position_or_orders),
+                        "current_pair": f"{ticker_1}/{ticker_2}",
+                        "equity_usdt": equity_usdt,
+                        "session_pnl_usdt": session_pnl,
+                        "session_pnl_pct": session_pnl_pct,
+                        "regime": (
+                            getattr(last_regime_decision, "regime", None)
+                            if last_regime_decision is not None
+                            else None
+                        ),
+                        "strategy": (
+                            getattr(last_strategy_decision, "active_strategy", None)
+                            if last_strategy_decision is not None
+                            else None
+                        ),
+                    },
+                    severity="info",
+                    logger=logger,
+                )
+                last_event_heartbeat_ts = current_time
 
             market_candles = None
             liq_long = None
@@ -1953,6 +2071,22 @@ if __name__ == "__main__":
                             decision.min_liquidity_ratio,
                             decision.size_multiplier,
                         )
+                        emit_event(
+                            "regime_update",
+                            payload={
+                                "regime": decision.regime,
+                                "previous_regime": prev_regime,
+                                "candidate_regime": decision.candidate_regime,
+                                "changed": bool(decision.changed and prev_regime != decision.regime),
+                                "confidence": decision.confidence,
+                                "allow_new_entries": bool(decision.allow_new_entries),
+                                "reason_codes": list(decision.reason_codes or []),
+                                "mode": decision.mode,
+                                "pair": f"{ticker_1}/{ticker_2}",
+                            },
+                            severity="info",
+                            logger=logger,
+                        )
                         if regime_mode in ("shadow", "active") and not decision.allow_new_entries:
                             gate_reason = decision.reason_codes[0] if decision.reason_codes else "n/a"
                             logger.info(
@@ -1963,6 +2097,16 @@ if __name__ == "__main__":
                             )
                     except Exception as regime_exc:
                         logger.warning("Regime router evaluation failed: %s", regime_exc)
+                        emit_event(
+                            "risk_alert",
+                            payload={
+                                "alert_type": "regime_eval_failure",
+                                "message": str(regime_exc),
+                                "pair": f"{ticker_1}/{ticker_2}",
+                            },
+                            severity="warn",
+                            logger=logger,
+                        )
 
             if strategy_mode != "off":
                 should_eval_strategy = (
@@ -2046,8 +2190,39 @@ if __name__ == "__main__":
                                 strategy_mode,
                                 str(strategy_diag.get("mean_shift_basis", "n/a")),
                             )
+                        emit_event(
+                            "strategy_update",
+                            payload={
+                                "strategy": strategy_decision.active_strategy,
+                                "previous_strategy": prev_strategy,
+                                "desired_strategy": strategy_decision.desired_strategy,
+                                "pending_strategy": strategy_decision.pending_strategy,
+                                "pending_count": strategy_decision.pending_count,
+                                "changed": bool(
+                                    strategy_decision.changed
+                                    and prev_strategy != strategy_decision.active_strategy
+                                ),
+                                "allow_new_entries": bool(strategy_decision.allow_new_entries),
+                                "reason_codes": list(strategy_decision.reason_codes or []),
+                                "mode": strategy_decision.mode,
+                                "pair": f"{ticker_1}/{ticker_2}",
+                                "in_position": bool(in_position_or_orders),
+                            },
+                            severity="info",
+                            logger=logger,
+                        )
                     except Exception as strategy_exc:
                         logger.warning("Strategy router evaluation failed: %s", strategy_exc)
+                        emit_event(
+                            "risk_alert",
+                            payload={
+                                "alert_type": "strategy_eval_failure",
+                                "message": str(strategy_exc),
+                                "pair": f"{ticker_1}/{ticker_2}",
+                            },
+                            severity="warn",
+                            logger=logger,
+                        )
 
             # Check per-pair loss limit (2% of tradeable capital)
             per_pair_loss_limit_pct = 0.02  # 2% per pair before forcing switch
@@ -2056,7 +2231,7 @@ if __name__ == "__main__":
                 if total_pnl < -pair_loss_threshold:
                     pair_loss_pct = (total_pnl / tradeable_capital_usdt) * 100
                     logger.warning(
-                        "⚠️  PER-PAIR LOSS LIMIT: Pair loss=%.2f USDT (%.2f%%) exceeds %.1f%% limit. Switching pair...",
+                        "âš ï¸  PER-PAIR LOSS LIMIT: Pair loss=%.2f USDT (%.2f%%) exceeds %.1f%% limit. Switching pair...",
                         total_pnl,
                         pair_loss_pct,
                         per_pair_loss_limit_pct * 100
@@ -2067,12 +2242,24 @@ if __name__ == "__main__":
                         logger.info("Closing positions due to per-pair loss limit...")
                         kill_switch = 2  # Trigger position close
 
+                    emit_event(
+                        "risk_alert",
+                        payload={
+                            "alert_type": "pair_loss_limit",
+                            "message": "Per-pair loss limit exceeded",
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "pnl_usdt": total_pnl,
+                            "pnl_pct": pair_loss_pct,
+                        },
+                        severity="warn",
+                        logger=logger,
+                    )
                     # Mark for pair switch after positions close
                     set_last_switch_reason("pair_loss_limit")
 
             # Log cycle with PnL, equity, and session performance
-            pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
-            session_emoji = "🟢" if session_pnl >= 0 else "🔴"
+            pnl_emoji = "ðŸŸ¢" if total_pnl >= 0 else "ðŸ”´"
+            session_emoji = "ðŸŸ¢" if session_pnl >= 0 else "ðŸ”´"
             uptime = _format_uptime(current_time - bot_start_time)
             logger.debug(
                 "--- Cycle %s | %s/%s | Uptime: %s | %s PnL: %+0.2f USDT (%+0.2f%%) | "
@@ -2174,9 +2361,22 @@ if __name__ == "__main__":
                 # Circuit breaker based on session-wide loss
                 max_session_loss_usdt = starting_equity * max_drawdown_pct
                 if session_drawdown < -max_session_loss_usdt:
-                    msg = f"⚠️  SESSION CIRCUIT BREAKER: Equity={equity_usdt:.2f} (started at {starting_equity:.2f}), Loss={session_drawdown:.2f} USDT ({session_drawdown_pct:.2f}%) exceeds session limit {max_drawdown_pct*100:.1f}%"
+                    msg = f"âš ï¸  SESSION CIRCUIT BREAKER: Equity={equity_usdt:.2f} (started at {starting_equity:.2f}), Loss={session_drawdown:.2f} USDT ({session_drawdown_pct:.2f}%) exceeds session limit {max_drawdown_pct*100:.1f}%"
                     print(msg)
                     logger.critical(msg)
+                    emit_event(
+                        "risk_alert",
+                        payload={
+                            "alert_type": "session_circuit_breaker",
+                            "message": msg,
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "equity_usdt": equity_usdt,
+                            "session_drawdown_usdt": session_drawdown,
+                            "session_drawdown_pct": session_drawdown_pct,
+                        },
+                        severity="critical",
+                        logger=logger,
+                    )
                     status_dict["message"] = "Session circuit breaker triggered - closing all positions"
                     save_status(status_dict)
                     close_all_positions(0)
@@ -2189,9 +2389,21 @@ if __name__ == "__main__":
             # Also check current pair drawdown (legacy check)
             max_loss_allowed = tradeable_capital_usdt * max_drawdown_pct
             if total_pnl < -max_loss_allowed:
-                msg = f"⚠️  PAIR CIRCUIT BREAKER: P&L={total_pnl:.2f} USDT ({pnl_pct:.2f}%) exceeds pair limit {max_drawdown_pct*100:.1f}%"
+                msg = f"âš ï¸  PAIR CIRCUIT BREAKER: P&L={total_pnl:.2f} USDT ({pnl_pct:.2f}%) exceeds pair limit {max_drawdown_pct*100:.1f}%"
                 print(msg)
                 logger.warning(msg)
+                emit_event(
+                    "risk_alert",
+                    payload={
+                        "alert_type": "pair_circuit_breaker",
+                        "message": msg,
+                        "pair": f"{ticker_1}/{ticker_2}",
+                        "pnl_usdt": total_pnl,
+                        "pnl_pct": pnl_pct,
+                    },
+                    severity="warn",
+                    logger=logger,
+                )
                 status_dict["message"] = "Pair circuit breaker triggered - closing all positions"
                 save_status(status_dict)
                 close_all_positions(0)
@@ -2264,12 +2476,36 @@ if __name__ == "__main__":
                             gate_regime,
                             gate_reason,
                         )
+                        emit_event(
+                            "gate_enforced",
+                            payload={
+                                "gate_type": "regime",
+                                "mode": regime_mode,
+                                "regime": gate_regime,
+                                "reason": gate_reason,
+                                "action": "skip_new_entries",
+                            },
+                            severity="warn",
+                            logger=logger,
+                        )
                         last_regime_gate_log_ts = current_time
                     if blocked_by_strategy and (current_time - last_strategy_gate_log_ts) >= 60:
                         logger.warning(
                             "STRATEGY_GATE_ENFORCED: mode=active strategy=%s reason=%s action=skip_new_entries",
                             gate_strategy,
                             gate_reason,
+                        )
+                        emit_event(
+                            "gate_enforced",
+                            payload={
+                                "gate_type": "strategy",
+                                "mode": strategy_mode,
+                                "strategy": gate_strategy,
+                                "reason": gate_reason,
+                                "action": "skip_new_entries",
+                            },
+                            severity="warn",
+                            logger=logger,
                         )
                         last_strategy_gate_log_ts = current_time
                 else:
@@ -2291,6 +2527,26 @@ if __name__ == "__main__":
                         trades_executed += 1
                         if equity_usdt is not None:
                             set_entry_equity(equity_usdt)
+                        emit_event(
+                            "trade_open",
+                            payload={
+                                "pair": f"{ticker_1}/{ticker_2}",
+                                "side": "unknown",
+                                "entry_z": latest_zscore,
+                                "strategy": (
+                                    getattr(last_strategy_decision, "active_strategy", None)
+                                    if last_strategy_decision is not None
+                                    else None
+                                ),
+                                "regime": (
+                                    getattr(last_regime_decision, "regime", None)
+                                    if last_regime_decision is not None
+                                    else None
+                                ),
+                            },
+                            severity="info",
+                            logger=logger,
+                        )
             
             # 5. Monitoring existing trades / Mean reversion exit
             if not is_manage_new_trades or kill_switch == 1:
@@ -2662,6 +2918,21 @@ if __name__ == "__main__":
                     entry_strategy,
                     entry_regime,
                 )
+                emit_event(
+                    "trade_close",
+                    payload={
+                        "pair": f"{ticker_1}/{ticker_2}",
+                        "pnl_usdt": alert_pnl,
+                        "pnl_pct": alert_pnl_pct,
+                        "strategy": entry_strategy,
+                        "regime": entry_regime,
+                        "hold_minutes": hold_minutes,
+                        "exit_reason": exit_reason,
+                        "exit_tier": exit_reason if str(exit_reason).startswith("exit_tier_") else None,
+                    },
+                    severity="info" if alert_pnl >= 0 else "warn",
+                    logger=logger,
+                )
 
                 if blacklist_pair:
                     if lock_on_pair:
@@ -2724,11 +2995,27 @@ if __name__ == "__main__":
         run_end_reason = "manual_stop"
         run_end_detail = "Ended by user"
         run_end_exit_code = 0
+        emit_event(
+            "status_update",
+            payload={"status": "manual_stop", "message": "Ended by user"},
+            severity="info",
+            logger=logger,
+        )
     except Exception as e:
         logger.critical(f"UNHANDLED EXCEPTION in main loop: {e}", exc_info=True)
         print(f"CRITICAL ERROR: {e}")
         status_dict["message"] = f"Crashed: {e}"
         save_status(status_dict)
+        emit_event(
+            "risk_alert",
+            payload={
+                "alert_type": "unhandled_exception",
+                "message": str(e),
+                "pair": f"{ticker_1}/{ticker_2}",
+            },
+            severity="critical",
+            logger=logger,
+        )
         run_end_reason = "error"
         run_end_detail = str(e)
         run_end_exit_code = 1
@@ -2736,6 +3023,20 @@ if __name__ == "__main__":
         _log_run_end(run_end_reason, run_end_detail, exit_code=run_end_exit_code)
         status_dict["message"] = f"Run ended: {run_end_reason}"
         save_status(status_dict)
+        emit_event(
+            "status_update",
+            payload={
+                "status": "run_end",
+                "reason": run_end_reason,
+                "detail": run_end_detail,
+                "exit_code": run_end_exit_code,
+            },
+            severity="info" if run_end_exit_code == 0 else "warn",
+            logger=logger,
+        )
+        flush_events(force=True, logger=logger)
         if os.getenv("STATBOT_MANAGED") != "1":
             _run_report_generator()
         sys.exit(run_end_exit_code)
+
+

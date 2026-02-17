@@ -15,9 +15,9 @@ docker compose up --build
 
 API:
 
-1. Base URL: `http://localhost:8080/api/v2`
+1. Base URL: `http://localhost:8081/api/v2`
 2. Health: `GET /api/v2/health`
-3. Swagger: `http://localhost:8080/docs`
+3. Swagger: `http://localhost:8081/docs`
 
 Bootstrap admin (default):
 
@@ -27,7 +27,6 @@ Bootstrap admin (default):
 ## Next Slice
 
 1. Add web frontend scaffold (`Platform/web`)
-2. Wire Redis pub/sub fanout for `ws/dashboard`
-3. Add bot-side event emitter module in `Execution/`
-4. Add integration tests for ingest -> DB -> websocket flow
-
+2. Add integration tests for ingest -> DB -> websocket flow
+3. Add run/trade writer bridge from V1 runtime into V2 API (beyond event-only ingest)
+4. Add auth hardening for ingest (`event_ingest_key` mandatory outside local dev)

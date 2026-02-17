@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from functools import wraps
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -12,17 +12,16 @@ from .database import get_db
 from .models import User
 from .security import decode_access_token
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login", auto_error=False)
 
 
 def get_db_session() -> Generator[Session, None, None]:
     yield from get_db()
 
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db_session),
-) -> User:
+def _load_user_from_token(token: str | None, db: Session) -> User:
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
     user_id = decode_access_token(token)
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
@@ -30,6 +29,37 @@ def get_current_user(
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
+
+
+def get_current_user(
+    token: str | None = Depends(oauth2_scheme),
+    db: Session = Depends(get_db_session),
+) -> User:
+    return _load_user_from_token(token, db)
+
+
+def get_event_ingest_principal(
+    token: str | None = Depends(oauth2_scheme),
+    x_bot_ingest_key: str | None = Header(default=None, alias="X-Bot-Ingest-Key"),
+    db: Session = Depends(get_db_session),
+) -> dict[str, str]:
+    # 1) Normal authenticated user token
+    if token:
+        user = _load_user_from_token(token, db)
+        return {"kind": "user", "id": user.id}
+
+    # 2) Bot ingest key
+    configured_key = str(settings.event_ingest_key or "").strip()
+    if configured_key:
+        if not x_bot_ingest_key or x_bot_ingest_key != configured_key:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bot ingest key")
+        return {"kind": "bot_key", "id": "bot_ingest_key"}
+
+    # 3) Development fallback for local event flow bootstrap
+    if settings.event_allow_unauthenticated:
+        return {"kind": "unauthenticated_dev", "id": "dev_local"}
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Event ingest authentication required")
 
 
 def require_roles(*roles: str):
@@ -44,4 +74,3 @@ def require_roles(*roles: str):
         return user
 
     return dependency
-

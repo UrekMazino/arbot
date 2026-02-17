@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class MessageOut(BaseModel):
@@ -67,12 +67,20 @@ class UserRoleAssignIn(BaseModel):
 
 
 class EventEnvelopeIn(BaseModel):
-    event_id: str
-    run_id: str
+    event_id: str = Field(min_length=8, max_length=36)
+    run_id: str = Field(min_length=1, max_length=36)
     ts: float
-    event_type: str
-    severity: str = "info"
+    event_type: str = Field(min_length=1, max_length=80)
+    severity: Literal["info", "warn", "error", "critical"] = "info"
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("event_type")
+    @classmethod
+    def normalize_event_type(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            raise ValueError("event_type is required")
+        return text
 
 
 class EventBatchIn(BaseModel):

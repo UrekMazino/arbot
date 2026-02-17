@@ -25,7 +25,9 @@ class Settings(BaseSettings):
 
     event_batch_max: int = 200
     event_spool_dir: str = os.path.join("Execution", "state", "event_spool")
+    event_ingest_key: str = ""
+    event_allow_unauthenticated: bool = True
+    event_publish_realtime: bool = True
 
 
 settings = Settings()
-

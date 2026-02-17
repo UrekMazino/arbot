@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,11 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..deps import get_current_user, get_db_session
+from ..deps import get_db_session, get_event_ingest_principal
 from ..models import Alert, BotInstance, Run, RunEvent
+from ..realtime import publish_bot_event
 from ..schemas import EventBatchIn, EventIngestResultOut
 
 router = APIRouter(prefix="/bots", tags=["events"])
+logger = logging.getLogger("platform.events")
 
 
 def _coerce_ts(ts_value: float) -> datetime:
@@ -48,7 +51,7 @@ def _ensure_run(db: Session, run_id: str, bot_instance_id: str) -> Run:
 def ingest_events_batch(
     bot_instance_id: str,
     body: EventBatchIn,
-    _: object = Depends(get_current_user),
+    _: object = Depends(get_event_ingest_principal),
     db: Session = Depends(get_db_session),
 ):
     if len(body.events) > settings.event_batch_max:
@@ -91,12 +94,26 @@ def ingest_events_batch(
                 db.add(alert)
                 db.flush()
             db.commit()
+
+            publish_bot_event(
+                bot_instance_id,
+                {
+                    "event_id": row.event_id,
+                    "run_id": row.run_id,
+                    "bot_instance_id": row.bot_instance_id,
+                    "ts": row.ts.timestamp(),
+                    "event_type": row.event_type,
+                    "severity": row.severity,
+                    "payload": row.payload_json or {},
+                },
+            )
         except IntegrityError:
             db.rollback()
             duplicate += 1
-        except Exception:
+        except Exception as exc:
             db.rollback()
             rejected += 1
+            logger.warning("Event ingest rejected: bot=%s run=%s type=%s err=%s", bot_instance_id, event.run_id, event.event_type, exc)
 
     return EventIngestResultOut(accepted=accepted, duplicate=duplicate, rejected=rejected)
 
@@ -105,7 +122,7 @@ def ingest_events_batch(
 def heartbeat(
     bot_instance_id: str,
     body: EventBatchIn,
-    user: object = Depends(get_current_user),
+    principal: object = Depends(get_event_ingest_principal),
     db: Session = Depends(get_db_session),
 ):
-    return ingest_events_batch(bot_instance_id, body, user, db)
+    return ingest_events_batch(bot_instance_id, body, principal, db)

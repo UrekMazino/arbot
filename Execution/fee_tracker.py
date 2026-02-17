@@ -88,22 +88,36 @@ class FeeTracker:
             # Don't crash on funding fee fetch failure
             return 0.0
 
-    def get_actual_fees_from_okx(self, trade_session, limit=50):
+    def get_actual_fees_from_okx(self, trade_session, limit=50, tickers=None, inst_type=None):
         """
         Fetch recent fees from OKX fills.
         """
-        response = trade_session.get_fills(limit=limit)
+        request_kwargs = {"limit": str(limit)}
+        if inst_type:
+            request_kwargs["instType"] = str(inst_type)
+        response = trade_session.get_fills(**request_kwargs)
         if response.get("code") != "0":
-            return {"total_fees": 0.0, "breakdown": {}}
+            return {"total_fees": 0.0, "breakdown": {}, "count": 0}
+
+        ticker_set = set()
+        if tickers:
+            for ticker in tickers:
+                if ticker:
+                    ticker_set.add(str(ticker).strip())
 
         total_fees = 0.0
         breakdown = {}
+        count = 0
 
         for fill in response.get("data", []):
+            inst_id = str(fill.get("instId") or "").strip()
+            if ticker_set and inst_id not in ticker_set:
+                continue
             fee = float(fill.get("fee") or 0.0)
             fee_ccy = fill.get("feeCcy") or "USDT"
             fee = abs(fee)
             total_fees += fee
             breakdown[fee_ccy] = breakdown.get(fee_ccy, 0.0) + fee
+            count += 1
 
-        return {"total_fees": total_fees, "breakdown": breakdown}
+        return {"total_fees": total_fees, "breakdown": breakdown, "count": count}

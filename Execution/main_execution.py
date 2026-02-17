@@ -31,6 +31,7 @@ from config_execution_api import (
     HEALTH_CHECK_INTERVAL,
     td_mode,
     account_session,
+    trade_session,
     lock_on_pair,
     allowed_settle_ccy,
     is_permanently_blacklisted,
@@ -218,6 +219,57 @@ def _get_switch_precheck_window():
     if value < 20:
         value = 20
     return value
+
+
+def _env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _get_recon_fee_fill_limit():
+    raw = os.getenv("STATBOT_RECON_FEE_FILL_LIMIT", "200")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 200
+    if value < 20:
+        value = 20
+    if value > 500:
+        value = 500
+    return value
+
+
+def _get_recon_delta_warn_threshold_usdt(recon_basis):
+    base = max(_env_float("STATBOT_RECON_DELTA_WARN_USDT", 0.10), 0.01)
+    preclose = max(_env_float("STATBOT_RECON_DELTA_WARN_USDT_PRE_CLOSE", 0.25), 0.01)
+    fallback = max(_env_float("STATBOT_RECON_DELTA_WARN_USDT_FALLBACK", 1.00), 0.01)
+    basis = str(recon_basis or "").strip().lower()
+    if basis.startswith("pre_close_equity_delta"):
+        return preclose
+    if "fallback" in basis:
+        return fallback
+    return base
+
+
+def _get_recon_unexplained_warn_threshold_usdt(recon_basis):
+    base = max(_env_float("STATBOT_RECON_UNEXPLAINED_WARN_USDT", 0.10), 0.01)
+    preclose = max(_env_float("STATBOT_RECON_UNEXPLAINED_WARN_USDT_PRE_CLOSE", 0.15), 0.01)
+    fallback = max(_env_float("STATBOT_RECON_UNEXPLAINED_WARN_USDT_FALLBACK", 0.50), 0.01)
+    basis = str(recon_basis or "").strip().lower()
+    if basis.startswith("pre_close_equity_delta"):
+        return preclose
+    if "fallback" in basis:
+        return fallback
+    return base
+
+
+def _get_recon_unexplained_warn_threshold_pct():
+    return max(_env_float("STATBOT_RECON_UNEXPLAINED_WARN_PCT", 50.0), 0.0)
 
 
 def _get_regime_eval_seconds():
@@ -2320,16 +2372,31 @@ if __name__ == "__main__":
                 pre_close_equity_change = None
                 funding_fees = 0.0
                 costs = None
+                pre_fee_total = None
+                post_fee_total = None
+                actual_fee_delta = None
 
                 # Pre-close diagnostics (estimate only; not used for trade classification).
-                if entry_equity is not None and pre_close_equity is not None and entry_notional:
+                if entry_equity is not None and pre_close_equity is not None:
                     pre_close_equity_change = pre_close_equity - entry_equity
 
-                    # Fetch actual funding fees from OKX
-                    funding_fees = fee_tracker.fetch_funding_fees(account_session, ticker_1, ticker_2)
-                    if funding_fees > 0:
-                        logger.info("Funding fees fetched from OKX: %.4f USDT", funding_fees)
+                # Capture pre-close fee snapshot from fills so we can isolate close-time fee delta.
+                try:
+                    fee_snapshot = fee_tracker.get_actual_fees_from_okx(
+                        trade_session,
+                        limit=_get_recon_fee_fill_limit(),
+                        tickers=[ticker_1, ticker_2],
+                    )
+                    pre_fee_total = float(fee_snapshot.get("total_fees", 0.0) or 0.0)
+                except Exception as fee_exc:
+                    logger.debug("Fee snapshot before close unavailable: %s", fee_exc)
 
+                # Fetch actual funding fees from OKX.
+                funding_fees = fee_tracker.fetch_funding_fees(account_session, ticker_1, ticker_2)
+                if funding_fees > 0:
+                    logger.info("Funding fees fetched from OKX: %.4f USDT", funding_fees)
+
+                if entry_notional:
                     costs = fee_tracker.record_trade_costs(entry_notional)
                     logger.info(
                         "Trade costs: entry_fee=%.4f exit_fee=%.4f slippage=%.4f total=%.4f",
@@ -2338,6 +2405,7 @@ if __name__ == "__main__":
                         costs["slippage"],
                         costs["total_costs"],
                     )
+                if pre_close_equity_change is not None and total_pnl is not None:
                     pre_close_diff = pre_close_equity_change - total_pnl
                     if abs(pre_close_diff) > 0.10:  # 10 cents threshold
                         logger.info(
@@ -2361,6 +2429,25 @@ if __name__ == "__main__":
                 except Exception:
                     post_equity_usdt = None
 
+                # Capture post-close fee snapshot and isolate fee delta during close.
+                if pre_fee_total is not None:
+                    try:
+                        fee_snapshot_after = fee_tracker.get_actual_fees_from_okx(
+                            trade_session,
+                            limit=_get_recon_fee_fill_limit(),
+                            tickers=[ticker_1, ticker_2],
+                        )
+                        post_fee_total = float(fee_snapshot_after.get("total_fees", 0.0) or 0.0)
+                        actual_fee_delta = max(post_fee_total - pre_fee_total, 0.0)
+                        logger.info(
+                            "Fee snapshot around close: pre=%.4f post=%.4f delta=%.4f",
+                            pre_fee_total,
+                            post_fee_total,
+                            actual_fee_delta,
+                        )
+                    except Exception as fee_exc:
+                        logger.debug("Fee snapshot after close unavailable: %s", fee_exc)
+
                 # Realized trade PnL: prefer post-close equity delta vs entry equity.
                 if entry_equity is not None and post_equity_usdt is not None:
                     actual_pnl = post_equity_usdt - entry_equity
@@ -2383,17 +2470,54 @@ if __name__ == "__main__":
                         hold_minutes = None
 
                 # Reconcile estimate vs realized result using per-trade costs.
-                if costs is not None:
+                if actual_pnl is not None:
+                    if pre_close_equity_change is not None:
+                        reconciliation_trade_pnl = pre_close_equity_change
+                        recon_basis = "pre_close_equity_delta"
+                    elif total_pnl is not None:
+                        reconciliation_trade_pnl = total_pnl
+                        recon_basis = "position_pnl"
+                    else:
+                        reconciliation_trade_pnl = actual_pnl
+                        recon_basis = "actual_pnl_fallback"
+
+                    if recon_basis == "position_pnl" and (_PNL_FALLBACK_ACTIVE or _PNL_FALLBACK_BASIS):
+                        recon_basis = f"position_pnl_fallback_{(_PNL_FALLBACK_BASIS or 'unknown')}"
+
+                    est_entry_fee = float(costs.get("entry_fee", 0.0) or 0.0) if isinstance(costs, dict) else 0.0
+                    est_exit_fee = float(costs.get("exit_fee", 0.0) or 0.0) if isinstance(costs, dict) else 0.0
+                    est_roundtrip_slippage = float(costs.get("slippage", 0.0) or 0.0) if isinstance(costs, dict) else 0.0
+
+                    if recon_basis.startswith("pre_close_equity_delta"):
+                        fees_for_reconciliation = (
+                            actual_fee_delta if actual_fee_delta is not None and actual_fee_delta > 0 else est_exit_fee
+                        )
+                        slippage_for_reconciliation = est_roundtrip_slippage * 0.5
+                        funding_for_reconciliation = 0.0
+                    else:
+                        fees_for_reconciliation = (
+                            actual_fee_delta
+                            if actual_fee_delta is not None and actual_fee_delta > 0
+                            else (est_entry_fee + est_exit_fee)
+                        )
+                        slippage_for_reconciliation = est_roundtrip_slippage
+                        funding_for_reconciliation = float(funding_fees or 0.0)
+
+                    recon_delta_warn_threshold = _get_recon_delta_warn_threshold_usdt(recon_basis)
+                    recon_unexplained_warn_threshold = _get_recon_unexplained_warn_threshold_usdt(recon_basis)
+                    recon_unexplained_pct_warn_threshold = _get_recon_unexplained_warn_threshold_pct()
+
                     reconciliation = fee_tracker.reconcile_equity_drift(
-                        total_pnl,
+                        reconciliation_trade_pnl,
                         actual_pnl,
-                        fees=costs["entry_fee"] + costs["exit_fee"],
-                        slippage=costs["slippage"],
-                        funding=funding_fees,
+                        fees=fees_for_reconciliation,
+                        slippage=slippage_for_reconciliation,
+                        funding=funding_for_reconciliation,
                     )
                     logger.info(
                         "Equity reconciliation (post-close): trade_pnl=%.2f equity_change=%.2f diff=%.2f "
-                        "fees=%.2f slippage=%.2f funding=%.2f unexplained=%.2f",
+                        "fees=%.2f slippage=%.2f funding=%.2f unexplained=%.2f "
+                        "basis=%s delta_th=%.2f unexplained_th=%.2f",
                         reconciliation["trade_pnl"],
                         reconciliation["equity_change"],
                         reconciliation["difference"],
@@ -2401,16 +2525,22 @@ if __name__ == "__main__":
                         reconciliation["slippage"],
                         reconciliation["funding"],
                         reconciliation["unexplained"],
+                        recon_basis,
+                        recon_delta_warn_threshold,
+                        recon_unexplained_warn_threshold,
                     )
 
                     if post_equity_usdt is not None:
                         pnl_diff = abs(reconciliation["difference"])
-                        if pnl_diff > 0.10:
+                        if pnl_diff > recon_delta_warn_threshold:
                             logger.warning(
-                                "Large realized-vs-estimated PnL delta: position_pnl=%.2f realized_equity_change=%.2f diff=%.2f",
-                                total_pnl,
+                                "Large realized-vs-estimated PnL delta: basis=%s position_pnl=%.2f "
+                                "realized_equity_change=%.2f diff=%.2f threshold=%.2f",
+                                recon_basis,
+                                reconciliation_trade_pnl,
                                 actual_pnl,
                                 pnl_diff,
+                                recon_delta_warn_threshold,
                             )
 
                         unexplained_pct = (
@@ -2418,11 +2548,18 @@ if __name__ == "__main__":
                             if reconciliation["difference"] != 0
                             else 0
                         )
-                        if abs(reconciliation["unexplained"]) > 0.10 and unexplained_pct > 50:
+                        if (
+                            abs(reconciliation["unexplained"]) > recon_unexplained_warn_threshold
+                            and unexplained_pct > recon_unexplained_pct_warn_threshold
+                        ):
                             logger.warning(
-                                "Large unexplained reconciliation component (post-close): %.2f USDT (%.1f%% of difference)",
+                                "Large unexplained reconciliation component (post-close): %.2f USDT "
+                                "(%.1f%% of difference) basis=%s threshold=%.2f pct_threshold=%.1f",
                                 reconciliation["unexplained"],
                                 unexplained_pct,
+                                recon_basis,
+                                recon_unexplained_warn_threshold,
+                                recon_unexplained_pct_warn_threshold,
                             )
 
                 is_win = actual_pnl > 0

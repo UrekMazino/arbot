@@ -116,7 +116,10 @@ RECON_POST_RE = re.compile(
     r"Equity reconciliation(?: \(post-close\))?:\s*trade_pnl=(?P<trade_pnl>[-+]?\d+\.\d+)\s+"
     r"equity_change=(?P<equity_change>[-+]?\d+\.\d+)\s+diff=(?P<diff>[-+]?\d+\.\d+)\s+"
     r"fees=(?P<fees>[-+]?\d+\.\d+)\s+slippage=(?P<slippage>[-+]?\d+\.\d+)\s+"
-    r"funding=(?P<funding>[-+]?\d+\.\d+)\s+unexplained=(?P<unexplained>[-+]?\d+\.\d+)",
+    r"funding=(?P<funding>[-+]?\d+\.\d+)\s+unexplained=(?P<unexplained>[-+]?\d+\.\d+)"
+    r"(?:\s+basis=(?P<basis>[^\s]+))?"
+    r"(?:\s+delta_th=(?P<delta_th>[-+]?\d+(?:\.\d+)?))?"
+    r"(?:\s+unexplained_th=(?P<unexplained_th>[-+]?\d+(?:\.\d+)?))?",
     re.IGNORECASE,
 )
 RECON_LARGE_DELTA_RE = re.compile(
@@ -828,6 +831,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                         "slippage": _safe_float(recon_post_match.group("slippage")),
                         "funding": _safe_float(recon_post_match.group("funding")),
                         "unexplained": _safe_float(recon_post_match.group("unexplained")),
+                        "recon_basis": str(recon_post_match.group("basis") or "unknown").strip().lower(),
+                        "delta_threshold_usdt": _safe_float(recon_post_match.group("delta_th")),
+                        "unexplained_threshold_usdt": _safe_float(recon_post_match.group("unexplained_th")),
                         "large_delta_warning": 0,
                         "large_unexplained_warning": 0,
                         "unexplained_pct_warning": None,
@@ -1090,11 +1096,17 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                     recon_row["result"] = trade_match.group("result")
                     diff_abs = abs(recon_row["diff"]) if recon_row["diff"] is not None else 0.0
                     unexpl_abs = abs(recon_row["unexplained"]) if recon_row["unexplained"] is not None else 0.0
+                    diff_threshold = _safe_float(recon_row.get("delta_threshold_usdt"))
+                    if diff_threshold is None or diff_threshold <= 0:
+                        diff_threshold = 0.10
+                    unexpl_threshold = _safe_float(recon_row.get("unexplained_threshold_usdt"))
+                    if unexpl_threshold is None or unexpl_threshold <= 0:
+                        unexpl_threshold = 0.10
                     pass_fail = (
                         recon_row.get("large_delta_warning", 0) == 0
                         and recon_row.get("large_unexplained_warning", 0) == 0
-                        and diff_abs <= 0.10
-                        and unexpl_abs <= 0.10
+                        and diff_abs <= diff_threshold
+                        and unexpl_abs <= unexpl_threshold
                     )
                     recon_row["pass_fail"] = "pass" if pass_fail else "fail"
                     reconciliation_checks.append(recon_row)
@@ -1260,11 +1272,17 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     for recon_row in reconciliation_pending:
         diff_abs = abs(recon_row["diff"]) if recon_row["diff"] is not None else 0.0
         unexpl_abs = abs(recon_row["unexplained"]) if recon_row["unexplained"] is not None else 0.0
+        diff_threshold = _safe_float(recon_row.get("delta_threshold_usdt"))
+        if diff_threshold is None or diff_threshold <= 0:
+            diff_threshold = 0.10
+        unexpl_threshold = _safe_float(recon_row.get("unexplained_threshold_usdt"))
+        if unexpl_threshold is None or unexpl_threshold <= 0:
+            unexpl_threshold = 0.10
         pass_fail = (
             recon_row.get("large_delta_warning", 0) == 0
             and recon_row.get("large_unexplained_warning", 0) == 0
-            and diff_abs <= 0.10
-            and unexpl_abs <= 0.10
+            and diff_abs <= diff_threshold
+            and unexpl_abs <= unexpl_threshold
         )
         recon_row["pass_fail"] = "pass" if pass_fail else "fail"
         reconciliation_checks.append(recon_row)
@@ -2000,6 +2018,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             "slippage",
             "funding",
             "unexplained",
+            "recon_basis",
+            "delta_threshold_usdt",
+            "unexplained_threshold_usdt",
             "large_delta_warning",
             "large_unexplained_warning",
             "unexplained_pct_warning",

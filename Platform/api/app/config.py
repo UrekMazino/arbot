@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     refresh_token_days: int = 14
     jwt_algorithm: str = "HS256"
 
-    bootstrap_admin_email: str = "admin@okxstatbot.local"
+    bootstrap_admin_email: str = "admin@okxstatbot.dev"
     bootstrap_admin_password: str = "ChangeMeNow123!"
 
     event_batch_max: int = 200

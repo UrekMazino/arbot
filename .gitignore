@@ -77,3 +77,10 @@ KILL_SWITCH_STATE_MACHINE.md
 
 # Platform local dev artifacts
 Platform/api/platform_v2.db
+
+# Node/Next.js
+node_modules/
+.next/
+Platform/web/.env.local
+!Platform/web/lib/
+!Platform/web/lib/**

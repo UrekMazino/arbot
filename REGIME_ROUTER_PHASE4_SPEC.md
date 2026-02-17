@@ -1,7 +1,13 @@
 # Regime Router Phase 4 Spec (Adaptive Strategy Quality Loop)
 
 Date: 2026-02-17  
-Status: Draft (planning)
+Status: Deferred execution queue (moved under V2 roadmap)
+
+Queue note:
+
+1. Phase 4 remains the technical reference for pending engine work.
+2. Active implementation order is now tracked in `V2_ROADMAP.md`.
+3. V2 priority is UI-first, then deferred Phase 4 workstreams.
 
 ## 1. Objective
 

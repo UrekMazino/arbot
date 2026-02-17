@@ -99,6 +99,7 @@ Strategy outputs are stored under `OKXStatBot/Strategy/output`:
 For a detailed explanation of the bot's architecture, trading logic, risk management, and computations, please see:
 - **[BOT_DOCUMENTATION.md](BOT_DOCUMENTATION.md)**: Comprehensive guide to the Execution system.
 - **[KILL_SWITCH_STATE_MACHINE.md](KILL_SWITCH_STATE_MACHINE.md)**: Detailed state machine transitions.
+- **[V2_ROADMAP.md](V2_ROADMAP.md)**: V2 UI roadmap plus queued pending engine phases.
 - **[CHANGELOG.md](CHANGELOG.md)**: Release notes.
 - **[VERSION](VERSION)**: Current version tag.
 

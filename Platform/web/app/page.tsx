@@ -5,10 +5,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   RunEvent,
   RunSummary,
+  ScorecardCell,
   Trade,
+  WalkForwardPoint,
   apiBaseUrl,
   getRunEvents,
+  getRunScorecard,
   getRunTrades,
+  getRunWalkForward,
   getRuns,
   login,
   wsDashboardUrl,
@@ -42,6 +46,69 @@ function fmtDuration(startIso: string, endIso: string | null): string {
   return `${h}h ${m}m`;
 }
 
+type ChartPoint = {
+  x: number;
+  y: number;
+  value: number;
+  label: string;
+};
+
+function buildChartPoints(values: number[], labels: string[], width = 620, height = 190): ChartPoint[] {
+  if (!values.length) return [];
+  const minVal = Math.min(...values);
+  const maxVal = Math.max(...values);
+  const spread = maxVal - minVal || 1;
+  return values.map((value, idx) => {
+    const x = values.length === 1 ? width / 2 : (idx / (values.length - 1)) * width;
+    const y = height - ((value - minVal) / spread) * height;
+    return {
+      x,
+      y,
+      value,
+      label: labels[idx] || "",
+    };
+  });
+}
+
+function pointsToPath(points: ChartPoint[]): string {
+  if (!points.length) return "";
+  return points
+    .map((point, idx) => `${idx === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+}
+
+function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
+  if (!scorecard.length) return <p className="muted">No attribution rows yet.</p>;
+  return (
+    <div className="table-wrap compact">
+      <table>
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th>Regime</th>
+            <th>Trades</th>
+            <th>Win Rate</th>
+            <th>Avg PnL</th>
+            <th>Total PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scorecard.map((row, idx) => (
+            <tr key={`${row.entry_strategy || "na"}-${row.entry_regime || "na"}-${idx}`}>
+              <td>{row.entry_strategy || "n/a"}</td>
+              <td>{row.entry_regime || "n/a"}</td>
+              <td>{row.trades}</td>
+              <td>{fmtNumber(row.win_rate_pct)}%</td>
+              <td>{fmtNumber(row.avg_pnl_usdt)}</td>
+              <td>{fmtNumber(row.sum_pnl_usdt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [email, setEmail] = useState("admin@okxstatbot.dev");
   const [password, setPassword] = useState("ChangeMeNow123!");
@@ -51,6 +118,8 @@ export default function HomePage() {
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
+  const [scorecard, setScorecard] = useState<ScorecardCell[]>([]);
   const [liveFeed, setLiveFeed] = useState<LiveMsg[]>([]);
   const [status, setStatus] = useState<string>("Signed out");
   const [error, setError] = useState<string>("");
@@ -87,13 +156,54 @@ export default function HomePage() {
 
   const refreshRunDetails = useCallback(async (authToken: string, runId: string) => {
     if (!runId) return;
-    const [runEvents, runTrades] = await Promise.all([
+    const [runEvents, runTrades, runWalkForward, runScorecard] = await Promise.all([
       getRunEvents(authToken, runId),
       getRunTrades(authToken, runId),
+      getRunWalkForward(authToken, runId),
+      getRunScorecard(authToken, runId),
     ]);
     setEvents(runEvents);
     setTrades(runTrades);
+    setWalkForward(runWalkForward);
+    setScorecard(runScorecard);
   }, []);
+
+  const equitySeries = useMemo(() => {
+    if (!walkForward.length) return [] as { ts: string; equity: number }[];
+    let cumulative = 0;
+    return walkForward.map((point) => {
+      cumulative += point.pnl_usdt || 0;
+      return { ts: point.exit_ts, equity: cumulative };
+    });
+  }, [walkForward]);
+
+  const drawdownSeries = useMemo(() => {
+    if (!equitySeries.length) return [] as { ts: string; drawdown: number }[];
+    let peak = Number.NEGATIVE_INFINITY;
+    return equitySeries.map((point) => {
+      peak = Math.max(peak, point.equity);
+      return {
+        ts: point.ts,
+        drawdown: point.equity - peak,
+      };
+    });
+  }, [equitySeries]);
+
+  const equityChart = useMemo(() => {
+    const values = equitySeries.map((row) => row.equity);
+    const labels = equitySeries.map((row) => row.ts);
+    const points = buildChartPoints(values, labels);
+    const latest = values.length ? values[values.length - 1] : 0;
+    return { points, path: pointsToPath(points), latest };
+  }, [equitySeries]);
+
+  const drawdownChart = useMemo(() => {
+    const values = drawdownSeries.map((row) => row.drawdown);
+    const labels = drawdownSeries.map((row) => row.ts);
+    const points = buildChartPoints(values, labels);
+    const worst = values.length ? Math.min(...values) : 0;
+    return { points, path: pointsToPath(points), worst };
+  }, [drawdownSeries]);
 
   async function onLoginSubmit(e: FormEvent) {
     e.preventDefault();
@@ -123,6 +233,8 @@ export default function HomePage() {
     setSelectedRunId("");
     setEvents([]);
     setTrades([]);
+    setWalkForward([]);
+    setScorecard([]);
     setLiveFeed([]);
     localStorage.removeItem("v2_access_token");
     localStorage.removeItem("v2_refresh_token");
@@ -319,6 +431,47 @@ export default function HomePage() {
             {!liveFeed.length ? <li className="muted">Waiting for websocket events.</li> : null}
           </ul>
         </article>
+      </section>
+
+      <section className="grid-analytics">
+        <article className="card">
+          <h3>Equity Curve (Realized)</h3>
+          {equityChart.points.length ? (
+            <>
+              <div className="chart-meta">
+                <span>Closed trades: {equityChart.points.length}</span>
+                <strong>Latest cumulative PnL: {fmtNumber(equityChart.latest)} USDT</strong>
+              </div>
+              <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Equity curve chart">
+                <path d={equityChart.path} fill="none" stroke="#0f766e" strokeWidth="3" />
+              </svg>
+            </>
+          ) : (
+            <p className="muted">No walk-forward points yet.</p>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Drawdown Curve</h3>
+          {drawdownChart.points.length ? (
+            <>
+              <div className="chart-meta">
+                <span>Computed from cumulative realized PnL</span>
+                <strong>Worst drawdown: {fmtNumber(drawdownChart.worst)} USDT</strong>
+              </div>
+              <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Drawdown chart">
+                <path d={drawdownChart.path} fill="none" stroke="#b45309" strokeWidth="3" />
+              </svg>
+            </>
+          ) : (
+            <p className="muted">No drawdown data yet.</p>
+          )}
+        </article>
+      </section>
+
+      <section className="card">
+        <h3>Strategy x Regime Attribution</h3>
+        <AttributionTable scorecard={scorecard} />
       </section>
     </main>
   );

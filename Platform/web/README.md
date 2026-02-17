@@ -3,8 +3,9 @@
 This is the V2 web UI scaffold (Next.js + TypeScript) for:
 
 1. Run browser (list runs + status + PnL + duration)
-2. Run detail panel (events + trades)
-3. Live websocket event preview (`/ws/dashboard`)
+2. Charts (equity curve + drawdown + strategy/regime attribution table)
+3. Run detail panel (events + trades)
+4. Live websocket event preview (`/ws/dashboard`)
 
 ## Local Run (without Docker)
 

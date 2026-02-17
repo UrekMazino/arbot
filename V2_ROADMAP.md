@@ -16,7 +16,7 @@ Ship a usable V2 UI first, while deferring remaining execution-engine upgrades f
 ### 2.1 V2-A (UI First)
 
 1. [x] Run browser (list runs, status, PnL, duration) - initial scaffold in `Platform/web`.
-2. [ ] Charts (equity curve, drawdown, strategy/regime attribution).
+2. [x] Charts (equity curve, drawdown, strategy/regime attribution) - initial panel set in `Platform/web`.
 3. [ ] Event timeline (switches, gates, alerts, exits).
 4. [ ] Data quality and reconciliation panels.
 5. [ ] Config snapshot viewer and report artifact links.

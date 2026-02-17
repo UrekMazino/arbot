@@ -43,6 +43,21 @@ export type Trade = {
   exit_reason: string | null;
 };
 
+export type WalkForwardPoint = {
+  exit_ts: string;
+  pnl_usdt: number;
+};
+
+export type ScorecardCell = {
+  entry_strategy: string | null;
+  entry_regime: string | null;
+  trades: number;
+  wins: number;
+  win_rate_pct: number | null;
+  avg_pnl_usdt: number | null;
+  sum_pnl_usdt: number | null;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
 
 async function apiRequest<T>(
@@ -92,6 +107,14 @@ export async function getRunEvents(token: string, runId: string): Promise<RunEve
 
 export async function getRunTrades(token: string, runId: string): Promise<Trade[]> {
   return apiRequest<Trade[]>(`/runs/${runId}/trades?limit=300`, { method: "GET" }, token);
+}
+
+export async function getRunWalkForward(token: string, runId: string): Promise<WalkForwardPoint[]> {
+  return apiRequest<WalkForwardPoint[]>(`/runs/${runId}/analytics/walk-forward`, { method: "GET" }, token);
+}
+
+export async function getRunScorecard(token: string, runId: string): Promise<ScorecardCell[]> {
+  return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" }, token);
 }
 
 export function apiBaseUrl(): string {

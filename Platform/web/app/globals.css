@@ -135,6 +135,12 @@ button.ghost {
   gap: 14px;
 }
 
+.grid-analytics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
 h2,
 h3,
 h4 {
@@ -145,6 +151,10 @@ h4 {
 .table-wrap {
   overflow: auto;
   max-height: 540px;
+}
+
+.table-wrap.compact {
+  max-height: 360px;
 }
 
 table {
@@ -242,6 +252,28 @@ tbody tr:hover {
   padding: 6px 8px;
 }
 
+.chart-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
+.chart-meta strong {
+  color: var(--ink);
+}
+
+.chart-svg {
+  margin-top: 10px;
+  width: 100%;
+  height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 243, 0.9));
+}
+
 .pill {
   padding: 2px 8px;
   border-radius: 999px;
@@ -284,6 +316,10 @@ tbody tr:hover {
 
 @media (max-width: 980px) {
   .grid-main {
+    grid-template-columns: 1fr;
+  }
+
+  .grid-analytics {
     grid-template-columns: 1fr;
   }
 

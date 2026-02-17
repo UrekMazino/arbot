@@ -74,3 +74,6 @@ Strategy/4_summary_report_*
 Execution/logfile_okx.log
 EXECUTION_CODE_REVIEW.md   
 KILL_SWITCH_STATE_MACHINE.md  
+
+# Platform local dev artifacts
+Platform/api/platform_v2.db

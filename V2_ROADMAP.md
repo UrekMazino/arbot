@@ -3,6 +3,10 @@
 Date: 2026-02-18
 Status: Active planning
 
+Reference:
+
+1. Detailed implementation spec: `V2_UI_PLATFORM_SPEC.md`
+
 ## 1. Goal
 
 Ship a usable V2 UI first, while deferring remaining execution-engine upgrades from V1 Phase 4 into a tracked queue.

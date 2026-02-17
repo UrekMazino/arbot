@@ -100,6 +100,7 @@ For a detailed explanation of the bot's architecture, trading logic, risk manage
 - **[BOT_DOCUMENTATION.md](BOT_DOCUMENTATION.md)**: Comprehensive guide to the Execution system.
 - **[KILL_SWITCH_STATE_MACHINE.md](KILL_SWITCH_STATE_MACHINE.md)**: Detailed state machine transitions.
 - **[V2_ROADMAP.md](V2_ROADMAP.md)**: V2 UI roadmap plus queued pending engine phases.
+- **[V2_UI_PLATFORM_SPEC.md](V2_UI_PLATFORM_SPEC.md)**: V2 web architecture, DB schema, API, auth, and rollout plan.
 - **[CHANGELOG.md](CHANGELOG.md)**: Release notes.
 - **[VERSION](VERSION)**: Current version tag.
 

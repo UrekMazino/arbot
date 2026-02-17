@@ -87,7 +87,10 @@ from func_pair_state import (
     clear_persistence_history,
     set_entry_equity,
     get_entry_equity,
+    get_entry_time,
     get_entry_notional,
+    get_entry_strategy,
+    get_entry_regime,
     is_restricted_ticker,
     reset_health_failure,
     cleanup_expired_graveyard
@@ -2180,7 +2183,22 @@ if __name__ == "__main__":
                 # Use post-close realized equity as source of truth for trade outcome.
                 blacklist_pair = False
                 entry_equity = get_entry_equity()
+                entry_time_ts = get_entry_time()
                 entry_notional = get_entry_notional()
+                entry_strategy = str(get_entry_strategy() or "").strip().upper()
+                entry_regime = str(get_entry_regime() or "").strip().upper()
+                if not entry_strategy and last_strategy_decision is not None:
+                    entry_strategy = str(
+                        getattr(last_strategy_decision, "active_strategy", "") or ""
+                    ).strip().upper()
+                if not entry_regime and last_regime_decision is not None:
+                    entry_regime = str(
+                        getattr(last_regime_decision, "regime", "") or ""
+                    ).strip().upper()
+                if not entry_strategy:
+                    entry_strategy = "UNKNOWN"
+                if not entry_regime:
+                    entry_regime = "UNKNOWN"
                 switch_reason_after_close = get_last_switch_reason() or ""
                 force_switch_after_close = switch_reason_after_close in FORCED_SWITCH_EXIT_REASONS
                 reconciliation = None
@@ -2243,6 +2261,13 @@ if __name__ == "__main__":
                         "Entry/post-close equity unavailable; falling back to pair PnL for trade result."
                     )
 
+                hold_minutes = None
+                if entry_time_ts is not None:
+                    try:
+                        hold_minutes = max((time.time() - float(entry_time_ts)) / 60.0, 0.0)
+                    except (TypeError, ValueError):
+                        hold_minutes = None
+
                 # Reconcile estimate vs realized result using per-trade costs.
                 if costs is not None:
                     reconciliation = fee_tracker.reconcile_equity_drift(
@@ -2295,6 +2320,17 @@ if __name__ == "__main__":
                 if abs(funding_fees) > 0.01:  # Log if > 1 cent
                     logger.info(f"Funding fees paid during trade: {funding_fees:.2f} USDT")
 
+                hold_label = f"{hold_minutes:.2f}" if hold_minutes is not None else "n/a"
+                exit_reason = switch_reason_after_close or "normal"
+                logger.info(
+                    "STRATEGY_TRADE_CLOSE: strategy=%s regime=%s result=%s pnl=%.2f hold_min=%s exit_reason=%s",
+                    entry_strategy,
+                    entry_regime,
+                    result_label,
+                    actual_pnl,
+                    hold_label,
+                    exit_reason,
+                )
                 logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
 
                 # Use realized post-close metrics for alert output.
@@ -2343,13 +2379,15 @@ if __name__ == "__main__":
                             )
 
                 logger.warning(
-                    "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%)",
+                    "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%) | Strategy %s | Regime %s",
                     result_label,
                     alert_pnl,
                     alert_pnl_pct,
                     alert_equity if alert_equity is not None else 0.0,
                     alert_session_pnl,
                     alert_session_pnl_pct,
+                    entry_strategy,
+                    entry_regime,
                 )
 
                 if blacklist_pair:

@@ -1731,9 +1731,30 @@ def manage_new_trades(
                 if not limit_order_basis and order_long_id and order_short_id:
                     _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
 
-                # Record entry Z-score for regime break detection
-                from func_pair_state import set_entry_z_score, clear_persistence_history, get_entry_time, set_entry_notional
+                # Record entry context for close-time attribution and regime break detection.
+                from func_pair_state import (
+                    set_entry_z_score,
+                    clear_persistence_history,
+                    get_entry_time,
+                    set_entry_notional,
+                    set_entry_trade_context,
+                )
+                entry_regime = "UNKNOWN"
+                if regime_decision is not None:
+                    if isinstance(regime_decision, dict):
+                        entry_regime = str(regime_decision.get("regime") or "UNKNOWN").strip().upper()
+                    else:
+                        entry_regime = str(getattr(regime_decision, "regime", "UNKNOWN") or "UNKNOWN").strip().upper()
+                entry_strategy = str(strategy_name or "STATARB_MR").strip().upper()
+                set_entry_trade_context(entry_strategy, entry_regime)
                 set_entry_z_score(latest_zscore)
+                logger.info(
+                    "STRATEGY_TRADE_OPEN: strategy=%s regime=%s entry_z=%.4f size_mult=%.2f",
+                    entry_strategy,
+                    entry_regime,
+                    latest_zscore,
+                    float(effective_size_multiplier),
+                )
                 logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
 
                 entry_time = get_entry_time()

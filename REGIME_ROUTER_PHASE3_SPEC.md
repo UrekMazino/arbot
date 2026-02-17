@@ -204,9 +204,10 @@ Entry contract:
      - if `shift_z > threshold`, block new TREND entries for the cycle (`allow_new_entries=False` for that decision path only)
      - keep `active_strategy` unchanged
      - emit gate reason (`mean_shift_gate`)
-   - Scope note:
-     - This is a gate-only Phase 3 control.
-     - It does not change z-score centering target or introduce regime-specific mean persistence state.
+  - Scope note:
+    - This is a gate-only Phase 3 control.
+    - It does not change z-score centering target or introduce regime-specific mean persistence state.
+    - Explicit regime-anchored mean recalibration is archived for now; see `REGIME_ROUTER_PHASE4_SPEC.md` section 8.1.
 
 Default risk controls:
 - Smaller size multiplier (0.35x vs 1.0x in `STATARB_MR`).

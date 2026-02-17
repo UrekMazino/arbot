@@ -110,6 +110,8 @@ def load_pair_state():
             "coint_lost_confirm_count": 0,
             "entry_equity": None,
             "entry_notional": None,
+            "entry_strategy": None,
+            "entry_regime": None,
             "last_switch_reason": "",
             "min_capital_cooldowns": {},
             "stall_warning_marks": [],
@@ -152,6 +154,10 @@ def load_pair_state():
                 state["entry_equity"] = None
             if "entry_notional" not in state:
                 state["entry_notional"] = None
+            if "entry_strategy" not in state:
+                state["entry_strategy"] = None
+            if "entry_regime" not in state:
+                state["entry_regime"] = None
             if "last_switch_reason" not in state:
                 state["last_switch_reason"] = ""
             if "min_capital_cooldowns" not in state:
@@ -160,7 +166,7 @@ def load_pair_state():
                 state["stall_warning_marks"] = []
             return state
     except Exception:
-        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
+        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
 
 def save_pair_state(state):
     try:
@@ -802,6 +808,25 @@ def get_entry_notional():
     state = load_pair_state()
     return state.get("entry_notional")
 
+def set_entry_trade_context(strategy_name=None, regime_name=None):
+    """Persist entry strategy/regime context for close-time attribution."""
+    state = load_pair_state()
+    strategy = str(strategy_name or "").strip().upper()
+    regime = str(regime_name or "").strip().upper()
+    state["entry_strategy"] = strategy or None
+    state["entry_regime"] = regime or None
+    save_pair_state(state)
+
+def get_entry_strategy():
+    """Get persisted strategy context for the open trade."""
+    state = load_pair_state()
+    return state.get("entry_strategy")
+
+def get_entry_regime():
+    """Get persisted regime context for the open trade."""
+    state = load_pair_state()
+    return state.get("entry_regime")
+
 def clear_entry_tracking():
     """Clear entry tracking when position is closed."""
     state = load_pair_state()
@@ -811,6 +836,8 @@ def clear_entry_tracking():
     state["coint_lost_confirm_count"] = 0
     state["entry_equity"] = None
     state["entry_notional"] = None
+    state["entry_strategy"] = None
+    state["entry_regime"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
     state["z_history"] = []  # Clear stall detection history
     state["stall_warning_marks"] = []

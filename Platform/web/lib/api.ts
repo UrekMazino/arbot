@@ -102,6 +102,39 @@ export type DataQualitySummary = {
   recent_issues: DataQualityIssue[];
 };
 
+export type ConfigSnapshotResponse = {
+  run_id: string;
+  source: string;
+  created_at: string | null;
+  report_id: string | null;
+  file_id: string | null;
+  path: string | null;
+  config_snapshot: Record<string, unknown> | null;
+  error?: string;
+};
+
+export type ReportArtifactFile = {
+  id: string;
+  name: string;
+  path: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  checksum: string | null;
+  created_at: string | null;
+  download_url: string;
+};
+
+export type RunReportArtifact = {
+  id: string;
+  run_id: string;
+  status: string;
+  requested_by: string | null;
+  requested_at: string | null;
+  finished_at: string | null;
+  error_text: string | null;
+  files: ReportArtifactFile[];
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
 
 async function apiRequest<T>(
@@ -165,8 +198,20 @@ export async function getRunDataQuality(token: string, runId: string): Promise<D
   return apiRequest<DataQualitySummary>(`/runs/${runId}/analytics/data-quality`, { method: "GET" }, token);
 }
 
+export async function getRunConfigSnapshot(token: string, runId: string): Promise<ConfigSnapshotResponse> {
+  return apiRequest<ConfigSnapshotResponse>(`/runs/${runId}/config-snapshot`, { method: "GET" }, token);
+}
+
+export async function getRunReportArtifacts(token: string, runId: string): Promise<RunReportArtifact[]> {
+  return apiRequest<RunReportArtifact[]>(`/runs/${runId}/report-artifacts?limit=10`, { method: "GET" }, token);
+}
+
 export function apiBaseUrl(): string {
   return API_BASE;
+}
+
+export function apiRootUrl(): string {
+  return API_BASE.replace(/\/api\/v2\/?$/, "");
 }
 
 export function wsDashboardUrl(botInstanceId: string): string {

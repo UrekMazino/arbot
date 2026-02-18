@@ -7,6 +7,7 @@ This is the V2 web UI scaffold (Next.js + TypeScript) for:
 3. Event timeline (switches, gates, alerts, exits) with source/severity/category filters
 4. Live websocket event stream merged into run detail timeline (`/ws/dashboard`)
 5. Data quality + reconciliation panels (status, deltas, top alerts, issue list)
+6. Config snapshot viewer + report artifact links (download endpoints)
 
 ## Local Run (without Docker)
 
@@ -47,6 +48,6 @@ This includes:
 
 ## Notes
 
-1. Current frontend covers V2-A items 1-4.
-2. Next slice is config snapshot/report artifact links.
+1. Current frontend covers V2-A items 1-5.
+2. Next slices are deferred queue items from V2-B.
 3. Auth is token-based via `/api/v2/auth/login`.

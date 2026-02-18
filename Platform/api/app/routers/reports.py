@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from redis import Redis
 from rq import Queue
 from sqlalchemy import select
@@ -136,11 +138,17 @@ def report_file_download(
     row = db.get(ReportFile, file_id)
     if not row or row.report_id != report_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report file not found")
-    # For initial scaffold return metadata path. Actual file streaming to be added in V2.3.
-    return {
-        "file_id": row.id,
-        "name": row.name,
-        "path": row.path,
-        "download_mode": "direct_path",
-    }
-
+    try:
+        resolved = Path(str(row.path or "")).resolve()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file path")
+    allowed_root = Path("/workspace").resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File outside allowed root")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found on disk")
+    return FileResponse(
+        path=str(resolved),
+        filename=row.name,
+        media_type=row.mime_type or "application/octet-stream",
+    )

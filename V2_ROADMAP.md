@@ -19,7 +19,7 @@ Ship a usable V2 UI first, while deferring remaining execution-engine upgrades f
 2. [x] Charts (equity curve, drawdown, strategy/regime attribution) - initial panel set in `Platform/web`.
 3. [x] Event timeline (switches, gates, alerts, exits) - unified timeline with filters in `Platform/web`.
 4. [x] Data quality and reconciliation panels - added API + UI summary/issue panels in `Platform/api` and `Platform/web`.
-5. [ ] Config snapshot viewer and report artifact links.
+5. [x] Config snapshot viewer and report artifact links - added run-level config/artifact APIs and dashboard panels in `Platform/api` and `Platform/web`.
 
 ### 2.2 V2-B (Deferred Engine Queue)
 

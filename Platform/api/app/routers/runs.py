@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..deps import get_current_user, get_db_session
-from ..models import Alert, RegimeMetric, Run, RunEvent, StrategyMetric, Trade
+from ..models import Alert, BotConfig, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
 from ..schemas import RunEventOut, RunOut, TradeOut
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -27,6 +29,22 @@ def _status_rank(status_text: str) -> int:
     if status_text == "unknown":
         return 1
     return 0
+
+
+def _safe_file_info(path_text: str) -> tuple[Path | None, str | None]:
+    if not path_text:
+        return None, "path missing"
+    try:
+        path_obj = Path(path_text)
+        resolved = path_obj.resolve()
+    except Exception:
+        return None, "invalid path"
+    allowed_root = Path("/workspace").resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        return None, "path outside allowed root"
+    if not resolved.exists() or not resolved.is_file():
+        return None, "file missing"
+    return resolved, None
 
 
 def _get_run_or_404(db: Session, run_id: str) -> Run:
@@ -413,3 +431,151 @@ def analytics_data_quality(
         "top_alerts": alert_top,
         "recent_issues": recent_issues,
     }
+
+
+@router.get("/{run_id}/config-snapshot")
+def get_run_config_snapshot(
+    run_id: str,
+    _: object = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    _get_run_or_404(db, run_id)
+
+    cfg_stmt = (
+        select(BotConfig)
+        .where(BotConfig.run_id == run_id)
+        .order_by(BotConfig.created_at.desc())
+        .limit(1)
+    )
+    bot_cfg = db.execute(cfg_stmt).scalar_one_or_none()
+    if bot_cfg is not None:
+        payload = bot_cfg.config_snapshot_json if isinstance(bot_cfg.config_snapshot_json, dict) else {}
+        return {
+            "run_id": run_id,
+            "source": "bot_configs",
+            "created_at": bot_cfg.created_at.isoformat() if bot_cfg.created_at else None,
+            "report_id": None,
+            "file_id": None,
+            "path": None,
+            "config_snapshot": payload,
+        }
+
+    fallback_stmt = (
+        select(ReportFile, Report)
+        .join(Report, ReportFile.report_id == Report.id)
+        .where(
+            Report.run_id == run_id,
+            func.lower(ReportFile.name) == "config_snapshot.json",
+        )
+        .order_by(Report.requested_at.desc(), ReportFile.created_at.desc())
+        .limit(1)
+    )
+    fallback_row = db.execute(fallback_stmt).first()
+    if fallback_row is None:
+        return {
+            "run_id": run_id,
+            "source": "none",
+            "created_at": None,
+            "report_id": None,
+            "file_id": None,
+            "path": None,
+            "config_snapshot": None,
+        }
+
+    report_file = fallback_row[0]
+    report = fallback_row[1]
+    resolved_path, error_text = _safe_file_info(str(report_file.path or ""))
+    if resolved_path is None:
+        return {
+            "run_id": run_id,
+            "source": "report_file_unavailable",
+            "created_at": report_file.created_at.isoformat() if report_file.created_at else None,
+            "report_id": report.id,
+            "file_id": report_file.id,
+            "path": report_file.path,
+            "config_snapshot": None,
+            "error": error_text,
+        }
+
+    try:
+        text = resolved_path.read_text(encoding="utf-8")
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            parsed = {"_raw": parsed}
+    except Exception as exc:
+        return {
+            "run_id": run_id,
+            "source": "report_file_invalid",
+            "created_at": report_file.created_at.isoformat() if report_file.created_at else None,
+            "report_id": report.id,
+            "file_id": report_file.id,
+            "path": str(resolved_path),
+            "config_snapshot": None,
+            "error": str(exc),
+        }
+
+    return {
+        "run_id": run_id,
+        "source": "report_file",
+        "created_at": report_file.created_at.isoformat() if report_file.created_at else None,
+        "report_id": report.id,
+        "file_id": report_file.id,
+        "path": str(resolved_path),
+        "config_snapshot": parsed,
+    }
+
+
+@router.get("/{run_id}/report-artifacts")
+def list_run_report_artifacts(
+    run_id: str,
+    limit: int = Query(default=10, ge=1, le=50),
+    _: object = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    _get_run_or_404(db, run_id)
+
+    report_rows = db.execute(
+        select(Report)
+        .where(Report.run_id == run_id)
+        .order_by(Report.requested_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+    if not report_rows:
+        return []
+
+    report_ids = [row.id for row in report_rows]
+    file_rows = db.execute(
+        select(ReportFile)
+        .where(ReportFile.report_id.in_(report_ids))
+        .order_by(ReportFile.created_at.asc())
+    ).scalars().all()
+
+    files_by_report: dict[str, list[dict]] = {}
+    for row in file_rows:
+        files_by_report.setdefault(row.report_id, []).append(
+            {
+                "id": row.id,
+                "name": row.name,
+                "path": row.path,
+                "mime_type": row.mime_type,
+                "size_bytes": row.size_bytes,
+                "checksum": row.checksum,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "download_url": f"/api/v2/reports/{row.report_id}/files/{row.id}/download",
+            }
+        )
+
+    return [
+        {
+            "id": row.id,
+            "run_id": row.run_id,
+            "status": row.status,
+            "requested_by": row.requested_by,
+            "requested_at": row.requested_at.isoformat() if row.requested_at else None,
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            "error_text": row.error_text,
+            "files": files_by_report.get(row.id, []),
+        }
+        for row in report_rows
+    ]

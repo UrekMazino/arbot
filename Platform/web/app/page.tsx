@@ -3,15 +3,20 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  ConfigSnapshotResponse,
+  DataQualitySummary,
   RunEvent,
+  RunReportArtifact,
   RunSummary,
   ScorecardCell,
-  DataQualitySummary,
   Trade,
   WalkForwardPoint,
   apiBaseUrl,
+  apiRootUrl,
+  getRunConfigSnapshot,
   getRunDataQuality,
   getRunEvents,
+  getRunReportArtifacts,
   getRunScorecard,
   getRunTrades,
   getRunWalkForward,
@@ -62,6 +67,13 @@ function fmtDuration(startIso: string, endIso: string | null): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+function fmtBytes(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -240,6 +252,8 @@ export default function HomePage() {
   const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
   const [scorecard, setScorecard] = useState<ScorecardCell[]>([]);
   const [qualitySummary, setQualitySummary] = useState<DataQualitySummary | null>(null);
+  const [configSnapshot, setConfigSnapshot] = useState<ConfigSnapshotResponse | null>(null);
+  const [reportArtifacts, setReportArtifacts] = useState<RunReportArtifact[]>([]);
   const [liveFeed, setLiveFeed] = useState<LiveMsg[]>([]);
   const [timelineCategory, setTimelineCategory] = useState<TimelineFilterCategory>("core");
   const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
@@ -279,18 +293,22 @@ export default function HomePage() {
 
   const refreshRunDetails = useCallback(async (authToken: string, runId: string) => {
     if (!runId) return;
-    const [runEvents, runTrades, runWalkForward, runScorecard, runQuality] = await Promise.all([
+    const [runEvents, runTrades, runWalkForward, runScorecard, runQuality, runConfigSnapshot, runReportArtifacts] = await Promise.all([
       getRunEvents(authToken, runId),
       getRunTrades(authToken, runId),
       getRunWalkForward(authToken, runId),
       getRunScorecard(authToken, runId),
       getRunDataQuality(authToken, runId),
+      getRunConfigSnapshot(authToken, runId),
+      getRunReportArtifacts(authToken, runId),
     ]);
     setEvents(runEvents);
     setTrades(runTrades);
     setWalkForward(runWalkForward);
     setScorecard(runScorecard);
     setQualitySummary(runQuality);
+    setConfigSnapshot(runConfigSnapshot);
+    setReportArtifacts(runReportArtifacts);
   }, []);
 
   const equitySeries = useMemo(() => {
@@ -329,6 +347,15 @@ export default function HomePage() {
     const worst = values.length ? Math.min(...values) : 0;
     return { points, path: pointsToPath(points), worst };
   }, [drawdownSeries]);
+
+  const configSnapshotText = useMemo(() => {
+    if (!configSnapshot?.config_snapshot) return "";
+    try {
+      return JSON.stringify(configSnapshot.config_snapshot, null, 2);
+    } catch {
+      return "";
+    }
+  }, [configSnapshot]);
 
   const timelineEvents = useMemo(() => {
     const persisted = events.map((ev) => normalizeHistoryEvent(ev));
@@ -387,6 +414,8 @@ export default function HomePage() {
     setWalkForward([]);
     setScorecard([]);
     setQualitySummary(null);
+    setConfigSnapshot(null);
+    setReportArtifacts([]);
     setLiveFeed([]);
     localStorage.removeItem("v2_access_token");
     localStorage.removeItem("v2_refresh_token");
@@ -812,6 +841,85 @@ export default function HomePage() {
         ) : (
           <p className="muted">No recent quality/reconciliation issues for this run.</p>
         )}
+      </section>
+
+      <section className="grid-analytics">
+        <article className="card">
+          <h3>Config Snapshot</h3>
+          {configSnapshot ? (
+            <div className="detail-block">
+              <p>
+                <strong>Source:</strong> {configSnapshot.source}
+              </p>
+              <p>
+                <strong>Captured:</strong> {fmtDate(configSnapshot.created_at)}
+              </p>
+              {configSnapshot.error ? <p className="error">Snapshot error: {configSnapshot.error}</p> : null}
+              {configSnapshot.config_snapshot ? (
+                <details className="config-details" open>
+                  <summary>View config JSON ({Object.keys(configSnapshot.config_snapshot).length} keys)</summary>
+                  <pre className="json-viewer">{configSnapshotText}</pre>
+                </details>
+              ) : (
+                <p className="muted">No config snapshot available for this run yet.</p>
+              )}
+            </div>
+          ) : (
+            <p className="muted">Loading config snapshot...</p>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Report Artifacts</h3>
+          {reportArtifacts.length ? (
+            <div className="table-wrap compact">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Report</th>
+                    <th>Status</th>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Download</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reportArtifacts.flatMap((report) =>
+                    report.files.length
+                      ? report.files.map((file) => (
+                          <tr key={`${report.id}-${file.id}`}>
+                            <td>{report.id.slice(0, 8)}</td>
+                            <td>{report.status}</td>
+                            <td>{file.name}</td>
+                            <td>{fmtBytes(file.size_bytes)}</td>
+                            <td>
+                              <a
+                                href={`${apiRootUrl()}${file.download_url}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Download
+                              </a>
+                            </td>
+                          </tr>
+                        ))
+                      : [
+                          <tr key={`${report.id}-nofile`}>
+                            <td>{report.id.slice(0, 8)}</td>
+                            <td>{report.status}</td>
+                            <td className="muted" colSpan={3}>
+                              No files linked for this report.
+                            </td>
+                          </tr>,
+                        ],
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="muted">No report artifacts found for this run.</p>
+          )}
+        </article>
       </section>
     </main>
   );

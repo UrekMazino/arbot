@@ -4,6 +4,22 @@ export type TokenPair = {
   refresh_token: string;
 };
 
+export type RoleRecord = {
+  id: string;
+  name: string;
+  description: string | null;
+};
+
+export type UserRecord = {
+  id: string;
+  email: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  roles: RoleRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type RunSummary = {
   id: string;
   bot_instance_id: string;
@@ -135,6 +151,50 @@ export type RunReportArtifact = {
   files: ReportArtifactFile[];
 };
 
+export type AdminBotStatus = {
+  running: boolean;
+  pid: number;
+  started_at?: string | null;
+  stopped_at?: string | null;
+  detail?: string;
+  command?: string[];
+  cwd?: string;
+  requested_by?: string;
+  latest_run_key?: string | null;
+  latest_log_file?: string | null;
+  workspace_root?: string;
+  control_log_file?: string | null;
+};
+
+export type AdminLogTail = {
+  run_key: string | null;
+  log_file: string | null;
+  line_count: number;
+  lines: string[];
+  updated_at: string;
+  detail: string;
+};
+
+export type AdminLogRun = {
+  run_key: string;
+  log_file: string;
+  size_bytes: number;
+  mtime_ts: number;
+};
+
+export type AdminReportRun = {
+  run_key: string;
+  path: string;
+  file_count: number;
+  summary_json: boolean;
+  mtime_ts: number;
+};
+
+export type AdminEnvSettings = {
+  path: string;
+  values: Record<string, string>;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
 
 async function apiRequest<T>(
@@ -174,6 +234,10 @@ export async function login(email: string, password: string): Promise<TokenPair>
   });
 }
 
+export async function getMe(token: string): Promise<UserRecord> {
+  return apiRequest<UserRecord>("/auth/me", { method: "GET" }, token);
+}
+
 export async function getRuns(token: string): Promise<RunSummary[]> {
   return apiRequest<RunSummary[]>("/runs?limit=100", { method: "GET" }, token);
 }
@@ -204,6 +268,94 @@ export async function getRunConfigSnapshot(token: string, runId: string): Promis
 
 export async function getRunReportArtifacts(token: string, runId: string): Promise<RunReportArtifact[]> {
   return apiRequest<RunReportArtifact[]>(`/runs/${runId}/report-artifacts?limit=10`, { method: "GET" }, token);
+}
+
+export async function getAdminBotStatus(token: string): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/status", { method: "GET" }, token);
+}
+
+export async function startAdminBot(token: string): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/start", { method: "POST", body: JSON.stringify({}) }, token);
+}
+
+export async function stopAdminBot(token: string): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/stop", { method: "POST", body: JSON.stringify({}) }, token);
+}
+
+export async function getAdminBotLogTail(
+  token: string,
+  runKey: string,
+  lines = 300,
+): Promise<AdminLogTail> {
+  const key = encodeURIComponent(runKey || "latest");
+  return apiRequest<AdminLogTail>(`/admin/bot/logs/tail?run_key=${key}&lines=${lines}`, { method: "GET" }, token);
+}
+
+export async function getAdminLogRuns(token: string, limit = 100): Promise<AdminLogRun[]> {
+  return apiRequest<AdminLogRun[]>(`/admin/logs/runs?limit=${limit}`, { method: "GET" }, token);
+}
+
+export async function getAdminReportRuns(token: string, limit = 100): Promise<AdminReportRun[]> {
+  return apiRequest<AdminReportRun[]>(`/admin/reports/runs?limit=${limit}`, { method: "GET" }, token);
+}
+
+export async function getAdminEnvSettings(token: string): Promise<AdminEnvSettings> {
+  return apiRequest<AdminEnvSettings>("/admin/settings/env", { method: "GET" }, token);
+}
+
+export async function updateAdminEnvSetting(token: string, key: string, value: string): Promise<AdminEnvSettings> {
+  const encodedKey = encodeURIComponent(key);
+  const res = await apiRequest<{ values: Record<string, string> }>(
+    `/admin/settings/env/${encodedKey}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    },
+    token,
+  );
+  return { path: "Execution/.env", values: res.values || {} };
+}
+
+export async function listUsers(token: string): Promise<UserRecord[]> {
+  return apiRequest<UserRecord[]>("/users", { method: "GET" }, token);
+}
+
+export async function listRoles(token: string): Promise<RoleRecord[]> {
+  return apiRequest<RoleRecord[]>("/users/roles", { method: "GET" }, token);
+}
+
+export async function createUser(
+  token: string,
+  body: { email: string; password: string; is_active?: boolean; is_superuser?: boolean },
+): Promise<UserRecord> {
+  return apiRequest<UserRecord>(
+    "/users",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        email: body.email,
+        password: body.password,
+        is_active: body.is_active ?? true,
+        is_superuser: body.is_superuser ?? false,
+      }),
+    },
+    token,
+  );
+}
+
+export async function assignUserRole(token: string, userId: string, role: string): Promise<{ message: string }> {
+  const encodedUser = encodeURIComponent(userId);
+  return apiRequest<{ message: string }>(
+    `/users/${encodedUser}/roles`,
+    { method: "POST", body: JSON.stringify({ role }) },
+    token,
+  );
+}
+
+export async function removeUserRole(token: string, userId: string, role: string): Promise<{ message: string }> {
+  const encodedUser = encodeURIComponent(userId);
+  const encodedRole = encodeURIComponent(role);
+  return apiRequest<{ message: string }>(`/users/${encodedUser}/roles/${encodedRole}`, { method: "DELETE" }, token);
 }
 
 export function apiBaseUrl(): string {

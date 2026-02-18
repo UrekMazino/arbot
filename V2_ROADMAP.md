@@ -20,25 +20,26 @@ Ship a usable V2 UI first, while deferring remaining execution-engine upgrades f
 3. [x] Event timeline (switches, gates, alerts, exits) - unified timeline with filters in `Platform/web`.
 4. [x] Data quality and reconciliation panels - added API + UI summary/issue panels in `Platform/api` and `Platform/web`.
 5. [x] Config snapshot viewer and report artifact links - added run-level config/artifact APIs and dashboard panels in `Platform/api` and `Platform/web`.
+6. [x] Super admin console bootstrap - dedicated `/admin` UI + superuser APIs for bot start/stop, live log tail, logs/reports listing, env setting edits, user/role management.
 
 ### 2.2 V2-B (Deferred Engine Queue)
 
 The following V1 Phase 4 items are queued for later execution in V2:
 
-1. `P4B` Strategy cooldown controller.
-2. `P4C` TREND quality upgrades:
+1. [x] `P4B` Strategy cooldown controller.
+2. [x] `P4C` TREND quality upgrades:
    - regime-aware z-lookback,
    - directional filter (`off|shadow|active`).
-3. `P4D` Strategy-specific ATM profile overrides.
+3. [x] `P4D` Strategy-specific ATM profile overrides.
 
 ## 3. Deferred Queue Details
 
-### 3.1 P4B Strategy Cooldown Controller (Queued)
+### 3.1 P4B Strategy Cooldown Controller (Implemented)
 
 Target:
 - Temporarily block new entries for underperforming strategy profiles.
 
-Pending implementation:
+Implemented in:
 - Runtime cooldown logic in `Execution/strategy_router.py`.
 - State fields and thresholds in `Execution/func_strategy_state.py` and `Execution/.env.example`.
 - Runtime logs:
@@ -50,12 +51,12 @@ Acceptance:
 - No hidden trade starvation.
 - No increase in emergency pair switches.
 
-### 3.2 P4C TREND Quality Upgrades (Queued)
+### 3.2 P4C TREND Quality Upgrades (Implemented)
 
 Target:
 - Reduce low-quality TREND entries.
 
-Pending implementation:
+Implemented in:
 - Regime-aware lookback wiring:
   - `STATBOT_RANGE_Z_LOOKBACK`
   - `STATBOT_TREND_Z_LOOKBACK`
@@ -70,12 +71,12 @@ Acceptance:
 - Lower TREND false-entry rate.
 - Stable or improved realized PnL per TREND trade.
 
-### 3.3 P4D Strategy-Specific ATM Profiles (Queued)
+### 3.3 P4D Strategy-Specific ATM Profiles (Implemented)
 
 Target:
 - Align exit behavior with strategy risk profile.
 
-Pending implementation:
+Implemented in:
 - Strategy-specific ATM overrides in:
   - `Execution/advanced_trade_management.py`
   - `Execution/func_trade_management.py`
@@ -127,11 +128,11 @@ Promote a queued feature from shadow to active only if:
 
 Use this status checklist:
 
-- [ ] P4B implemented
+- [x] P4B implemented
 - [ ] P4B shadow validated
 - [ ] P4B active validated
-- [ ] P4C lookback implemented
+- [x] P4C lookback implemented
 - [ ] P4C directional filter shadow validated
 - [ ] P4C directional filter active validated
-- [ ] P4D ATM profile overrides implemented
+- [x] P4D ATM profile overrides implemented
 - [ ] V2 UI dashboard integrated with strategy/regime analytics

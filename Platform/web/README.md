@@ -8,6 +8,12 @@ This is the V2 web UI scaffold (Next.js + TypeScript) for:
 4. Live websocket event stream merged into run detail timeline (`/ws/dashboard`)
 5. Data quality + reconciliation panels (status, deltas, top alerts, issue list)
 6. Config snapshot viewer + report artifact links (download endpoints)
+7. Super admin console (`/admin`) for:
+   - bot start/stop/status,
+   - live terminal log tail,
+   - historical logs/reports listing,
+   - `.env` setting edits,
+   - user/role management.
 
 ## Local Run (without Docker)
 
@@ -19,6 +25,7 @@ npm run dev
 ```
 
 Open: `http://127.0.0.1:3000`
+Super admin: `http://127.0.0.1:3000/admin`
 
 Default backend target (from `.env.local`):
 
@@ -49,5 +56,6 @@ This includes:
 ## Notes
 
 1. Current frontend covers V2-A items 1-5.
-2. Next slices are deferred queue items from V2-B.
+2. Super admin console requires a superuser account.
 3. Auth is token-based via `/api/v2/auth/login`.
+4. Bot start/stop from `/admin` uses API-side process control and expects `Execution/main_execution.py` to be runnable from the API container.

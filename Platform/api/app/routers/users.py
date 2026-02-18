@@ -6,10 +6,19 @@ from sqlalchemy.orm import Session
 
 from ..deps import get_db_session, require_roles
 from ..models import Role, User
-from ..schemas import MessageOut, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
+from ..schemas import MessageOut, RoleOut, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
 from ..security import hash_password
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+@router.get("/roles", response_model=list[RoleOut])
+def list_roles(
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db_session),
+):
+    stmt = select(Role).order_by(Role.name.asc())
+    return list(db.execute(stmt).scalars().all())
 
 
 @router.get("", response_model=list[UserOut])
@@ -106,4 +115,3 @@ def remove_role(
         user.roles.remove(role)
         db.commit()
     return MessageOut(message="Role removed")
-

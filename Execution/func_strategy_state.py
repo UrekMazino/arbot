@@ -292,7 +292,8 @@ def record_strategy_trade_result(
     """
     Persist per-strategy realized trade stats with a rolling window.
 
-    This is observability state only and does not drive entry/exit behavior.
+    This state feeds reporting and optional safety controls (for example
+    strategy cooldown gating on new entries).
     """
     state = load_strategy_state()
     perf = _coerce_strategy_performance(state.get("strategy_performance"))

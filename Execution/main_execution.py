@@ -2190,6 +2190,18 @@ if __name__ == "__main__":
                                 strategy_mode,
                                 str(strategy_diag.get("mean_shift_basis", "n/a")),
                             )
+                        if strategy_diag.get("cooldown_triggered"):
+                            logger.warning(
+                                "STRATEGY_COOLDOWN_ON: strategy=%s reason=%s until_ts=%.3f",
+                                strategy_decision.active_strategy,
+                                str(strategy_diag.get("cooldown_reason") or "unknown"),
+                                float(strategy_diag.get("cooldown_until_ts", 0.0) or 0.0),
+                            )
+                        if strategy_diag.get("cooldown_cleared"):
+                            logger.info(
+                                "STRATEGY_COOLDOWN_OFF: strategy=%s",
+                                strategy_decision.active_strategy,
+                            )
                         emit_event(
                             "strategy_update",
                             payload={

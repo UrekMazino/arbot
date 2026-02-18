@@ -516,6 +516,9 @@ export default function HomePage() {
         <p className="eyebrow">V2 UI Foundation</p>
         <h1>Run Browser + Live Event Stream</h1>
         <p>
+          <a href="/admin">Open Super Admin Console</a>
+        </p>
+        <p>
           API: <code>{apiBaseUrl()}</code>
         </p>
       </section>

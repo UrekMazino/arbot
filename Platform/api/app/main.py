@@ -7,7 +7,7 @@ from sqlalchemy import select
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import Role, User
-from .routers import auth, events, health, reports, runs, users, ws
+from .routers import admin, auth, events, health, reports, runs, users, ws
 from .security import hash_password
 
 app = FastAPI(title=settings.app_name)
@@ -27,6 +27,7 @@ app.include_router(users.router, prefix=settings.api_prefix)
 app.include_router(runs.router, prefix=settings.api_prefix)
 app.include_router(events.router, prefix=settings.api_prefix)
 app.include_router(reports.router, prefix=settings.api_prefix)
+app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(ws.router)
 
 

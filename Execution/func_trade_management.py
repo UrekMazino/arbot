@@ -19,6 +19,7 @@ from config_execution_api import (
     Z_SCORE_CRITICAL,
     lock_on_pair,
     td_mode,
+    z_score_window,
 )
 
 from func_pair_state import (
@@ -62,6 +63,10 @@ _LAST_WAITING_LOG_TS = 0.0
 _LAST_WAITING_MSG = ""
 _LAST_HOLD_LOG_TS = 0.0
 _LAST_SWITCH_LIMIT_LOG_TS = 0.0
+_LAST_TREND_LOOKBACK_LOG_TS = 0.0
+_LAST_TREND_LOOKBACK_VALUE = None
+_LAST_TREND_LOOKBACK_REGIME = ""
+_CURRENT_TM_PROFILE = ""
 
 
 def _get_health_switch_settings():
@@ -197,6 +202,207 @@ trade_manager = AdvancedTradeManager(
         "take_profit_z": EXIT_Z,
     }
 )
+_TM_BASE_CONFIG = dict(trade_manager.config)
+
+
+def _resolve_regime_name(regime_decision):
+    regime_name = "RANGE"
+    if regime_decision is None:
+        return regime_name
+    if isinstance(regime_decision, dict):
+        regime_name = str(regime_decision.get("regime") or "RANGE").strip().upper()
+    else:
+        regime_name = str(getattr(regime_decision, "regime", "RANGE") or "RANGE").strip().upper()
+    if regime_name not in ("RANGE", "TREND", "RISK_OFF"):
+        return "RANGE"
+    return regime_name
+
+
+def _strategy_atm_profiles():
+    base_max_hold = _env_float("STATBOT_ATM_MR_MAX_HOLD_HOURS", _TM_BASE_CONFIG.get("max_hold_hours", 6))
+    if base_max_hold is None or base_max_hold <= 0:
+        base_max_hold = 6.0
+    base_warn_hold = _env_float(
+        "STATBOT_ATM_MR_MAX_HOLD_WARNING_HOURS",
+        _TM_BASE_CONFIG.get("max_hold_warning_hours", 4),
+    )
+    if base_warn_hold is None or base_warn_hold <= 0:
+        base_warn_hold = min(base_max_hold, 4.0)
+    if base_warn_hold > base_max_hold:
+        base_warn_hold = base_max_hold
+
+    mr_profile = {
+        "max_hold_hours": float(base_max_hold),
+        "max_hold_warning_hours": float(base_warn_hold),
+        "trailing_stop_activation": float(
+            _env_float(
+                "STATBOT_ATM_MR_TRAILING_ACTIVATION",
+                _TM_BASE_CONFIG.get("trailing_stop_activation", 0.8),
+            )
+            or 0.8
+        ),
+        "trailing_stop_tight_distance": float(
+            _env_float(
+                "STATBOT_ATM_MR_TRAILING_TIGHT_DISTANCE",
+                _TM_BASE_CONFIG.get("trailing_stop_tight_distance", 0.3),
+            )
+            or 0.3
+        ),
+        "trailing_stop_mid_distance": float(
+            _env_float(
+                "STATBOT_ATM_MR_TRAILING_MID_DISTANCE",
+                _TM_BASE_CONFIG.get("trailing_stop_mid_distance", 0.4),
+            )
+            or 0.4
+        ),
+        "trailing_stop_loose_distance": float(
+            _env_float(
+                "STATBOT_ATM_MR_TRAILING_LOOSE_DISTANCE",
+                _TM_BASE_CONFIG.get("trailing_stop_loose_distance", 0.5),
+            )
+            or 0.5
+        ),
+        "take_profit_z": float(_env_float("STATBOT_ATM_MR_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
+    }
+
+    trend_max_hold = _env_float("STATBOT_ATM_TREND_MAX_HOLD_HOURS", 2.0)
+    if trend_max_hold is None or trend_max_hold <= 0:
+        trend_max_hold = 2.0
+    trend_warn_hold = _env_float("STATBOT_ATM_TREND_MAX_HOLD_WARNING_HOURS", 1.5)
+    if trend_warn_hold is None or trend_warn_hold <= 0:
+        trend_warn_hold = min(trend_max_hold, 1.5)
+    if trend_warn_hold > trend_max_hold:
+        trend_warn_hold = trend_max_hold
+
+    trend_profile = {
+        "max_hold_hours": float(trend_max_hold),
+        "max_hold_warning_hours": float(trend_warn_hold),
+        "trailing_stop_activation": float(
+            _env_float("STATBOT_ATM_TREND_TRAILING_ACTIVATION", 1.0) or 1.0
+        ),
+        "trailing_stop_tight_distance": float(
+            _env_float("STATBOT_ATM_TREND_TRAILING_TIGHT_DISTANCE", 0.25) or 0.25
+        ),
+        "trailing_stop_mid_distance": float(
+            _env_float("STATBOT_ATM_TREND_TRAILING_MID_DISTANCE", 0.35) or 0.35
+        ),
+        "trailing_stop_loose_distance": float(
+            _env_float("STATBOT_ATM_TREND_TRAILING_LOOSE_DISTANCE", 0.45) or 0.45
+        ),
+        "take_profit_z": float(_env_float("STATBOT_ATM_TREND_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
+    }
+    return {"mr": mr_profile, "trend": trend_profile}
+
+
+def _apply_trade_manager_profile(strategy_name):
+    global _CURRENT_TM_PROFILE
+    strategy = str(strategy_name or "").strip().upper()
+    profile_name = "trend" if strategy == "TREND_SPREAD" else "mr"
+    profiles = _strategy_atm_profiles()
+    profile = profiles[profile_name]
+
+    changed = False
+    for key, value in profile.items():
+        current = trade_manager.config.get(key)
+        if isinstance(current, (int, float)) and isinstance(value, (int, float)):
+            if abs(float(current) - float(value)) <= 1e-9:
+                continue
+        elif current == value:
+            continue
+        trade_manager.config[key] = value
+        changed = True
+
+    if changed or _CURRENT_TM_PROFILE != profile_name:
+        _CURRENT_TM_PROFILE = profile_name
+        logger.info(
+            "STRATEGY_ATM_PROFILE_APPLIED: strategy=%s profile=%s max_hold=%.2fh trailing_activation=%.2f",
+            strategy or "STATARB_MR",
+            profile_name.upper(),
+            float(trade_manager.config.get("max_hold_hours", 0.0) or 0.0),
+            float(trade_manager.config.get("trailing_stop_activation", 0.0) or 0.0),
+        )
+
+
+def _resolve_trend_z_lookback(regime_name):
+    range_lb = _env_int("STATBOT_RANGE_Z_LOOKBACK", z_score_window)
+    trend_lb = _env_int("STATBOT_TREND_Z_LOOKBACK", z_score_window)
+    if range_lb is None or range_lb < 5:
+        range_lb = z_score_window
+    if trend_lb is None or trend_lb < 5:
+        trend_lb = z_score_window
+    if regime_name == "TREND":
+        return int(trend_lb)
+    return int(range_lb)
+
+
+def _maybe_apply_trend_lookback(strategy_name, regime_name, zscore_results):
+    global _LAST_TREND_LOOKBACK_LOG_TS
+    global _LAST_TREND_LOOKBACK_VALUE
+    global _LAST_TREND_LOOKBACK_REGIME
+    strategy = str(strategy_name or "").strip().upper()
+    if strategy != "TREND_SPREAD":
+        return zscore_results
+
+    lookback = _resolve_trend_z_lookback(regime_name)
+    now_ts = time.time()
+    should_log = (
+        _LAST_TREND_LOOKBACK_VALUE != lookback
+        or _LAST_TREND_LOOKBACK_REGIME != regime_name
+        or (now_ts - _LAST_TREND_LOOKBACK_LOG_TS) >= 60.0
+    )
+    if should_log:
+        logger.info(
+            "TREND_LOOKBACK_APPLIED: lookback=%d regime=%s",
+            int(lookback),
+            regime_name,
+        )
+        _LAST_TREND_LOOKBACK_LOG_TS = now_ts
+        _LAST_TREND_LOOKBACK_VALUE = lookback
+        _LAST_TREND_LOOKBACK_REGIME = regime_name
+
+    try:
+        zscore_new, signal_new, metrics_new = get_latest_zscore(window=lookback)
+        if not zscore_new:
+            return zscore_results
+        return zscore_new, signal_new, metrics_new
+    except Exception as exc:
+        logger.debug("TREND lookback fetch failed; using baseline z-score result: %s", exc)
+        return zscore_results
+
+
+def _evaluate_directional_filter(signal, metrics, zscores=None):
+    mode = _env_str("STATBOT_STRATEGY_TREND_DIRECTIONAL_FILTER_MODE", "off").strip().lower()
+    if mode not in ("off", "shadow", "active"):
+        mode = "off"
+    if mode == "off":
+        return True, "filter_off", mode
+    if signal not in ("BUY_SPREAD", "SELL_SPREAD"):
+        return True, "no_signal", mode
+
+    strength = _env_float("STATBOT_STRATEGY_TREND_DIRECTIONAL_FILTER_STRENGTH", 1.0)
+    if strength is None or strength <= 0:
+        strength = 1.0
+
+    directional_drift = 0.0
+    if isinstance(zscores, list) and len(zscores) >= 5:
+        try:
+            directional_drift = float(zscores[-1]) - float(zscores[-5])
+        except (TypeError, ValueError):
+            directional_drift = 0.0
+    if directional_drift == 0.0:
+        try:
+            directional_drift = float((metrics or {}).get("spread_trend", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            directional_drift = 0.0
+
+    if abs(directional_drift) < abs(strength):
+        return True, "trend_strength_below_threshold", mode
+
+    if signal == "SELL_SPREAD" and directional_drift > abs(strength):
+        return False, "trend_continuation_against_reversion", mode
+    if signal == "BUY_SPREAD" and directional_drift < -abs(strength):
+        return False, "trend_continuation_against_reversion", mode
+    return True, "aligned_or_neutral", mode
 
 
 def _open_trade_manager(entry_z, position_size, entry_time=None):
@@ -893,16 +1099,6 @@ def manage_new_trades(
         zscore, signal_sign_positive, metrics = zscore_results
     else:
         zscore, signal_sign_positive, metrics = get_latest_zscore()
-        
-    coint_flag = metrics.get("coint_flag", 0)
-
-    # Filter out NaN values and get the latest valid z-score
-    valid_zscores = [z for z in zscore if not math.isnan(z)]
-    if not valid_zscores:
-        logger.info("No valid z-scores yet (insufficient data for rolling window calculation)")
-        return kill_switch, False, False
-    
-    latest_zscore = valid_zscores[-1]
 
     # Defensive mode: when switch rate limiter is active, block new entries.
     switch_limit_remaining = get_switch_rate_limit_remaining()
@@ -920,6 +1116,22 @@ def manage_new_trades(
     regime_policy = resolve_regime_policy_overrides(regime_mode, regime_decision)
     strategy_policy = resolve_strategy_policy_overrides(strategy_mode, strategy_decision)
     strategy_name = str(strategy_policy.get("strategy_name", "STATARB_MR") or "STATARB_MR")
+    regime_name = _resolve_regime_name(regime_decision)
+
+    zscore, signal_sign_positive, metrics = _maybe_apply_trend_lookback(
+        strategy_name,
+        regime_name,
+        (zscore, signal_sign_positive, metrics),
+    )
+    coint_flag = int((metrics or {}).get("coint_flag", 0) or 0)
+
+    # Filter out NaN values and get the latest valid z-score
+    valid_zscores = [z for z in zscore if not math.isnan(z)]
+    if not valid_zscores:
+        logger.info("No valid z-scores yet (insufficient data for rolling window calculation)")
+        return kill_switch, False, False
+
+    latest_zscore = valid_zscores[-1]
 
     effective_entry_z = _policy_value_with_precedence(strategy_policy, regime_policy, "entry_z", ENTRY_Z)
     effective_entry_z_max = _policy_value_with_precedence(strategy_policy, regime_policy, "entry_z_max", ENTRY_Z_MAX)
@@ -1025,7 +1237,24 @@ def manage_new_trades(
         effective_entry_z_max,
         effective_min_persist_bars,
     )
-    
+
+    if str(strategy_name or "").strip().upper() == "TREND_SPREAD":
+        allow_by_filter, filter_reason, filter_mode = _evaluate_directional_filter(signal, metrics, valid_zscores)
+        if filter_mode == "shadow" and signal in ("BUY_SPREAD", "SELL_SPREAD"):
+            logger.info(
+                "DIRECTIONAL_FILTER_SHADOW: strategy=TREND_SPREAD allow_new=%d reason=%s",
+                1 if allow_by_filter else 0,
+                str(filter_reason or "none"),
+            )
+        if filter_mode == "active" and signal in ("BUY_SPREAD", "SELL_SPREAD") and not allow_by_filter:
+            logger.warning(
+                "DIRECTIONAL_FILTER_ACTIVE_BLOCK: strategy=TREND_SPREAD reason=%s",
+                str(filter_reason or "blocked"),
+            )
+            signal = None
+            reason = f"Directional filter blocked ({filter_reason})"
+            signal_strategy = strategy_name
+
     if signal in ["BUY_SPREAD", "SELL_SPREAD"]:
         logger.info(
             "STRATEGY_ENTRY_SIGNAL: strategy=%s signal=%s entry_z=%.2f entry_z_max=%.2f min_persist=%d reason=%s",
@@ -1767,6 +1996,7 @@ def manage_new_trades(
                     float(effective_size_multiplier),
                 )
                 logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
+                _apply_trade_manager_profile(entry_strategy)
                 _open_trade_manager(latest_zscore, position_size=initial_capital_usdt * 2, entry_time=entry_time)
                 set_entry_notional(initial_capital_usdt * 2)
 
@@ -1932,6 +2162,7 @@ def monitor_exit(
         get_coint_lost_confirm_count,
         get_entry_equity,
         get_entry_notional,
+        get_entry_strategy,
         get_entry_time,
         get_entry_z_score,
         set_coint_lost_confirm_count,
@@ -1945,6 +2176,7 @@ def monitor_exit(
     entry_z = get_entry_z_score()
     entry_time = get_entry_time()
     entry_notional = get_entry_notional()
+    entry_strategy = get_entry_strategy()
     try:
         entry_notional_val = float(entry_notional)
         if entry_notional_val <= 0:
@@ -2174,6 +2406,7 @@ def monitor_exit(
 
     # Tier 6: Advanced trade manager.
     if entry_z is not None:
+        _apply_trade_manager_profile(entry_strategy)
         _ensure_trade_manager_state(entry_z, entry_time)
         tm_result = trade_manager.update(latest_zscore)
 

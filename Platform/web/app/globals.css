@@ -435,6 +435,106 @@ tbody tr:hover {
   background: rgba(185, 28, 28, 0.15);
 }
 
+.admin-shell {
+  min-height: 100vh;
+  padding: 22px 24px 48px;
+  background:
+    radial-gradient(1400px 600px at 8% -10%, rgba(245, 158, 11, 0.16), transparent),
+    radial-gradient(1200px 600px at 85% -10%, rgba(15, 118, 110, 0.16), transparent),
+    linear-gradient(180deg, #f6f7f2 0%, #f1f4ed 100%);
+  color: var(--ink);
+  display: grid;
+  gap: 14px;
+}
+
+.admin-auth {
+  max-width: 720px;
+  margin: 48px auto;
+}
+
+.admin-auth-form {
+  display: grid;
+  gap: 10px;
+  max-width: 420px;
+}
+
+.admin-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(16, 33, 28, 0.14);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(244, 248, 243, 0.92));
+}
+
+.admin-hero-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.terminal-card {
+  min-height: 460px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.terminal-body {
+  margin: 10px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #0f1720;
+  color: #e5f4ee;
+  overflow: auto;
+  max-height: 520px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.admin-inline-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.admin-inline-form input,
+.admin-inline-form select {
+  min-width: 160px;
+}
+
+.role-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.role-chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
 @media (max-width: 980px) {
   .grid-main {
     grid-template-columns: 1fr;
@@ -469,5 +569,23 @@ tbody tr:hover {
 
   button {
     width: 100%;
+  }
+
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .admin-hero-actions {
+    width: 100%;
+  }
+
+  .admin-inline-form {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

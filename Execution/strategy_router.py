@@ -139,9 +139,23 @@ class StrategyRouter:
             "mean_short_window": max(_env_int("STATBOT_STRATEGY_TREND_MEAN_SHORT_WINDOW", 21), 2),
             "mean_long_window": max(_env_int("STATBOT_STRATEGY_TREND_MEAN_LONG_WINDOW", 200), 5),
             "mean_shift_z_threshold": max(_env_float("STATBOT_STRATEGY_TREND_MEAN_SHIFT_Z_THRESHOLD", 1.0), 0.1),
+            "score_min_trades": max(_env_int("STATBOT_STRATEGY_SCORE_MIN_TRADES", 8), 1),
+            "score_min_win_rate": _env_float("STATBOT_STRATEGY_SCORE_MIN_WIN_RATE", 0.35),
+            "score_max_rolling_loss_usdt": max(
+                _env_float("STATBOT_STRATEGY_SCORE_MAX_ROLLING_LOSS_USDT", 20.0),
+                0.0,
+            ),
+            "cooldown_seconds": max(_env_int("STATBOT_STRATEGY_COOLDOWN_SECONDS", 3600), 0),
         }
         if isinstance(config, dict):
             self.config.update(config)
+        min_win_rate = _safe_float(self.config.get("score_min_win_rate"), 0.35)
+        if min_win_rate is None:
+            min_win_rate = 0.35
+        if min_win_rate > 1.0:
+            min_win_rate = min_win_rate / 100.0
+        self.config["score_min_win_rate"] = max(min(min_win_rate, 1.0), 0.0)
+        self._last_strategy_cooldowns = {}
 
     def _load_state(self):
         if self._state_store and hasattr(self._state_store, "load"):
@@ -168,6 +182,42 @@ class StrategyRouter:
         regime = _normalize_regime(_decision_get(regime_decision, "regime", "RANGE"))
         confidence = _safe_float(_decision_get(regime_decision, "confidence", 0.0), 0.0)
         return regime, confidence
+
+    @staticmethod
+    def _sanitize_cooldowns(raw):
+        cooldowns = {}
+        if not isinstance(raw, dict):
+            return cooldowns
+        for key, value in raw.items():
+            strategy = str(key or "").strip().upper()
+            if strategy not in ("STATARB_MR", "TREND_SPREAD"):
+                continue
+            if not isinstance(value, dict):
+                continue
+            until_ts = _safe_float(value.get("until_ts"), 0.0) or 0.0
+            reason = str(value.get("reason") or "").strip().lower() or "unknown"
+            if until_ts > 0:
+                cooldowns[strategy] = {"until_ts": float(until_ts), "reason": reason}
+        return cooldowns
+
+    @staticmethod
+    def _extract_performance_stats(state, strategy):
+        perf = state.get("strategy_performance")
+        if not isinstance(perf, dict):
+            return 0, None, 0.0
+        stats_map = perf.get("stats")
+        if not isinstance(stats_map, dict):
+            return 0, None, 0.0
+        stats = stats_map.get(strategy)
+        if not isinstance(stats, dict):
+            return 0, None, 0.0
+        rolling_count = int(_safe_float(stats.get("rolling_count"), 0) or 0)
+        rolling_win_rate_pct = _safe_float(stats.get("rolling_win_rate_pct"), None)
+        rolling_win_rate = None
+        if rolling_win_rate_pct is not None:
+            rolling_win_rate = max(min(float(rolling_win_rate_pct) / 100.0, 1.0), 0.0)
+        rolling_pnl = _safe_float(stats.get("rolling_pnl_usdt"), 0.0) or 0.0
+        return rolling_count, rolling_win_rate, float(rolling_pnl)
 
     @staticmethod
     def _map_strategy(regime):
@@ -258,6 +308,7 @@ class StrategyRouter:
         pending_strategy = _normalize_strategy(state.get("pending_strategy", "")) if state.get("pending_strategy") else ""
         pending_count = int(_safe_float(state.get("pending_count", 0), 0))
         changed = False
+        cooldowns = self._sanitize_cooldowns(state.get("strategy_cooldowns"))
 
         since_ts = _safe_float(state.get("since_ts", ts), ts)
         if since_ts <= 0:
@@ -293,13 +344,68 @@ class StrategyRouter:
         profile = self._profile(active_strategy)
         allow_new_entries = bool(profile["allow_new_entries"])
         reason_codes = []
+        cooldown_triggered = False
+        cooldown_cleared = False
+        cooldown_until_ts = 0.0
+        cooldown_reason = ""
+        rolling_count, rolling_win_rate, rolling_pnl = self._extract_performance_stats(state, active_strategy)
         diagnostics = {
             "regime": regime,
             "regime_confidence": regime_confidence,
             "hold_seconds": hold_seconds,
             "in_position": bool(inputs.in_position),
             "coint_flag": int(_safe_float(inputs.coint_flag, 0)),
+            "rolling_count": int(rolling_count),
+            "rolling_win_rate": rolling_win_rate,
+            "rolling_pnl_usdt": float(rolling_pnl),
+            "cooldown_min_trades": int(self.config["score_min_trades"]),
+            "cooldown_min_win_rate": float(self.config["score_min_win_rate"]),
+            "cooldown_max_rolling_loss_usdt": float(self.config["score_max_rolling_loss_usdt"]),
         }
+
+        # Performance-driven strategy cooldown (entry block only; no forced switch/close).
+        if active_strategy in ("STATARB_MR", "TREND_SPREAD"):
+            current_cd = cooldowns.get(active_strategy)
+            if current_cd and float(current_cd.get("until_ts", 0.0) or 0.0) <= ts:
+                cooldowns.pop(active_strategy, None)
+                current_cd = None
+                cooldown_cleared = True
+
+            if current_cd is None and int(self.config["cooldown_seconds"]) > 0:
+                if rolling_count >= int(self.config["score_min_trades"]):
+                    low_win = (
+                        rolling_win_rate is not None
+                        and rolling_win_rate < float(self.config["score_min_win_rate"])
+                    )
+                    rolling_loss = rolling_pnl < -abs(float(self.config["score_max_rolling_loss_usdt"]))
+                    if low_win or rolling_loss:
+                        if low_win and rolling_loss:
+                            cooldown_reason = "low_win_rate_and_rolling_loss"
+                        elif low_win:
+                            cooldown_reason = "low_win_rate"
+                        else:
+                            cooldown_reason = "rolling_loss"
+                        cooldown_until_ts = float(ts + int(self.config["cooldown_seconds"]))
+                        cooldowns[active_strategy] = {
+                            "until_ts": cooldown_until_ts,
+                            "reason": cooldown_reason,
+                        }
+                        current_cd = cooldowns.get(active_strategy)
+                        cooldown_triggered = True
+
+            if current_cd is not None:
+                cooldown_until_ts = float(current_cd.get("until_ts", 0.0) or 0.0)
+                cooldown_reason = str(current_cd.get("reason") or "unknown")
+                if cooldown_until_ts > ts:
+                    allow_new_entries = False
+                    reason_codes.append("strategy_cooldown")
+
+        diagnostics["cooldown_active"] = bool(cooldown_until_ts > ts)
+        diagnostics["cooldown_until_ts"] = float(cooldown_until_ts) if cooldown_until_ts > 0 else 0.0
+        diagnostics["cooldown_reason"] = cooldown_reason or ""
+        diagnostics["cooldown_triggered"] = bool(cooldown_triggered)
+        diagnostics["cooldown_cleared"] = bool(cooldown_cleared)
+        diagnostics["cooldown_seconds_remaining"] = max(float(cooldown_until_ts - ts), 0.0)
 
         if regime == "RISK_OFF":
             allow_new_entries = False
@@ -342,6 +448,7 @@ class StrategyRouter:
             diagnostics=diagnostics,
         )
 
+        self._last_strategy_cooldowns = dict(cooldowns)
         self._persist_state(decision, ts, since_ts)
         return decision
 
@@ -365,6 +472,8 @@ class StrategyRouter:
         state["last_eval_ts"] = float(ts)
         state["reason_codes"] = list(decision.reason_codes)
         state["diagnostics"] = dict(decision.diagnostics)
+        if isinstance(self._last_strategy_cooldowns, dict):
+            state["strategy_cooldowns"] = dict(self._last_strategy_cooldowns)
 
         if decision.changed or previous_active != decision.active_strategy:
             state["since_ts"] = float(ts)

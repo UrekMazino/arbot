@@ -74,3 +74,9 @@ def require_roles(*roles: str):
         return user
 
     return dependency
+
+
+def require_superuser(user: User = Depends(get_current_user)) -> User:
+    if user.is_superuser:
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Superuser required")

@@ -58,6 +58,50 @@ export type ScorecardCell = {
   sum_pnl_usdt: number | null;
 };
 
+export type DataQualityIssue = {
+  event_id: string;
+  ts: string;
+  event_type: string;
+  severity: string;
+  message: string;
+};
+
+export type DataQualitySummary = {
+  run_id: string;
+  generated_at: string;
+  overall_status: string;
+  event_health: {
+    total: number;
+    warn: number;
+    error: number;
+    critical: number;
+    typed_warning_events: Record<string, number>;
+  };
+  trade_integrity: {
+    status: string;
+    total_rows: number;
+    closed_rows: number;
+    open_rows: number;
+    closed_missing_pnl: number;
+    closed_missing_exit_reason: number;
+  };
+  reconciliation: {
+    status: string;
+    run_session_pnl_usdt: number | null;
+    trade_pnl_sum_usdt: number;
+    delta_usdt: number | null;
+    delta_pct_of_session: number | null;
+    threshold_pass_usdt: number;
+    threshold_warn_usdt: number;
+  };
+  top_alerts: Array<{
+    alert_type: string;
+    count: number;
+    last_seen: string | null;
+  }>;
+  recent_issues: DataQualityIssue[];
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
 
 async function apiRequest<T>(
@@ -115,6 +159,10 @@ export async function getRunWalkForward(token: string, runId: string): Promise<W
 
 export async function getRunScorecard(token: string, runId: string): Promise<ScorecardCell[]> {
   return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" }, token);
+}
+
+export async function getRunDataQuality(token: string, runId: string): Promise<DataQualitySummary> {
+  return apiRequest<DataQualitySummary>(`/runs/${runId}/analytics/data-quality`, { method: "GET" }, token);
 }
 
 export function apiBaseUrl(): string {

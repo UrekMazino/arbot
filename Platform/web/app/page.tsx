@@ -6,9 +6,11 @@ import {
   RunEvent,
   RunSummary,
   ScorecardCell,
+  DataQualitySummary,
   Trade,
   WalkForwardPoint,
   apiBaseUrl,
+  getRunDataQuality,
   getRunEvents,
   getRunScorecard,
   getRunTrades,
@@ -156,6 +158,13 @@ function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
   };
 }
 
+function qualityClass(status: string | null | undefined): string {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "pass") return "quality-pass";
+  if (normalized === "warn" || normalized === "unknown") return "quality-warn";
+  return "quality-fail";
+}
+
 type ChartPoint = {
   x: number;
   y: number;
@@ -230,6 +239,7 @@ export default function HomePage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
   const [scorecard, setScorecard] = useState<ScorecardCell[]>([]);
+  const [qualitySummary, setQualitySummary] = useState<DataQualitySummary | null>(null);
   const [liveFeed, setLiveFeed] = useState<LiveMsg[]>([]);
   const [timelineCategory, setTimelineCategory] = useState<TimelineFilterCategory>("core");
   const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
@@ -269,16 +279,18 @@ export default function HomePage() {
 
   const refreshRunDetails = useCallback(async (authToken: string, runId: string) => {
     if (!runId) return;
-    const [runEvents, runTrades, runWalkForward, runScorecard] = await Promise.all([
+    const [runEvents, runTrades, runWalkForward, runScorecard, runQuality] = await Promise.all([
       getRunEvents(authToken, runId),
       getRunTrades(authToken, runId),
       getRunWalkForward(authToken, runId),
       getRunScorecard(authToken, runId),
+      getRunDataQuality(authToken, runId),
     ]);
     setEvents(runEvents);
     setTrades(runTrades);
     setWalkForward(runWalkForward);
     setScorecard(runScorecard);
+    setQualitySummary(runQuality);
   }, []);
 
   const equitySeries = useMemo(() => {
@@ -374,6 +386,7 @@ export default function HomePage() {
     setTrades([]);
     setWalkForward([]);
     setScorecard([]);
+    setQualitySummary(null);
     setLiveFeed([]);
     localStorage.removeItem("v2_access_token");
     localStorage.removeItem("v2_refresh_token");
@@ -645,6 +658,160 @@ export default function HomePage() {
       <section className="card">
         <h3>Strategy x Regime Attribution</h3>
         <AttributionTable scorecard={scorecard} />
+      </section>
+
+      <section className="grid-analytics">
+        <article className="card">
+          <h3>Data Quality</h3>
+          {qualitySummary ? (
+            <div className="detail-block">
+              <p>
+                <strong>Overall:</strong>{" "}
+                <span className={`quality-chip ${qualityClass(qualitySummary.overall_status)}`}>
+                  {qualitySummary.overall_status}
+                </span>
+              </p>
+              <div className="stats-row">
+                <div className="stat-box">
+                  <span>Events</span>
+                  <strong>{qualitySummary.event_health.total}</strong>
+                </div>
+                <div className="stat-box">
+                  <span>Warn/Error/Critical</span>
+                  <strong>
+                    {qualitySummary.event_health.warn}/{qualitySummary.event_health.error}/{qualitySummary.event_health.critical}
+                  </strong>
+                </div>
+                <div className="stat-box">
+                  <span>Trade Integrity</span>
+                  <strong className={qualityClass(qualitySummary.trade_integrity.status)}>
+                    {qualitySummary.trade_integrity.status}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="table-wrap compact">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Warning Event Type</th>
+                      <th>Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(qualitySummary.event_health.typed_warning_events).map(([name, count]) => (
+                      <tr key={name}>
+                        <td>{name}</td>
+                        <td>{count}</td>
+                      </tr>
+                    ))}
+                    {!Object.keys(qualitySummary.event_health.typed_warning_events).length ? (
+                      <tr>
+                        <td colSpan={2} className="muted">
+                          No warning-type events recorded.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="muted">No data quality snapshot yet.</p>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Reconciliation</h3>
+          {qualitySummary ? (
+            <div className="detail-block">
+              <p>
+                <strong>Status:</strong>{" "}
+                <span className={`quality-chip ${qualityClass(qualitySummary.reconciliation.status)}`}>
+                  {qualitySummary.reconciliation.status}
+                </span>
+              </p>
+              <p>
+                <strong>Run session PnL:</strong> {fmtNumber(qualitySummary.reconciliation.run_session_pnl_usdt)} USDT
+              </p>
+              <p>
+                <strong>Closed-trade PnL sum:</strong> {fmtNumber(qualitySummary.reconciliation.trade_pnl_sum_usdt)} USDT
+              </p>
+              <p>
+                <strong>Delta:</strong> {fmtNumber(qualitySummary.reconciliation.delta_usdt)} USDT
+                {" | "}
+                {fmtNumber(qualitySummary.reconciliation.delta_pct_of_session)}%
+              </p>
+              <p className="tiny">
+                Thresholds: pass {"<="} {fmtNumber(qualitySummary.reconciliation.threshold_pass_usdt)} USDT, warn {"<="} {" "}
+                {fmtNumber(qualitySummary.reconciliation.threshold_warn_usdt)} USDT
+              </p>
+
+              <h4>Top Alerts</h4>
+              <div className="table-wrap compact">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Alert Type</th>
+                      <th>Count</th>
+                      <th>Last Seen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {qualitySummary.top_alerts.map((row) => (
+                      <tr key={row.alert_type}>
+                        <td>{row.alert_type}</td>
+                        <td>{row.count}</td>
+                        <td>{fmtDate(row.last_seen)}</td>
+                      </tr>
+                    ))}
+                    {!qualitySummary.top_alerts.length ? (
+                      <tr>
+                        <td colSpan={3} className="muted">
+                          No alert rows for this run.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <p className="muted">No reconciliation snapshot yet.</p>
+          )}
+        </article>
+      </section>
+
+      <section className="card">
+        <h3>Recent Quality/Reconciliation Issues</h3>
+        {qualitySummary?.recent_issues?.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Severity</th>
+                  <th>Type</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {qualitySummary.recent_issues.map((row) => (
+                  <tr key={`${row.event_id}-${row.ts}`}>
+                    <td>{fmtDate(row.ts)}</td>
+                    <td>
+                      <span className={`pill ${row.severity}`}>{row.severity}</span>
+                    </td>
+                    <td>{row.event_type}</td>
+                    <td>{row.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">No recent quality/reconciliation issues for this run.</p>
+        )}
       </section>
     </main>
   );

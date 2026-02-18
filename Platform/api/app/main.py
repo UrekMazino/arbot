@@ -12,9 +12,10 @@ from .security import hash_password
 
 app = FastAPI(title=settings.app_name)
 
+allowed_origins = settings.cors_origin_list()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,4 +59,3 @@ def bootstrap_identity() -> None:
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
     bootstrap_identity()
-

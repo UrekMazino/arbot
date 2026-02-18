@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8080
     api_prefix: str = "/api/v2"
+    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
 
     database_url: str = "postgresql+psycopg2://okxbot:okxbot@localhost:5432/okxbot_v2"
     redis_url: str = "redis://localhost:6379/0"
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
     event_ingest_key: str = ""
     event_allow_unauthenticated: bool = True
     event_publish_realtime: bool = True
+
+    def cors_origin_list(self) -> list[str]:
+        return [item.strip() for item in str(self.cors_origins or "").split(",") if item.strip()]
 
 
 settings = Settings()

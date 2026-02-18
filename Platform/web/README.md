@@ -4,8 +4,8 @@ This is the V2 web UI scaffold (Next.js + TypeScript) for:
 
 1. Run browser (list runs + status + PnL + duration)
 2. Charts (equity curve + drawdown + strategy/regime attribution table)
-3. Run detail panel (events + trades)
-4. Live websocket event preview (`/ws/dashboard`)
+3. Event timeline (switches, gates, alerts, exits) with source/severity/category filters
+4. Live websocket event stream merged into run detail timeline (`/ws/dashboard`)
 
 ## Local Run (without Docker)
 
@@ -46,6 +46,6 @@ This includes:
 
 ## Notes
 
-1. This is a foundation slice for roadmap V2-A item 1.
-2. Charts/data-quality/config snapshot panels are next slices.
+1. Current frontend covers V2-A items 1-3.
+2. Next slices are data-quality/reconciliation and config snapshot/report links.
 3. Auth is token-based via `/api/v2/auth/login`.

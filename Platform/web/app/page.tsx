@@ -21,7 +21,23 @@ import {
 type LiveMsg = {
   event_type?: string;
   ts?: number;
+  severity?: string;
   payload?: Record<string, unknown>;
+};
+
+type TimelineCategory = "switch" | "gate" | "alert" | "exit" | "other";
+type TimelineSource = "history" | "live";
+type TimelineFilterCategory = "all" | "core" | TimelineCategory;
+type TimelineSeverity = "all" | "info" | "warn" | "error" | "critical";
+
+type TimelineEvent = {
+  id: string;
+  source: TimelineSource;
+  eventType: string;
+  severity: Exclude<TimelineSeverity, "all">;
+  tsMs: number;
+  category: TimelineCategory;
+  summary: string;
 };
 
 function fmtNumber(value: number | null | undefined, digits = 2): string {
@@ -44,6 +60,100 @@ function fmtDuration(startIso: string, endIso: string | null): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   return `${h}h ${m}m`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function normalizeSeverity(value: unknown): Exclude<TimelineSeverity, "all"> {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "warn") return "warn";
+  if (normalized === "error") return "error";
+  if (normalized === "critical") return "critical";
+  return "info";
+}
+
+function classifyEventType(eventType: string, severity: Exclude<TimelineSeverity, "all">): TimelineCategory {
+  const text = eventType.toLowerCase();
+  if (
+    text.includes("pair_switch") ||
+    text.includes("strategy_change") ||
+    text.includes("strategy_update") ||
+    text.includes("regime_change") ||
+    text.includes("regime_update")
+  ) {
+    return "switch";
+  }
+  if (
+    text.includes("gate") ||
+    text.includes("blocked") ||
+    text.includes("coint_lost") ||
+    text.includes("mean_shift")
+  ) {
+    return "gate";
+  }
+  if (text.includes("trade_close") || text.includes("exit") || text.includes("stop_loss") || text.includes("profit")) {
+    return "exit";
+  }
+  if (text.includes("alert") || severity !== "info") {
+    return "alert";
+  }
+  return "other";
+}
+
+function summarizePayload(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const reason = payload.reason || payload.reason_code || payload.alert_type;
+  if (reason) parts.push(`reason=${String(reason)}`);
+  if (payload.pair) parts.push(`pair=${String(payload.pair)}`);
+  if (payload.strategy) parts.push(`strategy=${String(payload.strategy)}`);
+  if (payload.regime) parts.push(`regime=${String(payload.regime)}`);
+  if (payload.exit_tier) parts.push(`exit=${String(payload.exit_tier)}`);
+  if (payload.gate) parts.push(`gate=${String(payload.gate)}`);
+
+  const pnl = payload.pnl_usdt;
+  if (typeof pnl === "number" && Number.isFinite(pnl)) {
+    parts.push(`pnl=${pnl.toFixed(2)}`);
+  } else if (typeof pnl === "string" && pnl.trim()) {
+    parts.push(`pnl=${pnl}`);
+  }
+
+  if (payload.message && !parts.length) parts.push(String(payload.message));
+  return parts.join(" | ");
+}
+
+function normalizeHistoryEvent(ev: RunEvent): TimelineEvent {
+  const severity = normalizeSeverity(ev.severity);
+  const eventType = String(ev.event_type || "event");
+  const payload = asRecord(ev.payload_json);
+  const tsMs = Number.isFinite(Date.parse(ev.ts)) ? Date.parse(ev.ts) : Date.now();
+  return {
+    id: `history-${ev.event_id}`,
+    source: "history",
+    eventType,
+    severity,
+    tsMs,
+    category: classifyEventType(eventType, severity),
+    summary: summarizePayload(payload),
+  };
+}
+
+function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
+  const payload = asRecord(msg.payload);
+  const severity = normalizeSeverity(msg.severity || payload.severity);
+  const eventType = String(msg.event_type || "event");
+  const tsMs = typeof msg.ts === "number" && Number.isFinite(msg.ts) ? Math.floor(msg.ts * 1000) : Date.now() - idx * 10;
+  return {
+    id: `live-${eventType}-${tsMs}-${idx}`,
+    source: "live",
+    eventType,
+    severity,
+    tsMs,
+    category: classifyEventType(eventType, severity),
+    summary: summarizePayload(payload),
+  };
 }
 
 type ChartPoint = {
@@ -121,6 +231,9 @@ export default function HomePage() {
   const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
   const [scorecard, setScorecard] = useState<ScorecardCell[]>([]);
   const [liveFeed, setLiveFeed] = useState<LiveMsg[]>([]);
+  const [timelineCategory, setTimelineCategory] = useState<TimelineFilterCategory>("core");
+  const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
+  const [timelineSource, setTimelineSource] = useState<"all" | TimelineSource>("all");
   const [status, setStatus] = useState<string>("Signed out");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -205,6 +318,32 @@ export default function HomePage() {
     return { points, path: pointsToPath(points), worst };
   }, [drawdownSeries]);
 
+  const timelineEvents = useMemo(() => {
+    const persisted = events.map((ev) => normalizeHistoryEvent(ev));
+    const live = liveFeed.map((msg, idx) => normalizeLiveEvent(msg, idx));
+    const dedup = new Set<string>();
+    const merged = [...live, ...persisted]
+      .sort((a, b) => b.tsMs - a.tsMs)
+      .filter((row) => {
+        const key = `${row.eventType}|${row.tsMs}|${row.summary}|${row.category}`;
+        if (dedup.has(key)) return false;
+        dedup.add(key);
+        return true;
+      });
+
+    return merged
+      .filter((row) => {
+        if (timelineSource !== "all" && row.source !== timelineSource) return false;
+        if (timelineSeverity !== "all" && row.severity !== timelineSeverity) return false;
+        if (timelineCategory === "core") {
+          return row.category === "switch" || row.category === "gate" || row.category === "alert" || row.category === "exit";
+        }
+        if (timelineCategory !== "all" && row.category !== timelineCategory) return false;
+        return true;
+      })
+      .slice(0, 80);
+  }, [events, liveFeed, timelineCategory, timelineSeverity, timelineSource]);
+
   async function onLoginSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -270,7 +409,7 @@ export default function HomePage() {
     ws.onmessage = (ev) => {
       try {
         const parsed = JSON.parse(ev.data) as LiveMsg;
-        setLiveFeed((prev) => [parsed, ...prev].slice(0, 20));
+        setLiveFeed((prev) => [parsed, ...prev].slice(0, 150));
       } catch {
         // ignore malformed messages
       }
@@ -408,27 +547,61 @@ export default function HomePage() {
             </div>
           </div>
 
-          <h4>Recent Events</h4>
-          <ul className="timeline">
-            {events.slice(0, 12).map((ev) => (
-              <li key={ev.event_id}>
-                <span className={`pill ${ev.severity}`}>{ev.severity}</span>
-                <strong>{ev.event_type}</strong>
-                <time>{fmtDate(ev.ts)}</time>
-              </li>
-            ))}
-            {!events.length ? <li className="muted">No events loaded.</li> : null}
-          </ul>
+          <h4>Event Timeline</h4>
+          <div className="timeline-toolbar">
+            <label>
+              Category
+              <select
+                value={timelineCategory}
+                onChange={(e) => setTimelineCategory(e.target.value as TimelineFilterCategory)}
+              >
+                <option value="core">Core (switch/gate/alert/exit)</option>
+                <option value="all">All</option>
+                <option value="switch">Switches</option>
+                <option value="gate">Gates</option>
+                <option value="alert">Alerts</option>
+                <option value="exit">Exits</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label>
+              Severity
+              <select
+                value={timelineSeverity}
+                onChange={(e) => setTimelineSeverity(e.target.value as TimelineSeverity)}
+              >
+                <option value="all">All</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label>
+              Source
+              <select value={timelineSource} onChange={(e) => setTimelineSource(e.target.value as "all" | TimelineSource)}>
+                <option value="all">All</option>
+                <option value="history">Stored events</option>
+                <option value="live">WebSocket live</option>
+              </select>
+            </label>
+            <span className="timeline-count muted">{timelineEvents.length} shown</span>
+          </div>
 
-          <h4>Live Feed</h4>
-          <ul className="timeline small">
-            {liveFeed.slice(0, 8).map((msg, idx) => (
-              <li key={`${msg.event_type || "evt"}-${idx}`}>
-                <strong>{msg.event_type || "message"}</strong>
-                <time>{msg.ts ? new Date(msg.ts * 1000).toLocaleTimeString() : "now"}</time>
+          <ul className="timeline events">
+            {timelineEvents.map((row) => (
+              <li key={row.id}>
+                <div className="timeline-line">
+                  <span className={`pill ${row.severity}`}>{row.severity}</span>
+                  <span className={`pill category-${row.category}`}>{row.category}</span>
+                  <strong>{row.eventType}</strong>
+                  <span className="timeline-source muted">{row.source === "history" ? "stored" : "live"}</span>
+                  <time>{new Date(row.tsMs).toLocaleString()}</time>
+                </div>
+                {row.summary ? <p className="timeline-summary">{row.summary}</p> : null}
               </li>
             ))}
-            {!liveFeed.length ? <li className="muted">Waiting for websocket events.</li> : null}
+            {!timelineEvents.length ? <li className="muted">No timeline events match the current filters.</li> : null}
           </ul>
         </article>
       </section>

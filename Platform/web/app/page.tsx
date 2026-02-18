@@ -254,6 +254,7 @@ export default function HomePage() {
   const [qualitySummary, setQualitySummary] = useState<DataQualitySummary | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState<ConfigSnapshotResponse | null>(null);
   const [reportArtifacts, setReportArtifacts] = useState<RunReportArtifact[]>([]);
+  const [downloadingFileId, setDownloadingFileId] = useState<string>("");
   const [liveFeed, setLiveFeed] = useState<LiveMsg[]>([]);
   const [timelineCategory, setTimelineCategory] = useState<TimelineFilterCategory>("core");
   const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
@@ -382,6 +383,45 @@ export default function HomePage() {
       })
       .slice(0, 80);
   }, [events, liveFeed, timelineCategory, timelineSeverity, timelineSource]);
+
+  const downloadArtifactFile = useCallback(
+    async (downloadUrl: string, fileName: string, fileId: string) => {
+      if (!token) {
+        setError("You must be signed in to download report files.");
+        return;
+      }
+      setError("");
+      setDownloadingFileId(fileId);
+      try {
+        const response = await fetch(`${apiRootUrl()}${downloadUrl}`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Download failed (${response.status}): ${text.slice(0, 180)}`);
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = fileName || "report-artifact";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to download report file";
+        setError(msg);
+      } finally {
+        setDownloadingFileId("");
+      }
+    },
+    [token],
+  );
 
   async function onLoginSubmit(e: FormEvent) {
     e.preventDefault();
@@ -893,13 +933,14 @@ export default function HomePage() {
                             <td>{file.name}</td>
                             <td>{fmtBytes(file.size_bytes)}</td>
                             <td>
-                              <a
-                                href={`${apiRootUrl()}${file.download_url}`}
-                                target="_blank"
-                                rel="noreferrer"
+                              <button
+                                type="button"
+                                className="ghost"
+                                disabled={!token || downloadingFileId === file.id}
+                                onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
                               >
-                                Download
-                              </a>
+                                {downloadingFileId === file.id ? "Downloading..." : "Download"}
+                              </button>
                             </td>
                           </tr>
                         ))

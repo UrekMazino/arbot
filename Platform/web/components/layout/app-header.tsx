@@ -4,15 +4,22 @@ import { ReactNode } from "react";
 
 import { useSidebar } from "../../context/sidebar-context";
 import { useTheme } from "../../context/theme-context";
+import { ProfileMenu } from "./profile-menu";
+
+type AuthInfo = {
+  email?: string;
+  hasToken?: boolean;
+};
 
 type AppHeaderProps = {
   title: string;
   subtitle: string;
   status: string;
   actions?: ReactNode;
+  auth?: AuthInfo;
 };
 
-export function AppHeader({ title, subtitle, status, actions }: AppHeaderProps) {
+export function AppHeader({ title, subtitle, status, actions, auth }: AppHeaderProps) {
   const { toggleSidebar, toggleMobileSidebar } = useSidebar();
   const { theme, toggleTheme } = useTheme();
   const uiBuild = process.env.NEXT_PUBLIC_UI_BUILD || "0d5a617";
@@ -60,6 +67,7 @@ export function AppHeader({ title, subtitle, status, actions }: AppHeaderProps) 
             {theme === "dark" ? "Light" : "Dark"}
           </button>
           {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+          {auth?.hasToken && <ProfileMenu email={auth.email} />}
         </div>
       </div>
     </header>

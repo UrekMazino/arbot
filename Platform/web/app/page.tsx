@@ -718,73 +718,39 @@ export default function HomePage() {
         { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
         { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
       ]}
+      auth={{
+        email,
+        hasToken: Boolean(token),
+      }}
       actions={
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
-        </p>
+        <>
+          {token ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleRefreshRuns}
+                className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                Refresh Runs
+              </button>
+              <button
+                onClick={handleRefreshDetail}
+                className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                Refresh Detail
+              </button>
+            </div>
+          ) : null}
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
+          </p>
+        </>
       }
     >
       <div className="grid gap-4">
         <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 UI Foundation</p>
-          <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Live Event Stream</h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">TailAdmin-style shell enabled for fast V2 expansion.</p>
-        </section>
-
-        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white/90">Session</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{status}</p>
-            {refreshToken ? <p className="text-xs text-gray-500 dark:text-gray-400">Refresh token present</p> : null}
-          </div>
-          {!token ? (
-            <form onSubmit={onLoginSubmit} className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
-              <input
-                className="min-w-[220px] flex-1 lg:flex-none"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email"
-                required
-              />
-              <input
-                className="min-w-[220px] flex-1 lg:flex-none"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                type="password"
-                required
-              />
-              <button
-                type="submit"
-                disabled={loading}
-                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-70"
-              >
-                {loading ? "Signing in..." : "Sign in"}
-              </button>
-            </form>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handleRefreshRuns}
-                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
-              >
-                Refresh runs
-              </button>
-              <button
-                onClick={handleRefreshDetail}
-                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
-              >
-                Refresh detail
-              </button>
-              <button
-                className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                onClick={onLogout}
-              >
-                Logout
-              </button>
-            </div>
-          )}
-          {error ? <p className="w-full text-sm text-error-600 dark:text-error-400">{error}</p> : null}
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Live Analytics</p>
+          <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Event Stream</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Monitor strategy performance, quality checks, and execution reports in real-time.</p>
         </section>
 
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-6">

@@ -16,6 +16,11 @@ export type DashboardNavItem = {
   icon?: string;
 };
 
+type AuthInfo = {
+  email?: string;
+  hasToken?: boolean;
+};
+
 type DashboardShellProps = {
   title: string;
   subtitle: string;
@@ -23,6 +28,7 @@ type DashboardShellProps = {
   activeHref: string;
   navItems: DashboardNavItem[];
   actions?: ReactNode;
+  auth?: AuthInfo;
   children: ReactNode;
 };
 
@@ -33,6 +39,7 @@ function DashboardFrame({
   activeHref,
   navItems,
   actions,
+  auth,
   children,
 }: DashboardShellProps) {
   const { isExpanded, isHovered, isMobileOpen } = useSidebar();
@@ -44,7 +51,7 @@ function DashboardFrame({
       <Backdrop />
 
       <div className={`flex-1 transition-all duration-300 ease-in-out ${contentMargin}`}>
-        <AppHeader title={title} subtitle={subtitle} status={status} actions={actions} />
+        <AppHeader title={title} subtitle={subtitle} status={status} actions={actions} auth={auth} />
         <main className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-6">{children}</main>
       </div>
     </div>

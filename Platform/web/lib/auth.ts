@@ -3,6 +3,7 @@ export const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
 export const LEGACY_ACCESS_TOKEN_KEY = "v2_access_token";
 export const LEGACY_REFRESH_TOKEN_KEY = "v2_refresh_token";
 export const ADMIN_REMEMBER_ME_KEY = "v2_admin_remember_me";
+export const ADMIN_EMAIL_KEY = "v2_admin_email";
 export const AUTH_STORAGE_EVENT = "v2_auth_storage_change";
 
 function inBrowser(): boolean {
@@ -37,7 +38,7 @@ function clearTokenPair(target: Storage): void {
   target.removeItem(LEGACY_REFRESH_TOKEN_KEY);
 }
 
-export function persistAdminSession(accessToken: string, refreshToken: string, rememberMe: boolean): void {
+export function persistAdminSession(accessToken: string, refreshToken: string, rememberMe: boolean, email?: string): void {
   if (!inBrowser()) {
     return;
   }
@@ -46,7 +47,17 @@ export function persistAdminSession(accessToken: string, refreshToken: string, r
   const storage = rememberMe ? localStorage : sessionStorage;
   setTokenPair(storage, accessToken, refreshToken);
   localStorage.setItem(ADMIN_REMEMBER_ME_KEY, rememberMe ? "1" : "0");
+  if (email) {
+    storage.setItem(ADMIN_EMAIL_KEY, email);
+  }
   notifyAuthStorageChange();
+}
+
+export function getStoredAdminEmail(): string {
+  if (!inBrowser()) {
+    return "";
+  }
+  return localStorage.getItem(ADMIN_EMAIL_KEY) || sessionStorage.getItem(ADMIN_EMAIL_KEY) || "";
 }
 
 export function clearStoredAdminSession(): void {

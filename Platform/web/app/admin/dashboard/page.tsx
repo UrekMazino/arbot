@@ -32,6 +32,7 @@ import {
   clearStoredAdminSession,
   getStoredAdminAccessToken,
   getStoredAdminRefreshToken,
+  getStoredAdminEmail,
   persistAdminSession,
 } from "../../../lib/auth";
 
@@ -603,7 +604,7 @@ export default function HomePage() {
       const pair = await login(email, password);
       setToken(pair.access_token);
       setRefreshToken(pair.refresh_token);
-      persistAdminSession(pair.access_token, pair.refresh_token, true);
+      persistAdminSession(pair.access_token, pair.refresh_token, true, email);
       setStatus("Authenticated");
       await loadRuns(pair.access_token);
     } catch (err) {
@@ -719,7 +720,7 @@ export default function HomePage() {
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
       ]}
       auth={{
-        email,
+        email: email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
       }}
     >

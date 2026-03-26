@@ -27,7 +27,7 @@ import {
   stopAdminBot,
   updateAdminEnvSetting,
 } from "../../../lib/api";
-import { clearStoredAdminSession, getStoredAdminAccessToken } from "../../../lib/auth";
+import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
@@ -393,7 +393,7 @@ export default function SuperAdminPage() {
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
       ]}
       auth={{
-        email: me?.email,
+        email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
       }}
     >

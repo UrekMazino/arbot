@@ -47,11 +47,6 @@ export function AppHeader({ title, subtitle, status, actions, auth }: AppHeaderP
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-
-          <div className="min-w-0 border-l border-gray-200 pl-3 dark:border-gray-700">
-            <h1 className="truncate text-lg font-semibold text-gray-900 dark:text-white/90">{title}</h1>
-            <p className="truncate text-xs text-gray-500 dark:text-gray-400">{subtitle}</p>
-          </div>
         </div>
 
         {/* Right: Actions + Status + Theme + Profile */}

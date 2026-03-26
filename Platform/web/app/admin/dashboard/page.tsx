@@ -656,7 +656,7 @@ export default function HomePage() {
     const stored = getStoredAdminAccessToken();
     const storedRefresh = getStoredAdminRefreshToken();
     const storedEmail = getStoredAdminEmail();
-    if (stored) {
+    if (stored || storedEmail) {
       setToken(stored);
       setRefreshToken(storedRefresh);
       setEmail(storedEmail);

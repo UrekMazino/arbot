@@ -66,6 +66,8 @@ export function clearStoredAdminSession(): void {
   }
   clearTokenPair(localStorage);
   clearTokenPair(sessionStorage);
+  localStorage.removeItem(ADMIN_EMAIL_KEY);
+  sessionStorage.removeItem(ADMIN_EMAIL_KEY);
   notifyAuthStorageChange();
 }
 

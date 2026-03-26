@@ -142,6 +142,7 @@ export default function SuperAdminPage() {
 
   useEffect(() => {
     const stored = getStoredAdminAccessToken();
+    const storedEmail = getStoredAdminEmail();
     if (!stored) {
       setAuthChecked(true);
       router.replace("/login?next=/admin");
@@ -149,6 +150,10 @@ export default function SuperAdminPage() {
     }
     setToken(stored);
     setStatus("Session restored");
+    // Set stored email as fallback while API data loads
+    if (storedEmail) {
+      setMe((prev) => (prev ? { ...prev, email: storedEmail } : { email: storedEmail } as any));
+    }
     loadAdminData(stored)
       .then(() => refreshLogTail(stored, "latest"))
       .catch((err: unknown) => {

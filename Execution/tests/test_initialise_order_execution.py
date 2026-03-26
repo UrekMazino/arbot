@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
@@ -39,7 +41,7 @@ def test_deterministic_dry_run():
         place_stop=True,
         enforce_lot_size=False,
     )
-    return _print_result("Deterministic dry-run", result)
+    assert _print_result("Deterministic dry-run", result), "Deterministic dry-run returned failed result"
 
 
 def test_live_data_dry_run():
@@ -52,14 +54,15 @@ def test_live_data_dry_run():
         place_stop=True,
         enforce_lot_size=True,
     )
-    return _print_result("Live-data dry-run", result)
+    if not result:
+        pytest.skip("Live-data dry-run unavailable in this environment (market data/orderbook access blocked).")
+    assert _print_result("Live-data dry-run", result), "Live-data dry-run returned failed result"
 
 
 def test_demo_execution():
     print("\n[3] Demo execution (real orders)")
     if dry_run:
-        print("Demo execution skipped: dry_run=True. Set dry_run=False to enable.")
-        return False
+        pytest.skip("Demo execution skipped: dry_run=True. Set dry_run=False to enable.")
 
     result = initialise_order_execution(
         ticker=ticker_1,
@@ -67,21 +70,32 @@ def test_demo_execution():
         capital=100,
         place_stop=True,
     )
-    return _print_result("Demo execution", result)
+    if not result:
+        pytest.skip("Demo execution unavailable in this environment (market data/orderbook access blocked).")
+    assert _print_result("Demo execution", result), "Demo execution returned failed result"
 
 
 def main():
+    tests = [
+        ("Deterministic dry-run", test_deterministic_dry_run),
+        ("Live-data dry-run", test_live_data_dry_run),
+        ("Demo execution", test_demo_execution),
+    ]
     passed = 0
-    total = 3
+    skipped = 0
 
-    if test_deterministic_dry_run():
-        passed += 1
-    if test_live_data_dry_run():
-        passed += 1
-    if test_demo_execution():
-        passed += 1
+    for label, fn in tests:
+        try:
+            fn()
+            passed += 1
+        except pytest.skip.Exception as exc:
+            skipped += 1
+            print(f"{label}: SKIP ({exc})")
+        except AssertionError as exc:
+            print(f"{label}: FAIL ({exc})")
 
-    print(f"\nResult: {passed}/{total} tests passed")
+    total = len(tests)
+    print(f"\nResult: {passed} passed, {skipped} skipped, {total - passed - skipped} failed")
 
 
 if __name__ == "__main__":

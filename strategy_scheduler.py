@@ -64,7 +64,7 @@ def run_strategy_scan(logger):
             cwd=str(strategy_dir),
             capture_output=True,
             text=True,
-            timeout=600  # 10 minute timeout
+            timeout=3600  # 1 hour timeout
         )
 
         duration = time.time() - start_time
@@ -86,7 +86,7 @@ def run_strategy_scan(logger):
             return False
 
     except subprocess.TimeoutExpired:
-        logger.error("Strategy scan timed out after 600 seconds")
+        logger.error("Strategy scan timed out after 3600 seconds")
         return False
     except Exception as e:
         logger.error(f"Strategy scan error: {e}")

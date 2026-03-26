@@ -2,6 +2,8 @@ import datetime
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
@@ -35,7 +37,7 @@ def test_timestamp_window():
     expected_end = expected_now + (60 * 1000)
     ok = (start_ms, now_ms, end_ms) == (expected_start, expected_now, expected_end)
     details = f"start={start_ms} now={now_ms} end={end_ms}"
-    return _print_result("Timestamp window", ok, details)
+    assert _print_result("Timestamp window", ok, details), details
 
 
 def test_normalize_and_extract():
@@ -48,7 +50,7 @@ def test_normalize_and_extract():
     closes = extract_close_prices(candles)
     ok = len(candles) == 2 and closes == [1.6, 1.5]
     details = f"closes={closes}"
-    return _print_result("Normalize + close extraction", ok, details)
+    assert _print_result("Normalize + close extraction", ok, details), details
 
 
 class _StubSession:
@@ -89,7 +91,9 @@ def test_trade_liquidity_live():
     basis = analysis.get("label_basis", "none")
     ok = avg > 0 and price > 0
     details = f"avg={avg} price={price} label={label} basis={basis}"
-    return _print_result("Trade liquidity (live OKX demo)", ok, details)
+    if not ok:
+        pytest.skip(f"Live OKX trade liquidity unavailable: {details}")
+    assert _print_result("Trade liquidity (live OKX demo)", ok, details), details
 
 
 def test_live_candles():
@@ -97,7 +101,7 @@ def test_live_candles():
     response = get_candlesticks(ticker_1, bar="1m", limit=5)
     if response.get("code") != "0":
         details = f"code={response.get('code')} msg={response.get('msg')}"
-        return _print_result("Live OKX candlesticks", False, details)
+        pytest.skip(f"Live OKX candlesticks unavailable: {details}")
 
     candles = normalize_candlesticks(response.get("data", []), ascending=True)
     closes = extract_close_prices(candles)
@@ -105,7 +109,7 @@ def test_live_candles():
     helper_closes = get_close_prices(ticker_1, bar="1m", limit=5, session=stub)
     ok = bool(closes) and bool(helper_closes)
     details = f"candles={len(candles)} closes={len(closes)} helper={len(helper_closes)}"
-    return _print_result("Live OKX candlesticks", ok, details)
+    assert _print_result("Live OKX candlesticks", ok, details), details
 
 
 def test_get_price_klines_paged():
@@ -119,7 +123,7 @@ def test_get_price_klines_paged():
         descending = False
     ok = len(data) == 150 and descending
     details = f"rows={len(data)} descending={descending}"
-    return _print_result("Paged get_price_klines", ok, details)
+    assert _print_result("Paged get_price_klines", ok, details), details
 
 
 def test_get_latest_klines_mock():
@@ -128,7 +132,7 @@ def test_get_latest_klines_mock():
                                            session=_PagingSession(), ascending=False)
     ok = len(series_1) == 120 and len(series_2) == 120
     details = f"series_1={len(series_1)} series_2={len(series_2)}"
-    return _print_result("Latest klines (mock)", ok, details)
+    assert _print_result("Latest klines (mock)", ok, details), details
 
 
 def test_get_price_klines():
@@ -136,29 +140,36 @@ def test_get_price_klines():
     data = get_price_klines(ticker_1, bar="1m", limit=5)
     ok = isinstance(data, list) and len(data) > 0
     details = f"rows={len(data)}"
-    return _print_result("Live OKX get_price_klines", ok, details)
+    if not ok:
+        pytest.skip(f"Live OKX get_price_klines unavailable: {details}")
+    assert _print_result("Live OKX get_price_klines", ok, details), details
 
 
 def main():
+    tests = [
+        ("Timestamp window", test_timestamp_window),
+        ("Normalize + close extraction", test_normalize_and_extract),
+        ("Trade liquidity (live OKX demo)", test_trade_liquidity_live),
+        ("Live OKX candlesticks", test_live_candles),
+        ("Paged get_price_klines", test_get_price_klines_paged),
+        ("Latest klines (mock)", test_get_latest_klines_mock),
+        ("Live OKX get_price_klines", test_get_price_klines),
+    ]
     passed = 0
-    total = 7
+    skipped = 0
 
-    if test_timestamp_window():
-        passed += 1
-    if test_normalize_and_extract():
-        passed += 1
-    if test_trade_liquidity_live():
-        passed += 1
-    if test_live_candles():
-        passed += 1
-    if test_get_price_klines_paged():
-        passed += 1
-    if test_get_latest_klines_mock():
-        passed += 1
-    if test_get_price_klines():
-        passed += 1
+    for label, fn in tests:
+        try:
+            fn()
+            passed += 1
+        except pytest.skip.Exception as exc:
+            skipped += 1
+            print(f"{label}: SKIP ({exc})")
+        except AssertionError as exc:
+            print(f"{label}: FAIL ({exc})")
 
-    print(f"\nResult: {passed}/{total} tests passed")
+    total = len(tests)
+    print(f"\nResult: {passed} passed, {skipped} skipped, {total - passed - skipped} failed")
 
 
 if __name__ == "__main__":

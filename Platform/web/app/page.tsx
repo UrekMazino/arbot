@@ -21,9 +21,12 @@ import {
   getRunTrades,
   getRunWalkForward,
   getRuns,
+  isUnauthorizedError,
   login,
   wsDashboardUrl,
 } from "../lib/api";
+import { DashboardShell } from "../components/dashboard-shell";
+import { PanelCard, TableFrame } from "../components/panels";
 
 type LiveMsg = {
   event_type?: string;
@@ -263,6 +266,24 @@ export default function HomePage() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
+  const clearSession = useCallback((reason = "Signed out") => {
+    setToken("");
+    setRefreshToken("");
+    setRuns([]);
+    setSelectedRunId("");
+    setEvents([]);
+    setTrades([]);
+    setWalkForward([]);
+    setScorecard([]);
+    setQualitySummary(null);
+    setConfigSnapshot(null);
+    setReportArtifacts([]);
+    setLiveFeed([]);
+    localStorage.removeItem("v2_access_token");
+    localStorage.removeItem("v2_refresh_token");
+    setStatus(reason);
+  }, []);
+
   const selectedRun = useMemo(
     () => runs.find((r) => r.id === selectedRunId) || null,
     [runs, selectedRunId],
@@ -445,21 +466,37 @@ export default function HomePage() {
   }
 
   function onLogout() {
-    setToken("");
-    setRefreshToken("");
-    setRuns([]);
-    setSelectedRunId("");
-    setEvents([]);
-    setTrades([]);
-    setWalkForward([]);
-    setScorecard([]);
-    setQualitySummary(null);
-    setConfigSnapshot(null);
-    setReportArtifacts([]);
-    setLiveFeed([]);
-    localStorage.removeItem("v2_access_token");
-    localStorage.removeItem("v2_refresh_token");
-    setStatus("Signed out");
+    clearSession("Signed out");
+  }
+
+  async function handleRefreshRuns() {
+    if (!token) return;
+    try {
+      await loadRuns(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Failed to load runs";
+      setError(msg);
+    }
+  }
+
+  async function handleRefreshDetail() {
+    if (!token || !selectedRunId) return;
+    try {
+      await refreshRunDetails(token, selectedRunId);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Failed to load run detail";
+      setError(msg);
+    }
   }
 
   useEffect(() => {
@@ -470,19 +507,29 @@ export default function HomePage() {
       setRefreshToken(storedRefresh);
       setStatus("Session restored");
       loadRuns(stored).catch((err: unknown) => {
+        if (isUnauthorizedError(err)) {
+          clearSession("Session expired. Please sign in again.");
+          setError("Session expired. Please sign in again.");
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Failed to load runs";
         setError(msg);
       });
     }
-  }, [loadRuns]);
+  }, [clearSession, loadRuns]);
 
   useEffect(() => {
     if (!token || !selectedRunId) return;
     refreshRunDetails(token, selectedRunId).catch((err: unknown) => {
+      if (isUnauthorizedError(err)) {
+        clearSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Failed to load run detail";
       setError(msg);
     });
-  }, [token, selectedRunId, refreshRunDetails]);
+  }, [clearSession, token, selectedRunId, refreshRunDetails]);
 
   useEffect(() => {
     if (!selectedRun?.bot_instance_id) return;
@@ -511,16 +558,26 @@ export default function HomePage() {
   }, [selectedRun?.bot_instance_id]);
 
   return (
-    <main className="page-shell">
+    <DashboardShell
+      title="Run Browser + Live Event Stream"
+      subtitle="Monitor attribution, quality checks, reconciliation, and artifact outputs."
+      status={status}
+      activeHref="/"
+      navItems={[
+        { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
+        { href: "/admin", label: "Super Admin", hint: "Control plane" },
+      ]}
+      actions={
+        <p className="tiny">
+          API <code>{apiBaseUrl()}</code>
+        </p>
+      }
+    >
+      <div className="page-shell">
       <section className="hero">
         <p className="eyebrow">V2 UI Foundation</p>
         <h1>Run Browser + Live Event Stream</h1>
-        <p>
-          <a href="/admin">Open Super Admin Console</a>
-        </p>
-        <p>
-          API: <code>{apiBaseUrl()}</code>
-        </p>
+        <p>TailAdmin-style shell enabled for fast V2 expansion.</p>
       </section>
 
       <section className="auth-panel card">
@@ -545,8 +602,8 @@ export default function HomePage() {
           </form>
         ) : (
           <div className="auth-actions">
-            <button onClick={() => loadRuns(token)}>Refresh runs</button>
-            <button onClick={() => selectedRunId && refreshRunDetails(token, selectedRunId)}>Refresh detail</button>
+            <button onClick={handleRefreshRuns}>Refresh runs</button>
+            <button onClick={handleRefreshDetail}>Refresh detail</button>
             <button className="ghost" onClick={onLogout}>
               Logout
             </button>
@@ -556,9 +613,8 @@ export default function HomePage() {
       </section>
 
       <section className="grid-main">
-        <article className="card">
-          <h3>Runs</h3>
-          <div className="table-wrap">
+        <PanelCard title="Runs" subtitle="Select run to load trades, events, and quality snapshots.">
+          <TableFrame>
             <table>
               <thead>
                 <tr>
@@ -593,11 +649,10 @@ export default function HomePage() {
                 ) : null}
               </tbody>
             </table>
-          </div>
-        </article>
+          </TableFrame>
+        </PanelCard>
 
-        <article className="card detail">
-          <h3>Run Detail</h3>
+        <PanelCard title="Run Detail" className="detail">
           {selectedRun ? (
             <div className="detail-block">
               <p>
@@ -688,7 +743,7 @@ export default function HomePage() {
             ))}
             {!timelineEvents.length ? <li className="muted">No timeline events match the current filters.</li> : null}
           </ul>
-        </article>
+        </PanelCard>
       </section>
 
       <section className="grid-analytics">
@@ -727,10 +782,9 @@ export default function HomePage() {
         </article>
       </section>
 
-      <section className="card">
-        <h3>Strategy x Regime Attribution</h3>
+      <PanelCard title="Strategy x Regime Attribution">
         <AttributionTable scorecard={scorecard} />
-      </section>
+      </PanelCard>
 
       <section className="grid-analytics">
         <article className="card">
@@ -965,6 +1019,7 @@ export default function HomePage() {
           )}
         </article>
       </section>
-    </main>
+      </div>
+    </DashboardShell>
   );
 }

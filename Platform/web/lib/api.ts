@@ -371,3 +371,7 @@ export function wsDashboardUrl(botInstanceId: string): string {
   const encoded = encodeURIComponent(botInstanceId);
   return `${wsBase}/ws/dashboard?bot_instance_id=${encoded}`;
 }
+
+export function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("HTTP 401");
+}

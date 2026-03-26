@@ -1,8 +1,9 @@
 import os
 import json
 import sys
-import tempfile
+import shutil
 import unittest
+import uuid
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -14,11 +15,12 @@ import func_strategy_state as strategy_state
 
 class TestStrategyState(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_dir = ROOT_DIR / ".tmp" / "strategy_state_tests" / f"case_{uuid.uuid4().hex}"
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
         self.prev_state_dir = strategy_state._STATE_DIR
         self.prev_state_file = strategy_state.STATE_FILE
         self.prev_window = os.environ.get("STATBOT_STRATEGY_SCORE_WINDOW_TRADES")
-        strategy_state._STATE_DIR = Path(self.tmp.name)
+        strategy_state._STATE_DIR = self.tmp_dir
         strategy_state.STATE_FILE = strategy_state._STATE_DIR / "strategy_state.json"
         os.environ["STATBOT_STRATEGY_SCORE_WINDOW_TRADES"] = "3"
 
@@ -29,7 +31,7 @@ class TestStrategyState(unittest.TestCase):
             os.environ.pop("STATBOT_STRATEGY_SCORE_WINDOW_TRADES", None)
         else:
             os.environ["STATBOT_STRATEGY_SCORE_WINDOW_TRADES"] = self.prev_window
-        self.tmp.cleanup()
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_load_legacy_state_adds_strategy_performance(self):
         legacy = {

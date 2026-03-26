@@ -120,6 +120,8 @@ _PNL_FALLBACK_ACTIVE = False
 _PNL_FALLBACK_BASIS = ""
 _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
+_COINT_GATE_STREAK = 0  # Track consecutive cointegration gate occurrences
+_COINT_GATE_THRESHOLD = 2  # Trigger switch after N consecutive coint_gate decisions
 FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_1_stop_loss",
     "exit_tier_15_riskoff_coint_loss",
@@ -190,6 +192,20 @@ def _env_flag(name, default=False):
     if value in ("0", "false", "no", "n", "off"):
         return False
     return bool(default)
+
+
+def _get_coint_gate_threshold():
+    """Get the number of consecutive coint_gate evaluations before triggering pair switch."""
+    raw = os.getenv("STATBOT_COINT_GATE_THRESHOLD", "2")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 2
+    if value < 1:
+        value = 1
+    if value > 10:
+        value = 10
+    return value
 
 
 def _get_switch_precheck_coint_enabled():
@@ -1670,6 +1686,11 @@ if __name__ == "__main__":
     last_strategy_eval_ts = 0.0
     last_strategy_decision = None
     last_strategy_gate_log_ts = 0.0
+    _COINT_GATE_THRESHOLD = _get_coint_gate_threshold()
+    logger.info(
+        "Cointegration gate streak threshold set to: %d consecutive evaluations before pair switch",
+        _COINT_GATE_THRESHOLD,
+    )
     event_context = get_event_context(logger=logger)
     event_heartbeat_seconds = _get_event_heartbeat_seconds()
     last_event_heartbeat_ts = 0.0
@@ -2182,6 +2203,35 @@ if __name__ == "__main__":
                                 strategy_decision.active_strategy,
                                 strategy_mode,
                             )
+                            # Track cointegration gate streak and trigger switch if persistent
+                            _COINT_GATE_STREAK += 1
+                            logger.warning(
+                                "Cointegration gate streak: %d/%d (threshold for pair switch)",
+                                _COINT_GATE_STREAK,
+                                _COINT_GATE_THRESHOLD,
+                            )
+                            if _COINT_GATE_STREAK >= _COINT_GATE_THRESHOLD:
+                                logger.warning(
+                                    "Cointegration lost for %d consecutive evaluations. Triggering pair switch (reason=cointegration_lost).",
+                                    _COINT_GATE_STREAK,
+                                )
+                                switch_result = _switch_to_next_pair(
+                                    health_score=0,
+                                    switch_reason="cointegration_lost"
+                                )
+                                logger.info(
+                                    "Pair switch triggered due to cointegration loss: result=%s",
+                                    switch_result,
+                                )
+                                _COINT_GATE_STREAK = 0  # Reset after switch attempt
+                        else:
+                            # Reset cointegration gate streak when cointegration recovers
+                            if _COINT_GATE_STREAK > 0:
+                                logger.info(
+                                    "Cointegration recovered. Resetting gate streak from %d to 0.",
+                                    _COINT_GATE_STREAK,
+                                )
+                                _COINT_GATE_STREAK = 0
                         if "mean_shift_gate" in strategy_decision.reason_codes:
                             logger.info(
                                 "MEAN_SHIFT_GATE: strategy=TREND_SPREAD shift_z=%.3f threshold=%.3f allow_new=0 mode=%s basis=%s",

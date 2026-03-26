@@ -18,6 +18,7 @@ import {
   getAdminLogRuns,
   getAdminReportRuns,
   getMe,
+  isUnauthorizedError,
   listRoles,
   listUsers,
   login,
@@ -26,6 +27,8 @@ import {
   stopAdminBot,
   updateAdminEnvSetting,
 } from "../../lib/api";
+import { DashboardShell } from "../../components/dashboard-shell";
+import { PanelCard, TableFrame } from "../../components/panels";
 
 const ADMIN_ACCESS_TOKEN_KEY = "v2_admin_access_token";
 const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
@@ -73,6 +76,21 @@ export default function SuperAdminPage() {
   const [newUserSuper, setNewUserSuper] = useState(false);
   const [roleTargetUser, setRoleTargetUser] = useState("");
   const [roleName, setRoleName] = useState("viewer");
+
+  const clearAdminSession = useCallback((reason = "Signed out") => {
+    localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
+    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+    setToken("");
+    setStatus(reason);
+    setError("");
+    setMe(null);
+    setBotStatus(null);
+    setLogRuns([]);
+    setReportRuns([]);
+    setLogTail(null);
+    setUsers([]);
+    setRoles([]);
+  }, []);
 
   const sortedEnvKeys = useMemo(
     () => Object.keys(envSettings.values || {}).sort((a, b) => a.localeCompare(b)),
@@ -126,18 +144,28 @@ export default function SuperAdminPage() {
     loadAdminData(stored)
       .then(() => refreshLogTail(stored, "latest"))
       .catch((err: unknown) => {
+        if (isUnauthorizedError(err)) {
+          clearAdminSession("Session expired. Please sign in again.");
+          setError("Session expired. Please sign in again.");
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Failed loading admin data";
         setError(msg);
       });
-  }, [loadAdminData, refreshLogTail]);
+  }, [clearAdminSession, loadAdminData, refreshLogTail]);
 
   useEffect(() => {
     if (!token || !me?.is_superuser) return;
     const timer = window.setInterval(() => {
-      refreshLogTail(token, selectedRunKey || "latest").catch(() => undefined);
+      refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
+        if (isUnauthorizedError(err)) {
+          clearAdminSession("Session expired. Please sign in again.");
+          setError("Session expired. Please sign in again.");
+        }
+      });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [token, me?.is_superuser, selectedRunKey, refreshLogTail]);
+  }, [clearAdminSession, token, me?.is_superuser, selectedRunKey, refreshLogTail]);
 
   async function onLoginSubmit(e: FormEvent) {
     e.preventDefault();
@@ -161,18 +189,7 @@ export default function SuperAdminPage() {
   }
 
   function handleLogout() {
-    localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
-    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
-    setToken("");
-    setStatus("Signed out");
-    setError("");
-    setMe(null);
-    setBotStatus(null);
-    setLogRuns([]);
-    setReportRuns([]);
-    setLogTail(null);
-    setUsers([]);
-    setRoles([]);
+    clearAdminSession("Signed out");
   }
 
   async function handleStart() {
@@ -184,6 +201,11 @@ export default function SuperAdminPage() {
       setBotStatus(next);
       setStatus("Bot start requested");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Start failed";
       setError(msg);
     } finally {
@@ -200,6 +222,11 @@ export default function SuperAdminPage() {
       setBotStatus(next);
       setStatus("Bot stop requested");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Stop failed";
       setError(msg);
     } finally {
@@ -216,6 +243,11 @@ export default function SuperAdminPage() {
       await refreshLogTail(token, selectedRunKey || "latest");
       setStatus("Refreshed");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Refresh failed";
       setError(msg);
     } finally {
@@ -234,6 +266,11 @@ export default function SuperAdminPage() {
       setEnvEdits(next.values || {});
       setStatus(`Saved ${key}`);
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Failed saving env key";
       setError(msg);
     } finally {
@@ -260,6 +297,11 @@ export default function SuperAdminPage() {
       setUsers(nextUsers);
       setStatus("User created");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Create user failed";
       setError(msg);
     } finally {
@@ -278,6 +320,11 @@ export default function SuperAdminPage() {
       setUsers(nextUsers);
       setStatus("Role assigned");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Assign role failed";
       setError(msg);
     } finally {
@@ -295,6 +342,11 @@ export default function SuperAdminPage() {
       setUsers(nextUsers);
       setStatus("Role removed");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.");
+        setError("Session expired. Please sign in again.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Remove role failed";
       setError(msg);
     } finally {
@@ -304,48 +356,73 @@ export default function SuperAdminPage() {
 
   if (!token) {
     return (
-      <main className="admin-shell">
-        <section className="admin-auth card">
-          <h1>Super Admin Console</h1>
-          <p className="muted">Control bot runs, live logs, settings, users, and roles.</p>
-          <form onSubmit={onLoginSubmit} className="admin-auth-form">
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              placeholder="Password"
-              required
-            />
-            <button type="submit" disabled={busy}>
-              {busy ? "Signing in..." : "Sign in"}
-            </button>
-          </form>
-          {error ? <p className="error">{error}</p> : null}
-        </section>
-      </main>
+      <DashboardShell
+        title="Super Admin Console"
+        subtitle="Control bot runs, live logs, settings, users, and roles."
+        status={status}
+        activeHref="/admin"
+        navItems={[
+          { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
+          { href: "/admin", label: "Super Admin", hint: "Control plane" },
+        ]}
+      >
+        <div className="admin-shell">
+          <section className="admin-auth card">
+            <h1>Super Admin Console</h1>
+            <p className="muted">Control bot runs, live logs, settings, users, and roles.</p>
+            <form onSubmit={onLoginSubmit} className="admin-auth-form">
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                type="password"
+                placeholder="Password"
+                required
+              />
+              <button type="submit" disabled={busy}>
+                {busy ? "Signing in..." : "Sign in"}
+              </button>
+            </form>
+            {error ? <p className="error">{error}</p> : null}
+          </section>
+        </div>
+      </DashboardShell>
     );
   }
 
   if (me && !me.is_superuser) {
     return (
-      <main className="admin-shell">
-        <section className="card">
-          <h1>Super Admin Console</h1>
-          <p className="error">Current account is not superuser.</p>
-        </section>
-      </main>
+      <DashboardShell
+        title="Super Admin Console"
+        subtitle="Control bot runs, live logs, settings, users, and roles."
+        status={status}
+        activeHref="/admin"
+        navItems={[
+          { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
+          { href: "/admin", label: "Super Admin", hint: "Control plane" },
+        ]}
+      >
+        <div className="admin-shell">
+          <section className="card">
+            <h1>Super Admin Console</h1>
+            <p className="error">Current account is not superuser.</p>
+          </section>
+        </div>
+      </DashboardShell>
     );
   }
 
   return (
-    <main className="admin-shell">
-      <section className="admin-hero">
-        <div>
-          <p className="eyebrow">V2 Control Plane</p>
-          <h1>Super Admin Console</h1>
-          <p className="muted">{status}</p>
-        </div>
+    <DashboardShell
+      title="Super Admin Console"
+      subtitle="Start/stop bot runs, monitor live terminal, and manage users and runtime settings."
+      status={status}
+      activeHref="/admin"
+      navItems={[
+        { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
+        { href: "/admin", label: "Super Admin", hint: "Control plane" },
+      ]}
+      actions={
         <div className="admin-hero-actions">
           <button onClick={handleRefreshAll} disabled={busy}>
             Refresh
@@ -360,13 +437,21 @@ export default function SuperAdminPage() {
             Logout
           </button>
         </div>
-      </section>
+      }
+    >
+      <div className="admin-shell">
+        <section className="admin-hero">
+          <div>
+            <p className="eyebrow">V2 Control Plane</p>
+            <h1>Super Admin Console</h1>
+            <p className="muted">{status}</p>
+          </div>
+        </section>
 
       {error ? <p className="error">{error}</p> : null}
 
       <section className="admin-grid">
-        <article className="card">
-          <h3>Bot Control</h3>
+        <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
           <p>
             <strong>Running:</strong> {botStatus?.running ? "yes" : "no"}
           </p>
@@ -385,11 +470,10 @@ export default function SuperAdminPage() {
           <p>
             <strong>Detail:</strong> {botStatus?.detail || "n/a"}
           </p>
-        </article>
+        </PanelCard>
 
-        <article className="card terminal-card">
+        <PanelCard title="Live Terminal" className="terminal-card">
           <div className="terminal-header">
-            <h3>Live Terminal</h3>
             <select value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
               <option value="latest">latest</option>
               {logRuns.map((row) => (
@@ -400,13 +484,12 @@ export default function SuperAdminPage() {
             </select>
           </div>
           <pre className="terminal-body">{(logTail?.lines || []).join("\n") || "No log lines yet."}</pre>
-        </article>
+        </PanelCard>
       </section>
 
       <section className="admin-grid">
-        <article className="card">
-          <h3>All Logs</h3>
-          <div className="table-wrap compact">
+        <PanelCard title="All Logs">
+          <TableFrame compact>
             <table>
               <thead>
                 <tr>
@@ -432,12 +515,11 @@ export default function SuperAdminPage() {
                 ) : null}
               </tbody>
             </table>
-          </div>
-        </article>
+          </TableFrame>
+        </PanelCard>
 
-        <article className="card">
-          <h3>All Reports</h3>
-          <div className="table-wrap compact">
+        <PanelCard title="All Reports">
+          <TableFrame compact>
             <table>
               <thead>
                 <tr>
@@ -465,8 +547,8 @@ export default function SuperAdminPage() {
                 ) : null}
               </tbody>
             </table>
-          </div>
-        </article>
+          </TableFrame>
+        </PanelCard>
       </section>
 
       <section className="card">
@@ -597,6 +679,7 @@ export default function SuperAdminPage() {
           <p className="muted tiny">Click role chips in User Management table to remove roles.</p>
         </article>
       </section>
-    </main>
+      </div>
+    </DashboardShell>
   );
 }

@@ -392,6 +392,10 @@ export default function SuperAdminPage() {
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
       ]}
+      auth={{
+        email: me?.email,
+        hasToken: Boolean(token),
+      }}
     >
       <div className="grid gap-4">
         <section className={sectionCardClasses}>

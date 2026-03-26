@@ -28,7 +28,12 @@ import {
 } from "../lib/api";
 import { DashboardShell } from "../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../components/panels";
-import { ADMIN_ACCESS_TOKEN_KEY, ADMIN_REFRESH_TOKEN_KEY } from "../lib/auth";
+import {
+  clearStoredAdminSession,
+  getStoredAdminAccessToken,
+  getStoredAdminRefreshToken,
+  persistAdminSession,
+} from "../lib/auth";
 
 type LiveMsg = {
   event_type?: string;
@@ -374,10 +379,7 @@ export default function HomePage() {
     setConfigSnapshot(null);
     setReportArtifacts([]);
     setLiveFeed([]);
-    localStorage.removeItem("v2_access_token");
-    localStorage.removeItem("v2_refresh_token");
-    localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
-    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+    clearStoredAdminSession();
     setStatus(reason);
   }, []);
 
@@ -601,8 +603,7 @@ export default function HomePage() {
       const pair = await login(email, password);
       setToken(pair.access_token);
       setRefreshToken(pair.refresh_token);
-      localStorage.setItem("v2_access_token", pair.access_token);
-      localStorage.setItem("v2_refresh_token", pair.refresh_token);
+      persistAdminSession(pair.access_token, pair.refresh_token, true);
       setStatus("Authenticated");
       await loadRuns(pair.access_token);
     } catch (err) {
@@ -650,14 +651,9 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    const stored = localStorage.getItem("v2_access_token") || localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY) || "";
-    const storedRefresh =
-      localStorage.getItem("v2_refresh_token") || localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "";
+    const stored = getStoredAdminAccessToken();
+    const storedRefresh = getStoredAdminRefreshToken();
     if (stored) {
-      localStorage.setItem("v2_access_token", stored);
-      if (storedRefresh) {
-        localStorage.setItem("v2_refresh_token", storedRefresh);
-      }
       setToken(stored);
       setRefreshToken(storedRefresh);
       setStatus("Session restored");

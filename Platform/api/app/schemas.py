@@ -21,6 +21,20 @@ class LoginIn(BaseModel):
     password: str
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordOut(BaseModel):
+    message: str
+    reset_token: str | None = None
+
+
+class ResetPasswordIn(BaseModel):
+    reset_token: str = Field(min_length=16)
+    password: str = Field(min_length=8)
+
+
 class RefreshIn(BaseModel):
     refresh_token: str
 

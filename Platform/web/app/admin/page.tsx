@@ -27,7 +27,7 @@ import {
   stopAdminBot,
   updateAdminEnvSetting,
 } from "../../lib/api";
-import { ADMIN_ACCESS_TOKEN_KEY, ADMIN_REFRESH_TOKEN_KEY } from "../../lib/auth";
+import { clearStoredAdminSession, getStoredAdminAccessToken } from "../../lib/auth";
 import { DashboardShell } from "../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../components/panels";
 
@@ -76,8 +76,7 @@ export default function SuperAdminPage() {
   const [roleName, setRoleName] = useState("viewer");
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
-    localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
-    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+    clearStoredAdminSession();
     setToken("");
     setStatus(reason);
     setError("");
@@ -142,7 +141,7 @@ export default function SuperAdminPage() {
   );
 
   useEffect(() => {
-    const stored = localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY) || "";
+    const stored = getStoredAdminAccessToken();
     if (!stored) {
       setAuthChecked(true);
       router.replace("/login?next=/admin");

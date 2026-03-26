@@ -3,17 +3,29 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getMe, login } from "../../lib/api";
-import { ADMIN_ACCESS_TOKEN_KEY, ADMIN_REFRESH_TOKEN_KEY } from "../../lib/auth";
+import { forgotPassword, getMe, login, resetPassword } from "../../lib/api";
+import { defaultRememberMe, getStoredAdminAccessToken, persistAdminSession } from "../../lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
 
   const [email, setEmail] = useState("admin@okxstatbot.dev");
   const [password, setPassword] = useState("ChangeMeNow123!");
+  const [rememberMe, setRememberMe] = useState(defaultRememberMe());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [nextPath, setNextPath] = useState("/admin");
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("admin@okxstatbot.dev");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
+  const [resetTokenValue, setResetTokenValue] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -26,7 +38,7 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY) || "";
+    const token = getStoredAdminAccessToken();
     if (token) {
       router.replace(nextPath);
     }
@@ -43,17 +55,67 @@ export default function LoginPage() {
         setError("This account is not a super admin account.");
         return;
       }
-      localStorage.setItem(ADMIN_ACCESS_TOKEN_KEY, pair.access_token);
-      localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, pair.refresh_token);
-      // Keep analytics page compatibility while moving to shared admin auth.
-      localStorage.setItem("v2_access_token", pair.access_token);
-      localStorage.setItem("v2_refresh_token", pair.refresh_token);
+      persistAdminSession(pair.access_token, pair.refresh_token, rememberMe);
       router.replace(nextPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sign-in failed";
       setError(msg);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onForgotSubmit(e: FormEvent) {
+    e.preventDefault();
+    setForgotBusy(true);
+    setForgotError("");
+    setForgotMessage("");
+    setResetMessage("");
+    try {
+      const response = await forgotPassword(forgotEmail);
+      setForgotMessage(response.message || "If this account exists, a reset flow has been started.");
+      if (response.reset_token) {
+        setResetTokenValue(response.reset_token);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to request password reset";
+      setForgotError(msg);
+    } finally {
+      setForgotBusy(false);
+    }
+  }
+
+  async function onResetSubmit(e: FormEvent) {
+    e.preventDefault();
+    setResetError("");
+    setResetMessage("");
+    const normalizedToken = resetTokenValue.trim();
+    if (!normalizedToken) {
+      setResetError("Reset token is required.");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setResetError("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setResetError("Password confirmation does not match.");
+      return;
+    }
+
+    setResetBusy(true);
+    try {
+      const response = await resetPassword(normalizedToken, newPassword);
+      setResetMessage(response.message || "Password updated successfully.");
+      setPassword("");
+      setResetTokenValue("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to reset password";
+      setResetError(msg);
+    } finally {
+      setResetBusy(false);
     }
   }
 
@@ -67,8 +129,8 @@ export default function LoginPage() {
       <div className="relative mx-auto flex min-h-[calc(100vh-2rem)] w-full max-w-[1100px] items-center md:min-h-[calc(100vh-4rem)]">
         <div className="grid w-full overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-xl dark:border-gray-800 dark:bg-gray-900 lg:grid-cols-2">
           <section className="p-6 md:p-10">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-500">TailAdmin Sign In</p>
-            <h1 className="mt-2 text-3xl font-semibold text-gray-900 dark:text-white/90">Admin Login</h1>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-500">ProjectY Trade Bot</p>
+            <h1 className="mt-2 text-3xl font-semibold text-gray-900 dark:text-white/90">Sign In</h1>
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Use your super admin credentials to access the control plane.</p>
 
             <form onSubmit={onSubmit} className="mt-8 grid gap-4">
@@ -96,6 +158,32 @@ export default function LoginPage() {
                 />
               </label>
 
+              <div className="flex items-center justify-between gap-2">
+                <label className="inline-flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-300">
+                  <input
+                    className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800"
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                  />
+                  Keep me logged in
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForgot((prev) => !prev);
+                    setForgotEmail(email || forgotEmail);
+                    setForgotError("");
+                    setForgotMessage("");
+                    setResetError("");
+                    setResetMessage("");
+                  }}
+                  className="text-xs font-semibold text-brand-600 transition hover:text-brand-500 dark:text-brand-400 dark:hover:text-brand-300"
+                >
+                  Forgot password?
+                </button>
+              </div>
+
               <button
                 type="submit"
                 disabled={busy}
@@ -106,6 +194,85 @@ export default function LoginPage() {
             </form>
 
             {error ? <p className="mt-4 text-sm text-error-600 dark:text-error-400">{error}</p> : null}
+
+            {showForgot ? (
+              <div className="mt-5 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-800/40">
+                <h2 className="text-sm font-semibold text-gray-900 dark:text-white/90">Forgot password</h2>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Request a one-time reset token, then set a new admin password.
+                </p>
+
+                <form onSubmit={onForgotSubmit} className="mt-3 grid gap-2">
+                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                    Account email
+                    <input
+                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
+                      type="email"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={forgotBusy}
+                    className="inline-flex items-center justify-center rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-700 transition hover:bg-brand-100 disabled:opacity-70 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300 dark:hover:bg-brand-950/40"
+                  >
+                    {forgotBusy ? "Requesting..." : "Request Reset Token"}
+                  </button>
+                </form>
+
+                {forgotError ? <p className="mt-2 text-xs text-error-600 dark:text-error-400">{forgotError}</p> : null}
+                {forgotMessage ? <p className="mt-2 text-xs text-success-700 dark:text-success-400">{forgotMessage}</p> : null}
+
+                <form onSubmit={onResetSubmit} className="mt-4 grid gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                    Reset token
+                    <input
+                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
+                      value={resetTokenValue}
+                      onChange={(e) => setResetTokenValue(e.target.value)}
+                      placeholder="Paste reset token"
+                      required
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                    New password
+                    <input
+                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      minLength={8}
+                      required
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
+                    Confirm new password
+                    <input
+                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Repeat new password"
+                      minLength={8}
+                      required
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={resetBusy}
+                    className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-70 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
+                  >
+                    {resetBusy ? "Updating..." : "Reset Password"}
+                  </button>
+                </form>
+
+                {resetError ? <p className="mt-2 text-xs text-error-600 dark:text-error-400">{resetError}</p> : null}
+                {resetMessage ? <p className="mt-2 text-xs text-success-700 dark:text-success-400">{resetMessage}</p> : null}
+              </div>
+            ) : null}
 
             <p className="mt-6 text-xs text-gray-500 dark:text-gray-400">
               Only super admin users are allowed for this login route.

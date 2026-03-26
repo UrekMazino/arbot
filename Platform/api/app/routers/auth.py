@@ -6,12 +6,26 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..deps import get_current_user, get_db_session
-from ..models import RefreshToken, User
-from ..schemas import LoginIn, LogoutIn, MessageOut, RefreshIn, TokenPairOut, UserOut
+from ..models import PasswordResetToken, RefreshToken, User
+from ..schemas import (
+    ForgotPasswordIn,
+    ForgotPasswordOut,
+    LoginIn,
+    LogoutIn,
+    MessageOut,
+    RefreshIn,
+    ResetPasswordIn,
+    TokenPairOut,
+    UserOut,
+)
 from ..security import (
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
+    hash_password,
+    hash_password_reset_token,
     hash_refresh_token,
     verify_password,
 )
@@ -45,6 +59,79 @@ def login(
     db.commit()
 
     return TokenPairOut(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordOut)
+def forgot_password(
+    body: ForgotPasswordIn,
+    request: Request,
+    db: Session = Depends(get_db_session),
+):
+    user = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
+    generic_message = "If the account exists, a password reset token has been generated."
+    if not user or not user.is_active:
+        return ForgotPasswordOut(message=generic_message)
+
+    now = datetime.now(timezone.utc)
+    existing_tokens = db.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > now,
+        )
+    ).scalars().all()
+    for token in existing_tokens:
+        token.used_at = now
+
+    raw_token, token_hash, expires = create_password_reset_token()
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=expires,
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+    db.commit()
+
+    if settings.app_env.lower() != "production":
+        return ForgotPasswordOut(message=generic_message, reset_token=raw_token)
+    return ForgotPasswordOut(message=generic_message)
+
+
+@router.post("/reset-password", response_model=MessageOut)
+def reset_password(
+    body: ResetPasswordIn,
+    db: Session = Depends(get_db_session),
+):
+    token_value = body.reset_token.strip()
+    if not token_value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reset token is required")
+
+    now = datetime.now(timezone.utc)
+    token_hash = hash_password_reset_token(token_value)
+    token_row = db.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)).scalar_one_or_none()
+    if not token_row or token_row.used_at is not None or token_row.expires_at < now:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    user = db.get(User, token_row.user_id)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reset token user")
+
+    user.password_hash = hash_password(body.password)
+    token_row.used_at = now
+    refresh_rows = db.execute(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user.id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    ).scalars().all()
+    for row in refresh_rows:
+        row.revoked_at = now
+    db.commit()
+
+    return MessageOut(message="Password reset successful. Please sign in with your new password.")
 
 
 @router.post("/refresh", response_model=TokenPairOut)
@@ -100,4 +187,3 @@ def logout(
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
     return user
-

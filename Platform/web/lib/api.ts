@@ -4,6 +4,15 @@ export type TokenPair = {
   refresh_token: string;
 };
 
+export type MessageResponse = {
+  message: string;
+};
+
+export type ForgotPasswordResponse = {
+  message: string;
+  reset_token?: string;
+};
+
 export type RoleRecord = {
   id: string;
   name: string;
@@ -231,6 +240,20 @@ export async function login(email: string, password: string): Promise<TokenPair>
   return apiRequest<TokenPair>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function forgotPassword(email: string): Promise<ForgotPasswordResponse> {
+  return apiRequest<ForgotPasswordResponse>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(resetToken: string, password: string): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ reset_token: resetToken, password }),
   });
 }
 

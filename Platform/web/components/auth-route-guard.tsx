@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { ADMIN_ACCESS_TOKEN_KEY } from "../lib/auth";
+import { getStoredAdminAccessToken } from "../lib/auth";
 
 const PUBLIC_PATHS = new Set<string>(["/login"]);
 
@@ -12,7 +12,7 @@ export function AuthRouteGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   const isPublicPath = useMemo(() => PUBLIC_PATHS.has(pathname), [pathname]);
-  const hasToken = typeof window !== "undefined" ? Boolean(localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY)) : false;
+  const hasToken = typeof window !== "undefined" ? Boolean(getStoredAdminAccessToken()) : false;
   const shouldRedirect = !isPublicPath && !hasToken;
 
   useEffect(() => {

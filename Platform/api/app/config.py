@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_secret: str = "change-me-refresh"
     refresh_token_days: int = 14
+    password_reset_minutes: int = 30
     jwt_algorithm: str = "HS256"
 
     bootstrap_admin_email: str = "admin@okxstatbot.dev"

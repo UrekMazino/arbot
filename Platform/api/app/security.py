@@ -44,3 +44,13 @@ def create_refresh_token() -> tuple[str, str, datetime]:
 def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+
+def create_password_reset_token() -> tuple[str, str, datetime]:
+    token = secrets.token_urlsafe(40)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires = datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_minutes)
+    return token, token_hash, expires
+
+
+def hash_password_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

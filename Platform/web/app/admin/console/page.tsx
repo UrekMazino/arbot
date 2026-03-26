@@ -392,28 +392,30 @@ export default function SuperAdminPage() {
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
       ]}
-      actions={
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={handleRefreshAll} disabled={busy} className={primaryButtonClasses}>
-            Refresh
-          </button>
-          <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
-            Start Bot
-          </button>
-          <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
-            Stop Bot
-          </button>
-          <button className={secondaryButtonClasses} onClick={handleLogout} disabled={busy}>
-            Logout
-          </button>
-        </div>
-      }
     >
       <div className="grid gap-4">
         <section className={sectionCardClasses}>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 Control Plane</p>
-          <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white/90">Super Admin Console</h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 Control Plane</p>
+              <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white/90">Console</h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={handleRefreshAll} disabled={busy} className={primaryButtonClasses}>
+                Refresh
+              </button>
+              <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
+                Start Bot
+              </button>
+              <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
+                Stop Bot
+              </button>
+              <button className={secondaryButtonClasses} onClick={handleLogout} disabled={busy}>
+                Logout
+              </button>
+            </div>
+          </div>
         </section>
 
         {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}

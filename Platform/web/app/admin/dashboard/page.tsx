@@ -722,35 +722,37 @@ export default function HomePage() {
         email,
         hasToken: Boolean(token),
       }}
-      actions={
-        <>
-          {token ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handleRefreshRuns}
-                className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                Refresh Runs
-              </button>
-              <button
-                onClick={handleRefreshDetail}
-                className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                Refresh Detail
-              </button>
-            </div>
-          ) : null}
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
-          </p>
-        </>
-      }
     >
       <div className="grid gap-4">
         <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Live Analytics</p>
-          <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Event Stream</h1>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Monitor strategy performance, quality checks, and execution reports in real-time.</p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Live Analytics</p>
+              <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Event Stream</h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Monitor strategy performance, quality checks, and execution reports in real-time.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {token ? (
+                <>
+                  <button
+                    onClick={handleRefreshRuns}
+                    className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                  >
+                    Refresh Runs
+                  </button>
+                  <button
+                    onClick={handleRefreshDetail}
+                    className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                  >
+                    Refresh Detail
+                  </button>
+                </>
+              ) : null}
+              <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
+              </span>
+            </div>
+          </div>
         </section>
 
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-6">

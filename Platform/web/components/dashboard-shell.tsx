@@ -1,7 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode } from "react";
+
+import { SidebarProvider, useSidebar } from "../context/sidebar-context";
+import { ThemeProvider } from "../context/theme-context";
+import { AppHeader } from "./layout/app-header";
+import { AppSidebar } from "./layout/app-sidebar";
+import { Backdrop } from "./layout/backdrop";
 
 export type DashboardNavItem = {
   href: string;
@@ -21,7 +26,7 @@ type DashboardShellProps = {
   children: ReactNode;
 };
 
-export function DashboardShell({
+function DashboardFrame({
   title,
   subtitle,
   status,
@@ -30,145 +35,28 @@ export function DashboardShell({
   actions,
   children,
 }: DashboardShellProps) {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    try {
-      const rawCollapsed = localStorage.getItem("v2_sidebar_collapsed");
-      if (rawCollapsed === "1") {
-        setSidebarCollapsed(true);
-      }
-      const rawTheme = localStorage.getItem("v2_theme");
-      if (rawTheme === "dark" || rawTheme === "light") {
-        setTheme(rawTheme);
-      }
-    } catch {
-      // localStorage unavailable
-    }
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    try {
-      localStorage.setItem("v2_theme", theme);
-    } catch {
-      // no-op
-    }
-  }, [theme]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("v2_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
-    } catch {
-      // no-op
-    }
-  }, [sidebarCollapsed]);
-
-  const shellClass = useMemo(() => {
-    const classes = ["ta-shell"];
-    if (sidebarCollapsed) classes.push("is-collapsed");
-    if (sidebarOpen) classes.push("is-mobile-open");
-    return classes.join(" ");
-  }, [sidebarCollapsed, sidebarOpen]);
-
-  const groupedNav = useMemo(() => {
-    const map = new Map<string, DashboardNavItem[]>();
-    for (const item of navItems) {
-      const key = (item.group || "General").trim() || "General";
-      const current = map.get(key) || [];
-      current.push(item);
-      map.set(key, current);
-    }
-    return Array.from(map.entries()).map(([group, items]) => ({ group, items }));
-  }, [navItems]);
-
-  const toggleTheme = () => setTheme((prev) => (prev === "light" ? "dark" : "light"));
-  const toggleSidebarCollapse = () => setSidebarCollapsed((prev) => !prev);
-  const toggleMobileSidebar = () => setSidebarOpen((prev) => !prev);
+  const { isExpanded, isHovered, isMobileOpen } = useSidebar();
+  const contentMargin = isMobileOpen ? "ml-0" : isExpanded || isHovered ? "lg:ml-[290px]" : "lg:ml-[90px]";
 
   return (
-    <div className={shellClass}>
-      <button
-        type="button"
-        className="ta-overlay"
-        aria-label="Close navigation"
-        onClick={() => setSidebarOpen(false)}
-      />
-      <aside className="ta-sidebar">
-        <div className="ta-brand">
-          <p className="ta-brand-kicker">okx statbot</p>
-          <h2>Control Hub</h2>
-          <p>Realtime operations, data quality, and run governance.</p>
-        </div>
+    <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white/90">
+      <AppSidebar activeHref={activeHref} navItems={navItems} />
+      <Backdrop />
 
-        <nav className="ta-nav" aria-label="Primary">
-          {groupedNav.map((section) => (
-            <div key={section.group} className="ta-nav-group">
-              <p className="ta-nav-group-title">{section.group}</p>
-              {section.items.map((item) => {
-                const active = item.href === activeHref;
-                const iconText = (item.icon || item.label.slice(0, 2)).toUpperCase().slice(0, 2);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    data-short={iconText}
-                    className={`ta-nav-link${active ? " is-active" : ""}`}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <span className="ta-nav-main">
-                      <span className="ta-nav-icon" aria-hidden>
-                        {iconText}
-                      </span>
-                      <span className="ta-nav-label">{item.label}</span>
-                    </span>
-                    {item.hint ? <small>{item.hint}</small> : null}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-        </nav>
-      </aside>
-
-      <div className="ta-main">
-        <header className="ta-topbar">
-          <div className="ta-topbar-left">
-            <div className="ta-topbar-toggle-group">
-              <button
-                type="button"
-                className="ta-icon-btn ta-menu-btn"
-                onClick={toggleMobileSidebar}
-                aria-label="Toggle menu"
-              >
-                Menu
-              </button>
-              <button
-                type="button"
-                className="ta-icon-btn ta-collapse-btn"
-                onClick={toggleSidebarCollapse}
-                aria-label="Toggle sidebar collapse"
-              >
-                {sidebarCollapsed ? "Expand" : "Collapse"}
-              </button>
-            </div>
-            <p className="ta-kicker">Operations Console</p>
-            <h1>{title}</h1>
-            <p>{subtitle}</p>
-          </div>
-          <div className="ta-topbar-right">
-            <span className="ta-status">{status}</span>
-            <button type="button" className="ghost ta-theme-btn" onClick={toggleTheme}>
-              {theme === "dark" ? "Light Theme" : "Dark Theme"}
-            </button>
-            {actions ? <div className="ta-actions">{actions}</div> : null}
-          </div>
-        </header>
-
-        <section className="ta-content">{children}</section>
+      <div className={`flex-1 transition-all duration-300 ease-in-out ${contentMargin}`}>
+        <AppHeader title={title} subtitle={subtitle} status={status} actions={actions} />
+        <main className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-6">{children}</main>
       </div>
     </div>
+  );
+}
+
+export function DashboardShell(props: DashboardShellProps) {
+  return (
+    <ThemeProvider>
+      <SidebarProvider>
+        <DashboardFrame {...props} />
+      </SidebarProvider>
+    </ThemeProvider>
   );
 }

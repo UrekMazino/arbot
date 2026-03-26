@@ -182,9 +182,48 @@ function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
 
 function qualityClass(status: string | null | undefined): string {
   const normalized = String(status || "").toLowerCase();
-  if (normalized === "pass") return "quality-pass";
-  if (normalized === "warn" || normalized === "unknown") return "quality-warn";
-  return "quality-fail";
+  if (normalized === "pass") {
+    return "border border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400";
+  }
+  if (normalized === "warn" || normalized === "unknown") {
+    return "border border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400";
+  }
+  return "border border-error-200 bg-error-50 text-error-700 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400";
+}
+
+function eventSeverityClass(severity: Exclude<TimelineSeverity, "all">): string {
+  switch (severity) {
+    case "critical":
+    case "error":
+      return "border-error-200 bg-error-50 text-error-700 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400";
+    case "warn":
+      return "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400";
+    default:
+      return "border-blue-light-200 bg-blue-light-50 text-blue-light-700 dark:border-blue-light-900 dark:bg-blue-light-950/20 dark:text-blue-light-400";
+  }
+}
+
+function eventCategoryClass(category: TimelineCategory): string {
+  switch (category) {
+    case "switch":
+      return "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-900 dark:bg-brand-950/20 dark:text-brand-300";
+    case "gate":
+      return "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400";
+    case "alert":
+      return "border-error-200 bg-error-50 text-error-700 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400";
+    case "exit":
+      return "border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400";
+    default:
+      return "border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300";
+  }
+}
+
+function deltaChipClass(delta: number): string {
+  return `inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
+    delta >= 0
+      ? "border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400"
+      : "border-error-200 bg-error-50 text-error-700 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400"
+  }`;
 }
 
 function statusTone(value: string | null | undefined): "success" | "warn" | "error" | "info" {
@@ -261,9 +300,9 @@ function pointsToAreaPath(points: ChartPoint[], height = 190): string {
 }
 
 function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
-  if (!scorecard.length) return <p className="muted">No attribution rows yet.</p>;
+  if (!scorecard.length) return <p className="text-sm text-gray-500 dark:text-gray-400">No attribution rows yet.</p>;
   return (
-    <div className="table-wrap compact">
+    <TableFrame compact>
       <table>
         <thead>
           <tr>
@@ -288,7 +327,7 @@ function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableFrame>
   );
 }
 
@@ -673,587 +712,655 @@ export default function HomePage() {
         { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
       ]}
       actions={
-        <p className="tiny">
-          API <code>{apiBaseUrl()}</code>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
         </p>
       }
     >
-      <div className="page-shell">
-      <section className="hero">
-        <p className="eyebrow">V2 UI Foundation</p>
-        <h1>Run Browser + Live Event Stream</h1>
-        <p>TailAdmin-style shell enabled for fast V2 expansion.</p>
-      </section>
+      <div className="grid gap-4">
+        <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 UI Foundation</p>
+          <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Live Event Stream</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">TailAdmin-style shell enabled for fast V2 expansion.</p>
+        </section>
 
-      <section className="auth-panel card">
-        <div>
-          <h2>Session</h2>
-          <p className="muted">{status}</p>
-          {refreshToken ? <p className="tiny">Refresh token present</p> : null}
-        </div>
-        {!token ? (
-          <form onSubmit={onLoginSubmit} className="auth-form">
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              type="password"
-              required
-            />
-            <button type="submit" disabled={loading}>
-              {loading ? "Signing in..." : "Sign in"}
-            </button>
-          </form>
-        ) : (
-          <div className="auth-actions">
-            <button onClick={handleRefreshRuns}>Refresh runs</button>
-            <button onClick={handleRefreshDetail}>Refresh detail</button>
-            <button className="ghost" onClick={onLogout}>
-              Logout
-            </button>
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white/90">Session</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{status}</p>
+            {refreshToken ? <p className="text-xs text-gray-500 dark:text-gray-400">Refresh token present</p> : null}
           </div>
-        )}
-        {error ? <p className="error">{error}</p> : null}
-      </section>
-
-      <section className="ta-metrics-grid">
-        <MetricCard
-          label="Selected Run"
-          value={selectedRun?.run_key || "n/a"}
-          hint={`${runs.length} runs loaded`}
-          tone="sky"
-        />
-        <MetricCard
-          label="Session PnL"
-          value={`${fmtNumber(selectedRun?.session_pnl)} USDT`}
-          hint={`equity close ${fmtNumber(selectedRun?.end_equity)}`}
-          tone={selectedRun && (selectedRun.session_pnl || 0) < 0 ? "rose" : "teal"}
-        />
-        <MetricCard
-          label="Win Rate"
-          value={`${fmtNumber(tradeStats.winRate)}%`}
-          hint={`${tradeStats.wins}W / ${tradeStats.losses}L`}
-          tone="violet"
-        />
-        <MetricCard
-          label="Worst Drawdown"
-          value={`${fmtNumber(drawdownChart.worst)} USDT`}
-          hint={`${drawdownChart.points.length} points`}
-          tone="amber"
-        />
-        <MetricCard
-          label="Data Quality"
-          value={String(qualitySummary?.overall_status || "unknown").toUpperCase()}
-          hint={`${qualitySummary?.recent_issues?.length || 0} recent issues`}
-          tone={qualitySummary?.overall_status === "pass" ? "teal" : qualitySummary ? "amber" : "sky"}
-        />
-        <MetricCard
-          label="Report Files"
-          value={String(reportFileCount)}
-          hint={`${reportArtifacts.length} report batches`}
-          tone="sky"
-        />
-      </section>
-
-      <section className="grid-main">
-        <PanelCard title="Runs" subtitle="Select run to load trades, events, and quality snapshots.">
-          <div className="table-toolbar">
-            <input
-              className="table-search"
-              value={runSearch}
-              onChange={(e) => setRunSearch(e.target.value)}
-              placeholder="Search run key or bot id"
-            />
-            <select value={runStatusFilter} onChange={(e) => setRunStatusFilter(e.target.value)}>
-              <option value="all">All statuses</option>
-              {runStatusOptions.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-            <div className="chip-group">
+          {!token ? (
+            <form onSubmit={onLoginSubmit} className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
+              <input
+                className="min-w-[220px] flex-1 lg:flex-none"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email"
+                required
+              />
+              <input
+                className="min-w-[220px] flex-1 lg:flex-none"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                type="password"
+                required
+              />
               <button
-                type="button"
-                className={`chip-btn${runPnlFilter === "all" ? " is-active" : ""}`}
-                onClick={() => setRunPnlFilter("all")}
+                type="submit"
+                disabled={loading}
+                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-70"
               >
-                All PnL
+                {loading ? "Signing in..." : "Sign in"}
+              </button>
+            </form>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleRefreshRuns}
+                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
+              >
+                Refresh runs
               </button>
               <button
-                type="button"
-                className={`chip-btn${runPnlFilter === "positive" ? " is-active" : ""}`}
-                onClick={() => setRunPnlFilter("positive")}
+                onClick={handleRefreshDetail}
+                className="inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
               >
-                Positive
+                Refresh detail
               </button>
               <button
-                type="button"
-                className={`chip-btn${runPnlFilter === "negative" ? " is-active" : ""}`}
-                onClick={() => setRunPnlFilter("negative")}
+                className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                onClick={onLogout}
               >
-                Negative
+                Logout
               </button>
             </div>
-            <span className="table-toolbar-meta muted">
-              {filteredRuns.length}/{runs.length} shown
-            </span>
-          </div>
-          <TableFrame>
-            <table>
-              <thead>
-                <tr>
-                  <th>Run Key</th>
-                  <th>Status</th>
-                  <th>Session PnL</th>
-                  <th>Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRuns.map((run) => {
-                  const active = run.id === selectedRunId;
-                  return (
-                    <tr
-                      key={run.id}
-                      className={active ? "active-row" : ""}
-                      onClick={() => setSelectedRunId(run.id)}
-                    >
-                      <td>{run.run_key}</td>
-                      <td>
-                        <StatusPill label={run.status || "unknown"} tone={statusTone(run.status)} />
-                      </td>
-                      <td>{fmtNumber(run.session_pnl)}</td>
-                      <td>{fmtDuration(run.start_ts, run.end_ts)}</td>
-                    </tr>
-                  );
-                })}
-                {!filteredRuns.length ? (
+          )}
+          {error ? <p className="w-full text-sm text-error-600 dark:text-error-400">{error}</p> : null}
+        </section>
+
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-6">
+          <MetricCard label="Selected Run" value={selectedRun?.run_key || "n/a"} hint={`${runs.length} runs loaded`} tone="sky" />
+          <MetricCard
+            label="Session PnL"
+            value={`${fmtNumber(selectedRun?.session_pnl)} USDT`}
+            hint={`equity close ${fmtNumber(selectedRun?.end_equity)}`}
+            tone={selectedRun && (selectedRun.session_pnl || 0) < 0 ? "rose" : "teal"}
+          />
+          <MetricCard
+            label="Win Rate"
+            value={`${fmtNumber(tradeStats.winRate)}%`}
+            hint={`${tradeStats.wins}W / ${tradeStats.losses}L`}
+            tone="violet"
+          />
+          <MetricCard
+            label="Worst Drawdown"
+            value={`${fmtNumber(drawdownChart.worst)} USDT`}
+            hint={`${drawdownChart.points.length} points`}
+            tone="amber"
+          />
+          <MetricCard
+            label="Data Quality"
+            value={String(qualitySummary?.overall_status || "unknown").toUpperCase()}
+            hint={`${qualitySummary?.recent_issues?.length || 0} recent issues`}
+            tone={qualitySummary?.overall_status === "pass" ? "teal" : qualitySummary ? "amber" : "sky"}
+          />
+          <MetricCard label="Report Files" value={String(reportFileCount)} hint={`${reportArtifacts.length} report batches`} tone="sky" />
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+          <PanelCard title="Runs" subtitle="Select run to load trades, events, and quality snapshots.">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <input
+                className="min-w-[250px] flex-1"
+                value={runSearch}
+                onChange={(e) => setRunSearch(e.target.value)}
+                placeholder="Search run key or bot id"
+              />
+              <select
+                className="min-w-[160px]"
+                value={runStatusFilter}
+                onChange={(e) => setRunStatusFilter(e.target.value)}
+              >
+                <option value="all">All statuses</option>
+                {runStatusOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    runPnlFilter === "all"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setRunPnlFilter("all")}
+                >
+                  All PnL
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    runPnlFilter === "positive"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setRunPnlFilter("positive")}
+                >
+                  Positive
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    runPnlFilter === "negative"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setRunPnlFilter("negative")}
+                >
+                  Negative
+                </button>
+              </div>
+              <span className="ml-auto text-xs text-gray-500 dark:text-gray-400">
+                {filteredRuns.length}/{runs.length} shown
+              </span>
+            </div>
+
+            <TableFrame>
+              <table>
+                <thead>
                   <tr>
-                    <td colSpan={4} className="muted">
-                      No runs match current filters.
-                    </td>
+                    <th>Run Key</th>
+                    <th>Status</th>
+                    <th>Session PnL</th>
+                    <th>Duration</th>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </TableFrame>
-        </PanelCard>
+                </thead>
+                <tbody>
+                  {filteredRuns.map((run) => {
+                    const active = run.id === selectedRunId;
+                    return (
+                      <tr
+                        key={run.id}
+                        className={`cursor-pointer transition-colors ${
+                          active ? "bg-brand-50/70 dark:bg-brand-500/15" : "hover:bg-gray-50 dark:hover:bg-white/5"
+                        }`}
+                        onClick={() => setSelectedRunId(run.id)}
+                      >
+                        <td>{run.run_key}</td>
+                        <td>
+                          <StatusPill label={run.status || "unknown"} tone={statusTone(run.status)} />
+                        </td>
+                        <td>{fmtNumber(run.session_pnl)}</td>
+                        <td>{fmtDuration(run.start_ts, run.end_ts)}</td>
+                      </tr>
+                    );
+                  })}
+                  {!filteredRuns.length ? (
+                    <tr>
+                      <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                        No runs match current filters.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </TableFrame>
+          </PanelCard>
 
-        <PanelCard title="Run Detail" className="detail">
-          {selectedRun ? (
-            <div className="detail-block">
-              <p>
-                <strong>Run:</strong> {selectedRun.run_key}
-              </p>
-              <p>
-                <strong>Bot:</strong> {selectedRun.bot_instance_id}
-              </p>
-              <p>
-                <strong>Started:</strong> {fmtDate(selectedRun.start_ts)}
-              </p>
-              <p>
-                <strong>Ended:</strong> {fmtDate(selectedRun.end_ts)}
-              </p>
-            </div>
-          ) : (
-            <p className="muted">Select a run.</p>
-          )}
+          <PanelCard title="Run Detail">
+            {selectedRun ? (
+              <div className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
+                <p>
+                  <strong className="text-gray-800 dark:text-white/90">Run:</strong> {selectedRun.run_key}
+                </p>
+                <p>
+                  <strong className="text-gray-800 dark:text-white/90">Bot:</strong> {selectedRun.bot_instance_id}
+                </p>
+                <p>
+                  <strong className="text-gray-800 dark:text-white/90">Started:</strong> {fmtDate(selectedRun.start_ts)}
+                </p>
+                <p>
+                  <strong className="text-gray-800 dark:text-white/90">Ended:</strong> {fmtDate(selectedRun.end_ts)}
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">Select a run.</p>
+            )}
 
-          <div className="stats-row">
-            <div className="stat-box">
-              <span>Trades</span>
-              <strong>{tradeStats.trades}</strong>
+            <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Trades</span>
+                <strong className="mt-1 block text-lg text-gray-900 dark:text-white/90">{tradeStats.trades}</strong>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Win Rate</span>
+                <strong className="mt-1 block text-lg text-gray-900 dark:text-white/90">{fmtNumber(tradeStats.winRate)}%</strong>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Total PnL</span>
+                <strong className="mt-1 block text-lg text-gray-900 dark:text-white/90">{fmtNumber(tradeStats.pnl)}</strong>
+              </div>
             </div>
-            <div className="stat-box">
-              <span>Win Rate</span>
-              <strong>{fmtNumber(tradeStats.winRate)}%</strong>
-            </div>
-            <div className="stat-box">
-              <span>Total PnL</span>
-              <strong>{fmtNumber(tradeStats.pnl)}</strong>
-            </div>
-          </div>
 
-          <h4>Event Timeline</h4>
-          <div className="timeline-toolbar">
-            <label>
-              Category
-              <select
-                value={timelineCategory}
-                onChange={(e) => setTimelineCategory(e.target.value as TimelineFilterCategory)}
-              >
-                <option value="core">Core (switch/gate/alert/exit)</option>
-                <option value="all">All</option>
-                <option value="switch">Switches</option>
-                <option value="gate">Gates</option>
-                <option value="alert">Alerts</option>
-                <option value="exit">Exits</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-            <label>
-              Severity
-              <select
-                value={timelineSeverity}
-                onChange={(e) => setTimelineSeverity(e.target.value as TimelineSeverity)}
-              >
-                <option value="all">All</option>
-                <option value="info">Info</option>
-                <option value="warn">Warn</option>
-                <option value="error">Error</option>
-                <option value="critical">Critical</option>
-              </select>
-            </label>
-            <label>
-              Source
-              <select value={timelineSource} onChange={(e) => setTimelineSource(e.target.value as "all" | TimelineSource)}>
-                <option value="all">All</option>
-                <option value="history">Stored events</option>
-                <option value="live">WebSocket live</option>
-              </select>
-            </label>
-            <span className="timeline-count muted">{timelineEvents.length} shown</span>
-          </div>
+            <h4 className="mt-5 text-base font-semibold text-gray-900 dark:text-white/90">Event Timeline</h4>
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                Category
+                <select
+                  value={timelineCategory}
+                  onChange={(e) => setTimelineCategory(e.target.value as TimelineFilterCategory)}
+                >
+                  <option value="core">Core (switch/gate/alert/exit)</option>
+                  <option value="all">All</option>
+                  <option value="switch">Switches</option>
+                  <option value="gate">Gates</option>
+                  <option value="alert">Alerts</option>
+                  <option value="exit">Exits</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                Severity
+                <select
+                  value={timelineSeverity}
+                  onChange={(e) => setTimelineSeverity(e.target.value as TimelineSeverity)}
+                >
+                  <option value="all">All</option>
+                  <option value="info">Info</option>
+                  <option value="warn">Warn</option>
+                  <option value="error">Error</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs font-semibold uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                Source
+                <select value={timelineSource} onChange={(e) => setTimelineSource(e.target.value as "all" | TimelineSource)}>
+                  <option value="all">All</option>
+                  <option value="history">Stored events</option>
+                  <option value="live">WebSocket live</option>
+                </select>
+              </label>
+              <div className="flex items-end text-sm text-gray-500 dark:text-gray-400">{timelineEvents.length} shown</div>
+            </div>
 
-          <ul className="timeline events">
-            {timelineEvents.map((row) => (
-              <li key={row.id}>
-                <div className="timeline-line">
-                  <span className={`pill ${row.severity}`}>{row.severity}</span>
-                  <span className={`pill category-${row.category}`}>{row.category}</span>
-                  <strong>{row.eventType}</strong>
-                  <span className="timeline-source muted">{row.source === "history" ? "stored" : "live"}</span>
-                  <time>{new Date(row.tsMs).toLocaleString()}</time>
+            <ul className="mt-3 grid gap-2">
+              {timelineEvents.map((row) => (
+                <li key={row.id} className="rounded-xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900/30">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${eventSeverityClass(
+                        row.severity,
+                      )}`}
+                    >
+                      {row.severity}
+                    </span>
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${eventCategoryClass(
+                        row.category,
+                      )}`}
+                    >
+                      {row.category}
+                    </span>
+                    <strong className="text-sm text-gray-800 dark:text-white/90">{row.eventType}</strong>
+                    <span className="text-[11px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                      {row.source === "history" ? "stored" : "live"}
+                    </span>
+                    <time className="ml-auto text-xs text-gray-500 dark:text-gray-400">{new Date(row.tsMs).toLocaleString()}</time>
+                  </div>
+                  {row.summary ? <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{row.summary}</p> : null}
+                </li>
+              ))}
+              {!timelineEvents.length ? (
+                <li className="rounded-xl border border-dashed border-gray-300 p-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                  No timeline events match the current filters.
+                </li>
+              ) : null}
+            </ul>
+          </PanelCard>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-2">
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Equity Curve (Realized)</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Cumulative realized PnL</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    chartWindow === "30"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setChartWindow("30")}
+                >
+                  30
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    chartWindow === "80"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setChartWindow("80")}
+                >
+                  80
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                    chartWindow === "all"
+                      ? "border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300"
+                      : "border-gray-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  onClick={() => setChartWindow("all")}
+                >
+                  All
+                </button>
+              </div>
+            </div>
+            {equityChart.points.length ? (
+              <>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-500 dark:text-gray-400">
+                  <span>Closed trades (window): {equityChart.points.length}</span>
+                  <strong className="text-gray-900 dark:text-white/90">
+                    Latest cumulative PnL: {fmtNumber(equityChart.latest)} USDT
+                  </strong>
+                  <span className={deltaChipClass(equityChart.delta)}>Delta {fmtSignedNumber(equityChart.delta)} USDT</span>
                 </div>
-                {row.summary ? <p className="timeline-summary">{row.summary}</p> : null}
-              </li>
-            ))}
-            {!timelineEvents.length ? <li className="muted">No timeline events match the current filters.</li> : null}
-          </ul>
-        </PanelCard>
-      </section>
+                <svg
+                  viewBox="0 0 620 190"
+                  className="mt-1 h-[230px] w-full rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-950/40"
+                  role="img"
+                  aria-label="Equity curve chart"
+                >
+                  <path d={equityChart.areaPath} className="fill-brand-500/20 dark:fill-brand-500/30" />
+                  <path d={equityChart.path} fill="none" stroke="#465fff" strokeWidth="3" />
+                </svg>
+              </>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">No walk-forward points yet.</p>
+            )}
+          </article>
 
-      <section className="grid-analytics">
-        <article className="card">
-          <div className="chart-head">
-            <div>
-              <h3>Equity Curve (Realized)</h3>
-              <div className="chart-legend">
-                <span className="legend-dot legend-equity" aria-hidden />
-                <span>Cumulative realized PnL</span>
-              </div>
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <div className="mb-3">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Drawdown Curve</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Peak-to-trough drift</p>
             </div>
-            <div className="chip-group chart-chip-group">
-              <button
-                type="button"
-                className={`chip-btn${chartWindow === "30" ? " is-active" : ""}`}
-                onClick={() => setChartWindow("30")}
-              >
-                30
-              </button>
-              <button
-                type="button"
-                className={`chip-btn${chartWindow === "80" ? " is-active" : ""}`}
-                onClick={() => setChartWindow("80")}
-              >
-                80
-              </button>
-              <button
-                type="button"
-                className={`chip-btn${chartWindow === "all" ? " is-active" : ""}`}
-                onClick={() => setChartWindow("all")}
-              >
-                All
-              </button>
-            </div>
-          </div>
-          {equityChart.points.length ? (
-            <>
-              <div className="chart-meta">
-                <span>Closed trades (window): {equityChart.points.length}</span>
-                <strong>Latest cumulative PnL: {fmtNumber(equityChart.latest)} USDT</strong>
-                <span className={`delta-chip${equityChart.delta >= 0 ? " pos" : " neg"}`}>
-                  Delta {fmtSignedNumber(equityChart.delta)} USDT
-                </span>
-              </div>
-              <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Equity curve chart">
-                <path d={equityChart.areaPath} className="chart-area chart-area-equity" />
-                <path d={equityChart.path} fill="none" stroke="#0f766e" strokeWidth="3" />
-              </svg>
-            </>
-          ) : (
-            <p className="muted">No walk-forward points yet.</p>
-          )}
-        </article>
-
-        <article className="card">
-          <div className="chart-head">
-            <div>
-              <h3>Drawdown Curve</h3>
-              <div className="chart-legend">
-                <span className="legend-dot legend-drawdown" aria-hidden />
-                <span>Peak-to-trough drift</span>
-              </div>
-            </div>
-          </div>
-          {drawdownChart.points.length ? (
-            <>
-              <div className="chart-meta">
-                <span>Computed from cumulative realized PnL</span>
-                <strong>Worst drawdown: {fmtNumber(drawdownChart.worst)} USDT</strong>
-                <span className={`delta-chip${drawdownChart.delta >= 0 ? " pos" : " neg"}`}>
-                  Delta {fmtSignedNumber(drawdownChart.delta)} USDT
-                </span>
-              </div>
-              <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Drawdown chart">
-                <path d={drawdownChart.areaPath} className="chart-area chart-area-drawdown" />
-                <path d={drawdownChart.path} fill="none" stroke="#b45309" strokeWidth="3" />
-              </svg>
-            </>
-          ) : (
-            <p className="muted">No drawdown data yet.</p>
-          )}
-        </article>
-      </section>
+            {drawdownChart.points.length ? (
+              <>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-gray-500 dark:text-gray-400">
+                  <span>Computed from cumulative realized PnL</span>
+                  <strong className="text-gray-900 dark:text-white/90">
+                    Worst drawdown: {fmtNumber(drawdownChart.worst)} USDT
+                  </strong>
+                  <span className={deltaChipClass(drawdownChart.delta)}>Delta {fmtSignedNumber(drawdownChart.delta)} USDT</span>
+                </div>
+                <svg
+                  viewBox="0 0 620 190"
+                  className="mt-1 h-[230px] w-full rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-950/40"
+                  role="img"
+                  aria-label="Drawdown chart"
+                >
+                  <path d={drawdownChart.areaPath} className="fill-warning-500/20 dark:fill-warning-500/25" />
+                  <path d={drawdownChart.path} fill="none" stroke="#f79009" strokeWidth="3" />
+                </svg>
+              </>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">No drawdown data yet.</p>
+            )}
+          </article>
+        </section>
 
       <PanelCard title="Strategy x Regime Attribution">
         <AttributionTable scorecard={scorecard} />
       </PanelCard>
 
-      <section className="grid-analytics">
-        <article className="card">
-          <h3>Data Quality</h3>
-          {qualitySummary ? (
-            <div className="detail-block">
-              <p>
-                <strong>Overall:</strong>{" "}
-                <span className={`quality-chip ${qualityClass(qualitySummary.overall_status)}`}>
-                  {qualitySummary.overall_status}
-                </span>
-              </p>
-              <div className="stats-row">
-                <div className="stat-box">
-                  <span>Events</span>
-                  <strong>{qualitySummary.event_health.total}</strong>
+        <section className="grid gap-4 xl:grid-cols-2">
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Data Quality</h3>
+            {qualitySummary ? (
+              <div className="mt-3 space-y-3">
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  <strong className="text-gray-900 dark:text-white/90">Overall:</strong>{" "}
+                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${qualityClass(qualitySummary.overall_status)}`}>
+                    {qualitySummary.overall_status}
+                  </span>
+                </p>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                    <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Events</span>
+                    <strong className="mt-1 block text-lg text-gray-900 dark:text-white/90">{qualitySummary.event_health.total}</strong>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                    <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Warn/Error/Critical</span>
+                    <strong className="mt-1 block text-lg text-gray-900 dark:text-white/90">
+                      {qualitySummary.event_health.warn}/{qualitySummary.event_health.error}/{qualitySummary.event_health.critical}
+                    </strong>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-800/70">
+                    <span className="text-xs uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Trade Integrity</span>
+                    <strong className={`mt-1 block text-sm font-semibold uppercase tracking-[0.08em] ${qualityClass(qualitySummary.trade_integrity.status)}`}>
+                      {qualitySummary.trade_integrity.status}
+                    </strong>
+                  </div>
                 </div>
-                <div className="stat-box">
-                  <span>Warn/Error/Critical</span>
-                  <strong>
-                    {qualitySummary.event_health.warn}/{qualitySummary.event_health.error}/{qualitySummary.event_health.critical}
-                  </strong>
-                </div>
-                <div className="stat-box">
-                  <span>Trade Integrity</span>
-                  <strong className={qualityClass(qualitySummary.trade_integrity.status)}>
-                    {qualitySummary.trade_integrity.status}
-                  </strong>
-                </div>
-              </div>
 
-              <div className="table-wrap compact">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Warning Event Type</th>
-                      <th>Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(qualitySummary.event_health.typed_warning_events).map(([name, count]) => (
-                      <tr key={name}>
-                        <td>{name}</td>
-                        <td>{count}</td>
-                      </tr>
-                    ))}
-                    {!Object.keys(qualitySummary.event_health.typed_warning_events).length ? (
+                <TableFrame compact>
+                  <table>
+                    <thead>
                       <tr>
-                        <td colSpan={2} className="muted">
-                          No warning-type events recorded.
-                        </td>
+                        <th>Warning Event Type</th>
+                        <th>Count</th>
                       </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {Object.entries(qualitySummary.event_health.typed_warning_events).map(([name, count]) => (
+                        <tr key={name}>
+                          <td>{name}</td>
+                          <td>{count}</td>
+                        </tr>
+                      ))}
+                      {!Object.keys(qualitySummary.event_health.typed_warning_events).length ? (
+                        <tr>
+                          <td colSpan={2} className="text-sm text-gray-500 dark:text-gray-400">
+                            No warning-type events recorded.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </TableFrame>
               </div>
-            </div>
-          ) : (
-            <p className="muted">No data quality snapshot yet.</p>
-          )}
-        </article>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No data quality snapshot yet.</p>
+            )}
+          </article>
 
-        <article className="card">
-          <h3>Reconciliation</h3>
-          {qualitySummary ? (
-            <div className="detail-block">
-              <p>
-                <strong>Status:</strong>{" "}
-                <span className={`quality-chip ${qualityClass(qualitySummary.reconciliation.status)}`}>
-                  {qualitySummary.reconciliation.status}
-                </span>
-              </p>
-              <p>
-                <strong>Run session PnL:</strong> {fmtNumber(qualitySummary.reconciliation.run_session_pnl_usdt)} USDT
-              </p>
-              <p>
-                <strong>Closed-trade PnL sum:</strong> {fmtNumber(qualitySummary.reconciliation.trade_pnl_sum_usdt)} USDT
-              </p>
-              <p>
-                <strong>Delta:</strong> {fmtNumber(qualitySummary.reconciliation.delta_usdt)} USDT
-                {" | "}
-                {fmtNumber(qualitySummary.reconciliation.delta_pct_of_session)}%
-              </p>
-              <p className="tiny">
-                Thresholds: pass {"<="} {fmtNumber(qualitySummary.reconciliation.threshold_pass_usdt)} USDT, warn {"<="} {" "}
-                {fmtNumber(qualitySummary.reconciliation.threshold_warn_usdt)} USDT
-              </p>
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Reconciliation</h3>
+            {qualitySummary ? (
+              <div className="mt-3 space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Status:</strong>{" "}
+                  <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.08em] ${qualityClass(qualitySummary.reconciliation.status)}`}>
+                    {qualitySummary.reconciliation.status}
+                  </span>
+                </p>
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Run session PnL:</strong> {fmtNumber(qualitySummary.reconciliation.run_session_pnl_usdt)} USDT
+                </p>
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Closed-trade PnL sum:</strong> {fmtNumber(qualitySummary.reconciliation.trade_pnl_sum_usdt)} USDT
+                </p>
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Delta:</strong> {fmtNumber(qualitySummary.reconciliation.delta_usdt)} USDT |{" "}
+                  {fmtNumber(qualitySummary.reconciliation.delta_pct_of_session)}%
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Thresholds: pass {"<="} {fmtNumber(qualitySummary.reconciliation.threshold_pass_usdt)} USDT, warn {"<="}{" "}
+                  {fmtNumber(qualitySummary.reconciliation.threshold_warn_usdt)} USDT
+                </p>
 
-              <h4>Top Alerts</h4>
-              <div className="table-wrap compact">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Alert Type</th>
-                      <th>Count</th>
-                      <th>Last Seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {qualitySummary.top_alerts.map((row) => (
-                      <tr key={row.alert_type}>
-                        <td>{row.alert_type}</td>
-                        <td>{row.count}</td>
-                        <td>{fmtDate(row.last_seen)}</td>
-                      </tr>
-                    ))}
-                    {!qualitySummary.top_alerts.length ? (
+                <h4 className="text-base font-semibold text-gray-900 dark:text-white/90">Top Alerts</h4>
+                <TableFrame compact>
+                  <table>
+                    <thead>
                       <tr>
-                        <td colSpan={3} className="muted">
-                          No alert rows for this run.
-                        </td>
+                        <th>Alert Type</th>
+                        <th>Count</th>
+                        <th>Last Seen</th>
                       </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {qualitySummary.top_alerts.map((row) => (
+                        <tr key={row.alert_type}>
+                          <td>{row.alert_type}</td>
+                          <td>{row.count}</td>
+                          <td>{fmtDate(row.last_seen)}</td>
+                        </tr>
+                      ))}
+                      {!qualitySummary.top_alerts.length ? (
+                        <tr>
+                          <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
+                            No alert rows for this run.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </TableFrame>
               </div>
-            </div>
-          ) : (
-            <p className="muted">No reconciliation snapshot yet.</p>
-          )}
-        </article>
-      </section>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No reconciliation snapshot yet.</p>
+            )}
+          </article>
+        </section>
 
-      <section className="card">
-        <h3>Recent Quality/Reconciliation Issues</h3>
-        {qualitySummary?.recent_issues?.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Severity</th>
-                  <th>Type</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                {qualitySummary.recent_issues.map((row) => (
-                  <tr key={`${row.event_id}-${row.ts}`}>
-                    <td>{fmtDate(row.ts)}</td>
-                    <td>
-                      <span className={`pill ${row.severity}`}>{row.severity}</span>
-                    </td>
-                    <td>{row.event_type}</td>
-                    <td>{row.message}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="muted">No recent quality/reconciliation issues for this run.</p>
-        )}
-      </section>
-
-      <section className="grid-analytics">
-        <article className="card">
-          <h3>Config Snapshot</h3>
-          {configSnapshot ? (
-            <div className="detail-block">
-              <p>
-                <strong>Source:</strong> {configSnapshot.source}
-              </p>
-              <p>
-                <strong>Captured:</strong> {fmtDate(configSnapshot.created_at)}
-              </p>
-              {configSnapshot.error ? <p className="error">Snapshot error: {configSnapshot.error}</p> : null}
-              {configSnapshot.config_snapshot ? (
-                <details className="config-details" open>
-                  <summary>View config JSON ({Object.keys(configSnapshot.config_snapshot).length} keys)</summary>
-                  <pre className="json-viewer">{configSnapshotText}</pre>
-                </details>
-              ) : (
-                <p className="muted">No config snapshot available for this run yet.</p>
-              )}
-            </div>
-          ) : (
-            <p className="muted">Loading config snapshot...</p>
-          )}
-        </article>
-
-        <article className="card">
-          <h3>Report Artifacts</h3>
-          {reportArtifacts.length ? (
-            <div className="table-wrap compact">
+        <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Recent Quality/Reconciliation Issues</h3>
+          {qualitySummary?.recent_issues?.length ? (
+            <TableFrame>
               <table>
                 <thead>
                   <tr>
-                    <th>Report</th>
-                    <th>Status</th>
-                    <th>File</th>
-                    <th>Size</th>
-                    <th>Download</th>
+                    <th>Time</th>
+                    <th>Severity</th>
+                    <th>Type</th>
+                    <th>Message</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {reportArtifacts.flatMap((report) =>
-                    report.files.length
-                      ? report.files.map((file) => (
-                          <tr key={`${report.id}-${file.id}`}>
-                            <td>{report.id.slice(0, 8)}</td>
-                            <td>{report.status}</td>
-                            <td>{file.name}</td>
-                            <td>{fmtBytes(file.size_bytes)}</td>
-                            <td>
-                              <button
-                                type="button"
-                                className="ghost"
-                                disabled={!token || downloadingFileId === file.id}
-                                onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
-                              >
-                                {downloadingFileId === file.id ? "Downloading..." : "Download"}
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      : [
-                          <tr key={`${report.id}-nofile`}>
-                            <td>{report.id.slice(0, 8)}</td>
-                            <td>{report.status}</td>
-                            <td className="muted" colSpan={3}>
-                              No files linked for this report.
-                            </td>
-                          </tr>,
-                        ],
-                  )}
+                  {qualitySummary.recent_issues.map((row) => (
+                    <tr key={`${row.event_id}-${row.ts}`}>
+                      <td>{fmtDate(row.ts)}</td>
+                      <td>
+                        <StatusPill label={row.severity} tone={statusTone(row.severity)} />
+                      </td>
+                      <td>{row.event_type}</td>
+                      <td>{row.message}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           ) : (
-            <p className="muted">No report artifacts found for this run.</p>
+            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No recent quality/reconciliation issues for this run.</p>
           )}
-        </article>
-      </section>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-2">
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Config Snapshot</h3>
+            {configSnapshot ? (
+              <div className="mt-3 space-y-2 text-sm text-gray-600 dark:text-gray-300">
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Source:</strong> {configSnapshot.source}
+                </p>
+                <p>
+                  <strong className="text-gray-900 dark:text-white/90">Captured:</strong> {fmtDate(configSnapshot.created_at)}
+                </p>
+                {configSnapshot.error ? <p className="text-sm text-error-600 dark:text-error-400">Snapshot error: {configSnapshot.error}</p> : null}
+                {configSnapshot.config_snapshot ? (
+                  <details className="mt-2" open>
+                    <summary className="cursor-pointer text-sm text-gray-500 dark:text-gray-400">
+                      View config JSON ({Object.keys(configSnapshot.config_snapshot).length} keys)
+                    </summary>
+                    <pre className="custom-scrollbar mt-2 max-h-64 overflow-auto rounded-xl border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700 dark:border-gray-800 dark:bg-gray-950/40 dark:text-gray-200">
+                      {configSnapshotText}
+                    </pre>
+                  </details>
+                ) : (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">No config snapshot available for this run yet.</p>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">Loading config snapshot...</p>
+            )}
+          </article>
+
+          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Report Artifacts</h3>
+            {reportArtifacts.length ? (
+              <TableFrame compact>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Report</th>
+                      <th>Status</th>
+                      <th>File</th>
+                      <th>Size</th>
+                      <th>Download</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportArtifacts.flatMap((report) =>
+                      report.files.length
+                        ? report.files.map((file) => (
+                            <tr key={`${report.id}-${file.id}`}>
+                              <td>{report.id.slice(0, 8)}</td>
+                              <td>{report.status}</td>
+                              <td>{file.name}</td>
+                              <td>{fmtBytes(file.size_bytes)}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                                  disabled={!token || downloadingFileId === file.id}
+                                  onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
+                                >
+                                  {downloadingFileId === file.id ? "Downloading..." : "Download"}
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        : [
+                            <tr key={`${report.id}-nofile`}>
+                              <td>{report.id.slice(0, 8)}</td>
+                              <td>{report.status}</td>
+                              <td className="text-sm text-gray-500 dark:text-gray-400" colSpan={3}>
+                                No files linked for this report.
+                              </td>
+                            </tr>,
+                          ],
+                    )}
+                  </tbody>
+                </table>
+              </TableFrame>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No report artifacts found for this run.</p>
+            )}
+          </article>
+        </section>
       </div>
     </DashboardShell>
   );

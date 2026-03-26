@@ -52,33 +52,6 @@ function fmtUnix(value: number | null | undefined): string {
   return new Date(value * 1000).toLocaleString();
 }
 
-function statusTone(value: string | null | undefined): "success" | "warn" | "error" | "info" {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return "info";
-  if (
-    normalized.includes("running") ||
-    normalized.includes("pass") ||
-    normalized.includes("active") ||
-    normalized.includes("ok") ||
-    normalized.includes("success")
-  ) {
-    return "success";
-  }
-  if (normalized.includes("warn") || normalized.includes("pending") || normalized.includes("start")) {
-    return "warn";
-  }
-  if (
-    normalized.includes("fail") ||
-    normalized.includes("error") ||
-    normalized.includes("critical") ||
-    normalized.includes("stop") ||
-    normalized.includes("inactive")
-  ) {
-    return "error";
-  }
-  return "info";
-}
-
 export default function SuperAdminPage() {
   const [email, setEmail] = useState("admin@okxstatbot.dev");
   const [password, setPassword] = useState("ChangeMeNow123!");
@@ -385,6 +358,12 @@ export default function SuperAdminPage() {
     }
   }
 
+  const primaryButtonClasses =
+    "inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-70";
+  const secondaryButtonClasses =
+    "inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700";
+  const sectionCardClasses = "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900";
+
   if (!token) {
     return (
       <DashboardShell
@@ -397,11 +376,11 @@ export default function SuperAdminPage() {
           { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
         ]}
       >
-        <div className="admin-shell">
-          <section className="admin-auth card">
-            <h1>Super Admin Console</h1>
-            <p className="muted">Control bot runs, live logs, settings, users, and roles.</p>
-            <form onSubmit={onLoginSubmit} className="admin-auth-form">
+        <div className="grid gap-4">
+          <section className={`${sectionCardClasses} mx-auto w-full max-w-2xl`}>
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Super Admin Console</h1>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Control bot runs, live logs, settings, users, and roles.</p>
+            <form onSubmit={onLoginSubmit} className="mt-4 grid max-w-md gap-2">
               <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
               <input
                 value={password}
@@ -410,11 +389,11 @@ export default function SuperAdminPage() {
                 placeholder="Password"
                 required
               />
-              <button type="submit" disabled={busy}>
+              <button type="submit" disabled={busy} className={primaryButtonClasses}>
                 {busy ? "Signing in..." : "Sign in"}
               </button>
             </form>
-            {error ? <p className="error">{error}</p> : null}
+            {error ? <p className="mt-3 text-sm text-error-600 dark:text-error-400">{error}</p> : null}
           </section>
         </div>
       </DashboardShell>
@@ -433,10 +412,10 @@ export default function SuperAdminPage() {
           { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
         ]}
       >
-        <div className="admin-shell">
-          <section className="card">
-            <h1>Super Admin Console</h1>
-            <p className="error">Current account is not superuser.</p>
+        <div className="grid gap-4">
+          <section className={sectionCardClasses}>
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Super Admin Console</h1>
+            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Current account is not superuser.</p>
           </section>
         </div>
       </DashboardShell>
@@ -454,34 +433,32 @@ export default function SuperAdminPage() {
         { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
       ]}
       actions={
-        <div className="admin-hero-actions">
-          <button onClick={handleRefreshAll} disabled={busy}>
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={handleRefreshAll} disabled={busy} className={primaryButtonClasses}>
             Refresh
           </button>
-          <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)}>
+          <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
             Start Bot
           </button>
-          <button className="ghost" onClick={handleStop} disabled={busy || !botStatus?.running}>
+          <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
             Stop Bot
           </button>
-          <button className="ghost" onClick={handleLogout} disabled={busy}>
+          <button className={secondaryButtonClasses} onClick={handleLogout} disabled={busy}>
             Logout
           </button>
         </div>
       }
     >
-      <div className="admin-shell">
-        <section className="admin-hero">
-          <div>
-            <p className="eyebrow">V2 Control Plane</p>
-            <h1>Super Admin Console</h1>
-            <p className="muted">{status}</p>
-          </div>
+      <div className="grid gap-4">
+        <section className={sectionCardClasses}>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 Control Plane</p>
+          <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white/90">Super Admin Console</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
         </section>
 
-      {error ? <p className="error">{error}</p> : null}
+        {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
-      <section className="ta-metrics-grid">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-6">
         <MetricCard
           label="Bot Runtime"
           value={botStatus?.running ? "RUNNING" : "STOPPED"}
@@ -518,10 +495,11 @@ export default function SuperAdminPage() {
           hint={roles.map((role) => role.name).slice(0, 3).join(", ") || "none"}
           tone="sky"
         />
-      </section>
+        </section>
 
-      <section className="admin-grid">
+        <section className="grid gap-4 xl:grid-cols-2">
         <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
+          <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
           <p>
             <strong>Running:</strong>{" "}
             <StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} />
@@ -541,11 +519,12 @@ export default function SuperAdminPage() {
           <p>
             <strong>Detail:</strong> {botStatus?.detail || "n/a"}
           </p>
+          </div>
         </PanelCard>
 
-        <PanelCard title="Live Terminal" className="terminal-card">
-          <div className="terminal-header">
-            <select value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
+        <PanelCard title="Live Terminal" className="grid min-h-[460px] grid-rows-[auto_1fr]">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <select className="min-w-[180px]" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
               <option value="latest">latest</option>
               {logRuns.map((row) => (
                 <option key={row.run_key} value={row.run_key}>
@@ -554,11 +533,13 @@ export default function SuperAdminPage() {
               ))}
             </select>
           </div>
-          <pre className="terminal-body">{(logTail?.lines || []).join("\n") || "No log lines yet."}</pre>
+          <pre className="custom-scrollbar mt-1 max-h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
+            {(logTail?.lines || []).join("\n") || "No log lines yet."}
+          </pre>
         </PanelCard>
-      </section>
+        </section>
 
-      <section className="admin-grid">
+        <section className="grid gap-4 xl:grid-cols-2">
         <PanelCard title="All Logs">
           <TableFrame compact>
             <table>
@@ -579,7 +560,7 @@ export default function SuperAdminPage() {
                 ))}
                 {!logRuns.length ? (
                   <tr>
-                    <td colSpan={3} className="muted">
+                    <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
                       No log runs found.
                     </td>
                   </tr>
@@ -613,7 +594,7 @@ export default function SuperAdminPage() {
                 ))}
                 {!reportRuns.length ? (
                   <tr>
-                    <td colSpan={4} className="muted">
+                    <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
                       No report runs found.
                     </td>
                   </tr>
@@ -622,12 +603,12 @@ export default function SuperAdminPage() {
             </table>
           </TableFrame>
         </PanelCard>
-      </section>
+        </section>
 
-      <section className="card">
-        <h3>Settings (.env)</h3>
-        <p className="tiny">Editing values here updates `Execution/.env` directly.</p>
-        <div className="table-wrap">
+        <section className={sectionCardClasses}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Settings (.env)</h3>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Editing values here updates `Execution/.env` directly.</p>
+          <TableFrame>
           <table>
             <thead>
               <tr>
@@ -652,7 +633,7 @@ export default function SuperAdminPage() {
                     />
                   </td>
                   <td>
-                    <button className="ghost" onClick={() => saveEnvKey(key)} disabled={busy}>
+                    <button className={secondaryButtonClasses} onClick={() => saveEnvKey(key)} disabled={busy}>
                       Save
                     </button>
                   </td>
@@ -660,20 +641,20 @@ export default function SuperAdminPage() {
               ))}
               {!sortedEnvKeys.length ? (
                 <tr>
-                  <td colSpan={3} className="muted">
+                  <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
                     No settings found.
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
-        </div>
-      </section>
+          </TableFrame>
+        </section>
 
-      <section className="admin-grid">
-        <article className="card">
-          <h3>User Management</h3>
-          <form onSubmit={handleCreateUser} className="admin-inline-form">
+        <section className="grid gap-4 xl:grid-cols-2">
+          <article className={sectionCardClasses}>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">User Management</h3>
+            <form onSubmit={handleCreateUser} className="mb-3 mt-3 flex flex-wrap items-center gap-2">
             <input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="email" required />
             <input
               value={newUserPassword}
@@ -682,16 +663,16 @@ export default function SuperAdminPage() {
               type="password"
               required
             />
-            <label className="tiny">
-              <input type="checkbox" checked={newUserSuper} onChange={(e) => setNewUserSuper(e.target.checked)} />
+            <label className="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <input className="h-4 w-4 min-w-0" type="checkbox" checked={newUserSuper} onChange={(e) => setNewUserSuper(e.target.checked)} />
               superuser
             </label>
-            <button type="submit" disabled={busy}>
+            <button type="submit" disabled={busy} className={primaryButtonClasses}>
               Create
             </button>
           </form>
 
-          <div className="table-wrap compact">
+          <TableFrame compact>
             <table>
               <thead>
                 <tr>
@@ -708,11 +689,11 @@ export default function SuperAdminPage() {
                     <td>{user.is_active ? "yes" : "no"}</td>
                     <td>{user.is_superuser ? "yes" : "no"}</td>
                     <td>
-                      <div className="role-list">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {user.roles.map((role) => (
                           <button
                             key={`${user.id}-${role.name}`}
-                            className="role-chip"
+                            className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
                             onClick={() => handleRemoveRole(user.id, role.name)}
                             disabled={busy}
                           >
@@ -725,12 +706,12 @@ export default function SuperAdminPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableFrame>
         </article>
 
-        <article className="card">
-          <h3>Role Management</h3>
-          <form onSubmit={handleAssignRole} className="admin-inline-form">
+        <article className={sectionCardClasses}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Role Management</h3>
+          <form onSubmit={handleAssignRole} className="mt-3 flex flex-wrap items-center gap-2">
             <select value={roleTargetUser} onChange={(e) => setRoleTargetUser(e.target.value)}>
               {users.map((user) => (
                 <option key={user.id} value={user.id}>
@@ -745,13 +726,13 @@ export default function SuperAdminPage() {
                 </option>
               ))}
             </select>
-            <button type="submit" disabled={busy}>
+            <button type="submit" disabled={busy} className={primaryButtonClasses}>
               Assign Role
             </button>
           </form>
-          <p className="muted tiny">Click role chips in User Management table to remove roles.</p>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Click role chips in User Management table to remove roles.</p>
         </article>
-      </section>
+        </section>
       </div>
     </DashboardShell>
   );

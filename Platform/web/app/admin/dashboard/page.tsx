@@ -25,15 +25,15 @@ import {
   isUnauthorizedError,
   login,
   wsDashboardUrl,
-} from "../../lib/api";
-import { DashboardShell } from "../../components/dashboard-shell";
-import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../components/panels";
+} from "../../../lib/api";
+import { DashboardShell } from "../../../components/dashboard-shell";
+import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 import {
   clearStoredAdminSession,
   getStoredAdminAccessToken,
   getStoredAdminRefreshToken,
   persistAdminSession,
-} from "../../lib/auth";
+} from "../../../lib/auth";
 
 type LiveMsg = {
   event_type?: string;

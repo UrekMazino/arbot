@@ -26,10 +26,10 @@ import {
   startAdminBot,
   stopAdminBot,
   updateAdminEnvSetting,
-} from "../../lib/api";
-import { clearStoredAdminSession, getStoredAdminAccessToken } from "../../lib/auth";
-import { DashboardShell } from "../../components/dashboard-shell";
-import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../components/panels";
+} from "../../../lib/api";
+import { clearStoredAdminSession, getStoredAdminAccessToken } from "../../../lib/auth";
+import { DashboardShell } from "../../../components/dashboard-shell";
+import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";

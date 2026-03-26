@@ -415,9 +415,6 @@ export default function SuperAdminPage() {
               <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
                 Stop Bot
               </button>
-              <button className={secondaryButtonClasses} onClick={handleLogout} disabled={busy}>
-                Logout
-              </button>
             </div>
           </div>
         </section>

@@ -370,6 +370,7 @@ export default function HomePage() {
   const clearSession = useCallback((reason = "Signed out") => {
     setToken("");
     setRefreshToken("");
+    setEmail("");
     setRuns([]);
     setSelectedRunId("");
     setEvents([]);
@@ -654,9 +655,11 @@ export default function HomePage() {
   useEffect(() => {
     const stored = getStoredAdminAccessToken();
     const storedRefresh = getStoredAdminRefreshToken();
+    const storedEmail = getStoredAdminEmail();
     if (stored) {
       setToken(stored);
       setRefreshToken(storedRefresh);
+      setEmail(storedEmail);
       setStatus("Session restored");
       loadRuns(stored).catch((err: unknown) => {
         if (isUnauthorizedError(err)) {

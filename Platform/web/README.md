@@ -32,10 +32,10 @@ Default backend target (from `.env.local`):
 - `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8081/api/v2`
 - `NEXT_PUBLIC_WS_BASE=ws://127.0.0.1:8081`
 
-Use bootstrap admin credentials:
+Set bootstrap admin credentials in `Platform/.env`:
 
-- Email: `sirceojraiv@gmail.com`
-- Password: `ChangeMeNow123!`
+- `BOOTSTRAP_ADMIN_EMAIL=<your admin email>`
+- `BOOTSTRAP_ADMIN_PASSWORD=<your strong password>`
 
 ## Docker Compose (full stack)
 

@@ -15,15 +15,15 @@ import {
 export default function LoginPage() {
   const router = useRouter();
 
-  const [email, setEmail] = useState("sirceojraiv@gmail.com");
-  const [password, setPassword] = useState("ChangeMeNow123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(defaultRememberMe());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [nextPath, setNextPath] = useState("/admin");
   const [showForgot, setShowForgot] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState("sirceojraiv@gmail.com");
+  const [forgotEmail, setForgotEmail] = useState("");
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotError, setForgotError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
@@ -109,7 +109,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="sirceojraiv@gmail.com"
+                  placeholder="you@example.com"
                   required
                 />
               </label>

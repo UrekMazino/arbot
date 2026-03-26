@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     resend_api_base: str = "https://api.resend.com"
     jwt_algorithm: str = "HS256"
 
-    bootstrap_admin_email: str = "sirceojraiv@gmail.com"
-    bootstrap_admin_password: str = "ChangeMeNow123!"
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
 
     event_batch_max: int = 200
     event_spool_dir: str = os.path.join("Execution", "state", "event_spool")

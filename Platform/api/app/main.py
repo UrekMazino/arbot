@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -11,6 +13,7 @@ from .routers import admin, auth, events, health, reports, runs, users, ws
 from .security import hash_password
 
 app = FastAPI(title=settings.app_name)
+logger = logging.getLogger(__name__)
 
 allowed_origins = settings.cors_origin_list()
 app.add_middleware(
@@ -40,17 +43,29 @@ def bootstrap_identity() -> None:
                 db.add(Role(name=role_name, description=f"{role_name} role"))
         db.flush()
 
-        admin = db.execute(select(User).where(User.email == settings.bootstrap_admin_email)).scalar_one_or_none()
-        if not admin:
-            admin = User(
-                email=settings.bootstrap_admin_email,
-                password_hash=hash_password(settings.bootstrap_admin_password),
-                is_active=True,
-                is_superuser=True,
-            )
-            admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
-            admin.roles.append(admin_role)
-            db.add(admin)
+        bootstrap_email = str(settings.bootstrap_admin_email or "").strip().lower()
+        bootstrap_password = str(settings.bootstrap_admin_password or "")
+
+        if bootstrap_email:
+            admin = db.execute(select(User).where(User.email == bootstrap_email)).scalar_one_or_none()
+            if not admin:
+                if not bootstrap_password:
+                    logger.warning(
+                        "BOOTSTRAP_ADMIN_PASSWORD is empty; skipping bootstrap admin creation for %s",
+                        bootstrap_email,
+                    )
+                else:
+                    admin = User(
+                        email=bootstrap_email,
+                        password_hash=hash_password(bootstrap_password),
+                        is_active=True,
+                        is_superuser=True,
+                    )
+                    admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
+                    admin.roles.append(admin_role)
+                    db.add(admin)
+        else:
+            logger.info("BOOTSTRAP_ADMIN_EMAIL is empty; skipping bootstrap admin creation")
         db.commit()
     finally:
         db.close()

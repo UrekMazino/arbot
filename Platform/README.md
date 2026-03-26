@@ -25,10 +25,10 @@ Web:
 1. URL: `http://localhost:3000`
 2. See `Platform/web/README.md` for local non-docker run.
 
-Bootstrap admin (default):
+Bootstrap admin (configure in `Platform/.env`):
 
-1. Email: `sirceojraiv@gmail.com`
-2. Password: `ChangeMeNow123!`
+1. `BOOTSTRAP_ADMIN_EMAIL=<your admin email>`
+2. `BOOTSTRAP_ADMIN_PASSWORD=<your strong password>`
 
 ## Next Slice
 

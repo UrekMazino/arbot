@@ -32,8 +32,8 @@ services:
       EMAIL_PROVIDER: resend
       EMAIL_FROM: ${EMAIL_FROM:-OKXStatBot <noreply@yourdomain.com>}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      BOOTSTRAP_ADMIN_EMAIL: sirceojraiv@gmail.com
-      BOOTSTRAP_ADMIN_PASSWORD: ChangeMeNow123!
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       BOT_CONTROL_WORKSPACE_ROOT: /workspace
       BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
     ports:

@@ -7,6 +7,8 @@ export type DashboardNavItem = {
   href: string;
   label: string;
   hint?: string;
+  group?: string;
+  icon?: string;
 };
 
 type DashboardShellProps = {
@@ -71,6 +73,17 @@ export function DashboardShell({
     return classes.join(" ");
   }, [sidebarCollapsed, sidebarOpen]);
 
+  const groupedNav = useMemo(() => {
+    const map = new Map<string, DashboardNavItem[]>();
+    for (const item of navItems) {
+      const key = (item.group || "General").trim() || "General";
+      const current = map.get(key) || [];
+      current.push(item);
+      map.set(key, current);
+    }
+    return Array.from(map.entries()).map(([group, items]) => ({ group, items }));
+  }, [navItems]);
+
   const toggleTheme = () => setTheme((prev) => (prev === "light" ? "dark" : "light"));
   const toggleSidebarCollapse = () => setSidebarCollapsed((prev) => !prev);
   const toggleMobileSidebar = () => setSidebarOpen((prev) => !prev);
@@ -91,21 +104,32 @@ export function DashboardShell({
         </div>
 
         <nav className="ta-nav" aria-label="Primary">
-          {navItems.map((item) => {
-            const active = item.href === activeHref;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                data-short={item.label.slice(0, 1).toUpperCase()}
-                className={`ta-nav-link${active ? " is-active" : ""}`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                <span className="ta-nav-label">{item.label}</span>
-                {item.hint ? <small>{item.hint}</small> : null}
-              </Link>
-            );
-          })}
+          {groupedNav.map((section) => (
+            <div key={section.group} className="ta-nav-group">
+              <p className="ta-nav-group-title">{section.group}</p>
+              {section.items.map((item) => {
+                const active = item.href === activeHref;
+                const iconText = (item.icon || item.label.slice(0, 2)).toUpperCase().slice(0, 2);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    data-short={iconText}
+                    className={`ta-nav-link${active ? " is-active" : ""}`}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="ta-nav-main">
+                      <span className="ta-nav-icon" aria-hidden>
+                        {iconText}
+                      </span>
+                      <span className="ta-nav-label">{item.label}</span>
+                    </span>
+                    {item.hint ? <small>{item.hint}</small> : null}
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
       </aside>
 

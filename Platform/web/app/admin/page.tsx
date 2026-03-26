@@ -393,8 +393,8 @@ export default function SuperAdminPage() {
         status={status}
         activeHref="/admin"
         navItems={[
-          { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
-          { href: "/admin", label: "Super Admin", hint: "Control plane" },
+          { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
+          { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
         ]}
       >
         <div className="admin-shell">
@@ -429,8 +429,8 @@ export default function SuperAdminPage() {
         status={status}
         activeHref="/admin"
         navItems={[
-          { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
-          { href: "/admin", label: "Super Admin", hint: "Control plane" },
+          { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
+          { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
         ]}
       >
         <div className="admin-shell">
@@ -450,8 +450,8 @@ export default function SuperAdminPage() {
       status={status}
       activeHref="/admin"
       navItems={[
-        { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
-        { href: "/admin", label: "Super Admin", hint: "Control plane" },
+        { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
+        { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
       ]}
       actions={
         <div className="admin-hero-actions">

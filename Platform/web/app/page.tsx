@@ -39,6 +39,8 @@ type TimelineCategory = "switch" | "gate" | "alert" | "exit" | "other";
 type TimelineSource = "history" | "live";
 type TimelineFilterCategory = "all" | "core" | TimelineCategory;
 type TimelineSeverity = "all" | "info" | "warn" | "error" | "critical";
+type RunPnlFilter = "all" | "positive" | "negative";
+type ChartWindow = "30" | "80" | "all";
 
 type TimelineEvent = {
   id: string;
@@ -53,6 +55,11 @@ type TimelineEvent = {
 function fmtNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
   return value.toFixed(digits);
+}
+
+function fmtSignedNumber(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -245,6 +252,14 @@ function pointsToPath(points: ChartPoint[]): string {
     .join(" ");
 }
 
+function pointsToAreaPath(points: ChartPoint[], height = 190): string {
+  if (!points.length) return "";
+  const linePath = pointsToPath(points);
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `${linePath} L ${last.x.toFixed(2)} ${height.toFixed(2)} L ${first.x.toFixed(2)} ${height.toFixed(2)} Z`;
+}
+
 function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
   if (!scorecard.length) return <p className="muted">No attribution rows yet.</p>;
   return (
@@ -296,6 +311,10 @@ export default function HomePage() {
   const [timelineCategory, setTimelineCategory] = useState<TimelineFilterCategory>("core");
   const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
   const [timelineSource, setTimelineSource] = useState<"all" | TimelineSource>("all");
+  const [runSearch, setRunSearch] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState("all");
+  const [runPnlFilter, setRunPnlFilter] = useState<RunPnlFilter>("all");
+  const [chartWindow, setChartWindow] = useState<ChartWindow>("80");
   const [status, setStatus] = useState<string>("Signed out");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -339,6 +358,32 @@ export default function HomePage() {
     };
   }, [trades]);
 
+  const runStatusOptions = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        runs
+          .map((row) => String(row.status || "unknown").trim())
+          .filter((row) => row.length > 0),
+      ),
+    );
+    return values.sort((a, b) => a.localeCompare(b));
+  }, [runs]);
+
+  const filteredRuns = useMemo(() => {
+    const search = runSearch.trim().toLowerCase();
+    return runs.filter((row) => {
+      const statusValue = String(row.status || "unknown").trim();
+      if (runStatusFilter !== "all" && statusValue !== runStatusFilter) return false;
+      if (runPnlFilter === "positive" && (row.session_pnl || 0) <= 0) return false;
+      if (runPnlFilter === "negative" && (row.session_pnl || 0) >= 0) return false;
+      if (!search) return true;
+      return (
+        String(row.run_key || "").toLowerCase().includes(search) ||
+        String(row.bot_instance_id || "").toLowerCase().includes(search)
+      );
+    });
+  }, [runs, runSearch, runStatusFilter, runPnlFilter]);
+
   const loadRuns = useCallback(async (authToken: string) => {
     const nextRuns = await getRuns(authToken);
     setRuns(nextRuns);
@@ -376,32 +421,53 @@ export default function HomePage() {
     });
   }, [walkForward]);
 
+  const windowedEquitySeries = useMemo(() => {
+    if (chartWindow === "all") return equitySeries;
+    const count = Number.parseInt(chartWindow, 10);
+    if (!Number.isFinite(count) || count <= 0) return equitySeries;
+    return equitySeries.slice(-count);
+  }, [equitySeries, chartWindow]);
+
   const drawdownSeries = useMemo(() => {
-    if (!equitySeries.length) return [] as { ts: string; drawdown: number }[];
+    if (!windowedEquitySeries.length) return [] as { ts: string; drawdown: number }[];
     let peak = Number.NEGATIVE_INFINITY;
-    return equitySeries.map((point) => {
+    return windowedEquitySeries.map((point) => {
       peak = Math.max(peak, point.equity);
       return {
         ts: point.ts,
         drawdown: point.equity - peak,
       };
     });
-  }, [equitySeries]);
+  }, [windowedEquitySeries]);
 
   const equityChart = useMemo(() => {
-    const values = equitySeries.map((row) => row.equity);
-    const labels = equitySeries.map((row) => row.ts);
+    const values = windowedEquitySeries.map((row) => row.equity);
+    const labels = windowedEquitySeries.map((row) => row.ts);
     const points = buildChartPoints(values, labels);
     const latest = values.length ? values[values.length - 1] : 0;
-    return { points, path: pointsToPath(points), latest };
-  }, [equitySeries]);
+    const delta = values.length >= 2 ? values[values.length - 1] - values[values.length - 2] : 0;
+    return {
+      points,
+      path: pointsToPath(points),
+      areaPath: pointsToAreaPath(points),
+      latest,
+      delta,
+    };
+  }, [windowedEquitySeries]);
 
   const drawdownChart = useMemo(() => {
     const values = drawdownSeries.map((row) => row.drawdown);
     const labels = drawdownSeries.map((row) => row.ts);
     const points = buildChartPoints(values, labels);
     const worst = values.length ? Math.min(...values) : 0;
-    return { points, path: pointsToPath(points), worst };
+    const delta = values.length >= 2 ? values[values.length - 1] - values[values.length - 2] : 0;
+    return {
+      points,
+      path: pointsToPath(points),
+      areaPath: pointsToAreaPath(points),
+      worst,
+      delta,
+    };
   }, [drawdownSeries]);
 
   const reportFileCount = useMemo(
@@ -603,8 +669,8 @@ export default function HomePage() {
       status={status}
       activeHref="/"
       navItems={[
-        { href: "/", label: "Analytics", hint: "Runs, quality, reports" },
-        { href: "/admin", label: "Super Admin", hint: "Control plane" },
+        { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
+        { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
       ]}
       actions={
         <p className="tiny">
@@ -692,6 +758,48 @@ export default function HomePage() {
 
       <section className="grid-main">
         <PanelCard title="Runs" subtitle="Select run to load trades, events, and quality snapshots.">
+          <div className="table-toolbar">
+            <input
+              className="table-search"
+              value={runSearch}
+              onChange={(e) => setRunSearch(e.target.value)}
+              placeholder="Search run key or bot id"
+            />
+            <select value={runStatusFilter} onChange={(e) => setRunStatusFilter(e.target.value)}>
+              <option value="all">All statuses</option>
+              {runStatusOptions.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <div className="chip-group">
+              <button
+                type="button"
+                className={`chip-btn${runPnlFilter === "all" ? " is-active" : ""}`}
+                onClick={() => setRunPnlFilter("all")}
+              >
+                All PnL
+              </button>
+              <button
+                type="button"
+                className={`chip-btn${runPnlFilter === "positive" ? " is-active" : ""}`}
+                onClick={() => setRunPnlFilter("positive")}
+              >
+                Positive
+              </button>
+              <button
+                type="button"
+                className={`chip-btn${runPnlFilter === "negative" ? " is-active" : ""}`}
+                onClick={() => setRunPnlFilter("negative")}
+              >
+                Negative
+              </button>
+            </div>
+            <span className="table-toolbar-meta muted">
+              {filteredRuns.length}/{runs.length} shown
+            </span>
+          </div>
           <TableFrame>
             <table>
               <thead>
@@ -703,7 +811,7 @@ export default function HomePage() {
                 </tr>
               </thead>
               <tbody>
-                {runs.map((run) => {
+                {filteredRuns.map((run) => {
                   const active = run.id === selectedRunId;
                   return (
                     <tr
@@ -720,10 +828,10 @@ export default function HomePage() {
                     </tr>
                   );
                 })}
-                {!runs.length ? (
+                {!filteredRuns.length ? (
                   <tr>
                     <td colSpan={4} className="muted">
-                      No runs yet.
+                      No runs match current filters.
                     </td>
                   </tr>
                 ) : null}
@@ -828,14 +936,49 @@ export default function HomePage() {
 
       <section className="grid-analytics">
         <article className="card">
-          <h3>Equity Curve (Realized)</h3>
+          <div className="chart-head">
+            <div>
+              <h3>Equity Curve (Realized)</h3>
+              <div className="chart-legend">
+                <span className="legend-dot legend-equity" aria-hidden />
+                <span>Cumulative realized PnL</span>
+              </div>
+            </div>
+            <div className="chip-group chart-chip-group">
+              <button
+                type="button"
+                className={`chip-btn${chartWindow === "30" ? " is-active" : ""}`}
+                onClick={() => setChartWindow("30")}
+              >
+                30
+              </button>
+              <button
+                type="button"
+                className={`chip-btn${chartWindow === "80" ? " is-active" : ""}`}
+                onClick={() => setChartWindow("80")}
+              >
+                80
+              </button>
+              <button
+                type="button"
+                className={`chip-btn${chartWindow === "all" ? " is-active" : ""}`}
+                onClick={() => setChartWindow("all")}
+              >
+                All
+              </button>
+            </div>
+          </div>
           {equityChart.points.length ? (
             <>
               <div className="chart-meta">
-                <span>Closed trades: {equityChart.points.length}</span>
+                <span>Closed trades (window): {equityChart.points.length}</span>
                 <strong>Latest cumulative PnL: {fmtNumber(equityChart.latest)} USDT</strong>
+                <span className={`delta-chip${equityChart.delta >= 0 ? " pos" : " neg"}`}>
+                  Delta {fmtSignedNumber(equityChart.delta)} USDT
+                </span>
               </div>
               <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Equity curve chart">
+                <path d={equityChart.areaPath} className="chart-area chart-area-equity" />
                 <path d={equityChart.path} fill="none" stroke="#0f766e" strokeWidth="3" />
               </svg>
             </>
@@ -845,14 +988,26 @@ export default function HomePage() {
         </article>
 
         <article className="card">
-          <h3>Drawdown Curve</h3>
+          <div className="chart-head">
+            <div>
+              <h3>Drawdown Curve</h3>
+              <div className="chart-legend">
+                <span className="legend-dot legend-drawdown" aria-hidden />
+                <span>Peak-to-trough drift</span>
+              </div>
+            </div>
+          </div>
           {drawdownChart.points.length ? (
             <>
               <div className="chart-meta">
                 <span>Computed from cumulative realized PnL</span>
                 <strong>Worst drawdown: {fmtNumber(drawdownChart.worst)} USDT</strong>
+                <span className={`delta-chip${drawdownChart.delta >= 0 ? " pos" : " neg"}`}>
+                  Delta {fmtSignedNumber(drawdownChart.delta)} USDT
+                </span>
               </div>
               <svg viewBox="0 0 620 190" className="chart-svg" role="img" aria-label="Drawdown chart">
+                <path d={drawdownChart.areaPath} className="chart-area chart-area-drawdown" />
                 <path d={drawdownChart.path} fill="none" stroke="#b45309" strokeWidth="3" />
               </svg>
             </>

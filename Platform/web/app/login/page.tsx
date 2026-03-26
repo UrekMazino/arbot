@@ -5,7 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { forgotPassword, getMe, login } from "../../lib/api";
-import { defaultRememberMe, getStoredAdminAccessToken, persistAdminSession } from "../../lib/auth";
+import {
+  defaultRememberMe,
+  getStoredAdminAccessToken,
+  persistAdminSession,
+  setRememberMePreference,
+} from "../../lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -137,7 +142,11 @@ export default function LoginPage() {
                     className="h-4 w-4 rounded border-gray-300 text-brand-500 focus:ring-brand-500/20 dark:border-gray-700 dark:bg-gray-800"
                     type="checkbox"
                     checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setRememberMe(next);
+                      setRememberMePreference(next);
+                    }}
                   />
                   Keep me logged in
                 </label>

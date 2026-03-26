@@ -62,3 +62,10 @@ export function defaultRememberMe(): boolean {
   }
   return localStorage.getItem(ADMIN_REMEMBER_ME_KEY) !== "0";
 }
+
+export function setRememberMePreference(rememberMe: boolean): void {
+  if (!inBrowser()) {
+    return;
+  }
+  localStorage.setItem(ADMIN_REMEMBER_ME_KEY, rememberMe ? "1" : "0");
+}

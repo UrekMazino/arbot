@@ -88,7 +88,7 @@ export default function SuperAdminPage() {
     setUsers([]);
     setRoles([]);
     if (redirectToLogin) {
-      router.replace("/login?next=/admin");
+      router.replace("/login?next=/admin/console");
     }
   }, [router]);
 
@@ -145,7 +145,7 @@ export default function SuperAdminPage() {
     const storedEmail = getStoredAdminEmail();
     if (!stored) {
       setAuthChecked(true);
-      router.replace("/login?next=/admin");
+      router.replace("/login?next=/admin/console");
       return;
     }
     setToken(stored);

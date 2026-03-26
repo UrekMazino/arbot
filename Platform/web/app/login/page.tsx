@@ -21,7 +21,7 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(defaultRememberMe());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [nextPath, setNextPath] = useState("/admin");
+  const [nextPath, setNextPath] = useState("/admin/dashboard");
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotBusy, setForgotBusy] = useState(false);
@@ -35,7 +35,7 @@ export default function LoginPage() {
     if (raw.startsWith("/") && !raw.startsWith("//")) {
       setNextPath(raw);
     } else {
-      setNextPath("/admin");
+      setNextPath("/admin/dashboard");
     }
   }, []);
 

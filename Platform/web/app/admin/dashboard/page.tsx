@@ -11,9 +11,11 @@ import {
   RunSummary,
   ScorecardCell,
   Trade,
+  UserRecord,
   WalkForwardPoint,
   apiBaseUrl,
   apiRootUrl,
+  getMe,
   getRunConfigSnapshot,
   getRunDataQuality,
   getRunEvents,
@@ -342,6 +344,7 @@ function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
 export default function HomePage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
+  const [me, setMe] = useState<UserRecord | null>(null);
   const [password, setPassword] = useState("");
   const [token, setToken] = useState<string>("");
   const [refreshToken, setRefreshToken] = useState<string>("");
@@ -371,6 +374,7 @@ export default function HomePage() {
     setToken("");
     setRefreshToken("");
     setEmail("");
+    setMe(null);
     setRuns([]);
     setSelectedRunId("");
     setEvents([]);
@@ -606,6 +610,8 @@ export default function HomePage() {
       setToken(pair.access_token);
       setRefreshToken(pair.refresh_token);
       persistAdminSession(pair.access_token, pair.refresh_token, true, email);
+      const userData = await getMe(pair.access_token);
+      setMe(userData);
       setStatus("Authenticated");
       await loadRuns(pair.access_token);
     } catch (err) {
@@ -661,17 +667,27 @@ export default function HomePage() {
       setRefreshToken(storedRefresh);
       setEmail(storedEmail);
       setStatus("Session restored");
-      loadRuns(stored).catch((err: unknown) => {
-        if (isUnauthorizedError(err)) {
-          clearSession("Session expired. Please sign in again.");
-          setError("Session expired. Please sign in again.");
-          return;
-        }
-        const msg = err instanceof Error ? err.message : "Failed to load runs";
-        setError(msg);
-      });
+      if (stored) {
+        getMe(stored)
+          .then((userData) => {
+            setMe(userData);
+          })
+          .catch(() => {
+            // If getMe fails, continue with stored email fallback
+          });
+        loadRuns(stored).catch((err: unknown) => {
+          if (isUnauthorizedError(err)) {
+            clearSession("Session expired. Please sign in again.");
+            setError("Session expired. Please sign in again.");
+            return;
+          }
+          const msg = err instanceof Error ? err.message : "Failed to load runs";
+          setError(msg);
+        });
+      }
     }
   }, [clearSession, loadRuns]);
+
 
   useEffect(() => {
     if (!token || !selectedRunId) return;
@@ -723,7 +739,7 @@ export default function HomePage() {
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
       ]}
       auth={{
-        email: email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+        email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
       }}
     >

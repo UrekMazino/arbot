@@ -15,6 +15,7 @@ type AppHeaderProps = {
 export function AppHeader({ title, subtitle, status, actions }: AppHeaderProps) {
   const { toggleSidebar, toggleMobileSidebar } = useSidebar();
   const { theme, toggleTheme } = useTheme();
+  const uiBuild = process.env.NEXT_PUBLIC_UI_BUILD || "0d5a617";
 
   const handleMenuClick = () => {
     if (typeof window !== "undefined" && window.innerWidth >= 1024) {
@@ -45,6 +46,9 @@ export function AppHeader({ title, subtitle, status, actions }: AppHeaderProps) 
         </div>
 
         <div className="flex items-center gap-2">
+          <span className="inline-flex rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-brand-700 dark:border-brand-800 dark:bg-brand-950/30 dark:text-brand-300">
+            UI build {uiBuild}
+          </span>
           <span className="hidden rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 md:inline-flex">
             {status}
           </span>

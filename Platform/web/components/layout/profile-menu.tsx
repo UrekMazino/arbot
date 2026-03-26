@@ -33,11 +33,13 @@ export function ProfileMenu({ email }: ProfileMenuProps) {
   }, [isOpen]);
 
   const initials = email
-    ?.split("@")[0]
-    .split(".")
-    .map((part) => part[0].toUpperCase())
-    .join("")
-    .substring(0, 2) || "AD";
+    ? email
+        .split("@")[0]
+        .split(".")
+        .map((part) => (part[0] || "").toUpperCase())
+        .join("")
+        .substring(0, 2) || "AD"
+    : "AD";
 
   return (
     <div className="relative" ref={menuRef}>

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import html
-import json
-from urllib import error, request
+
+import resend
 
 from ..config import settings
 
@@ -19,7 +19,8 @@ def send_password_reset_email(recipient_email: str, reset_link: str) -> None:
     provider = str(settings.email_provider or "").strip().lower()
     if provider != "resend":
         raise RuntimeError(f"Unsupported email provider: {provider or 'none'}")
-    if not str(settings.resend_api_key or "").strip():
+    api_key = str(settings.resend_api_key or "").strip()
+    if not api_key or api_key == "re_xxxxxxxxx":
         raise RuntimeError("RESEND_API_KEY is not configured")
     if not str(settings.email_from or "").strip():
         raise RuntimeError("EMAIL_FROM is not configured")
@@ -27,7 +28,7 @@ def send_password_reset_email(recipient_email: str, reset_link: str) -> None:
     escaped_link = html.escape(reset_link, quote=True)
     payload = {
         "from": settings.email_from,
-        "to": [recipient_email],
+        "to": recipient_email,
         "subject": "Reset your OKXStatBot admin password",
         "html": (
             "<p>Hello,</p>"
@@ -43,29 +44,8 @@ def send_password_reset_email(recipient_email: str, reset_link: str) -> None:
         ),
     }
 
-    encoded = json.dumps(payload).encode("utf-8")
-    req = request.Request(
-        f"{str(settings.resend_api_base).rstrip('/')}/emails",
-        data=encoded,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {settings.resend_api_key}",
-            "Content-Type": "application/json",
-        },
-    )
-
     try:
-        with request.urlopen(req, timeout=12) as response:
-            status = int(getattr(response, "status", 0) or 0)
-            if status < 200 or status >= 300:
-                raise RuntimeError(f"Resend API responded with status {status}")
-    except error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", errors="ignore")
-        except Exception:
-            detail = ""
-        snippet = detail[:280] if detail else str(exc)
-        raise RuntimeError(f"Resend API error {exc.code}: {snippet}") from exc
+        resend.api_key = api_key
+        resend.Emails.send(payload)
     except Exception as exc:
         raise RuntimeError(f"Failed sending password reset email: {exc}") from exc

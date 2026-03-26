@@ -34,7 +34,7 @@ Default backend target (from `.env.local`):
 
 Use bootstrap admin credentials:
 
-- Email: `admin@okxstatbot.dev`
+- Email: `sirceojraiv@gmail.com`
 - Password: `ChangeMeNow123!`
 
 ## Docker Compose (full stack)

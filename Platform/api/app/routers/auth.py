@@ -97,14 +97,14 @@ def forgot_password(
     reset_link = build_password_reset_link(raw_token)
     try:
         send_password_reset_email(user.email, reset_link)
-    except Exception:
+    except Exception as exc:
         token_row.used_at = datetime.now(timezone.utc)
         db.commit()
         if settings.app_env.lower() != "production" and settings.password_reset_return_token_in_response:
             return ForgotPasswordOut(
                 message=(
                     "Email delivery is not configured. Using development fallback token flow. "
-                    "Configure RESEND_API_KEY and EMAIL_FROM for real email delivery."
+                    f"Reason: {exc}. Configure RESEND_API_KEY and EMAIL_FROM for real email delivery."
                 ),
                 reset_token=raw_token,
             )

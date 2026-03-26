@@ -11,3 +11,4 @@ passlib[argon2]==1.7.4
 python-multipart==0.0.19
 redis==5.2.1
 rq==2.0.0
+resend==2.5.1

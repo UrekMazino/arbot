@@ -340,7 +340,7 @@ function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
 
 export default function HomePage() {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@okxstatbot.dev");
+  const [email, setEmail] = useState("sirceojraiv@gmail.com");
   const [password, setPassword] = useState("ChangeMeNow123!");
   const [token, setToken] = useState<string>("");
   const [refreshToken, setRefreshToken] = useState<string>("");

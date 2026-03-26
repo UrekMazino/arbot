@@ -27,7 +27,7 @@ Web:
 
 Bootstrap admin (default):
 
-1. Email: `admin@okxstatbot.dev`
+1. Email: `sirceojraiv@gmail.com`
 2. Password: `ChangeMeNow123!`
 
 ## Next Slice

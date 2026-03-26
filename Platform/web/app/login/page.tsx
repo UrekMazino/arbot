@@ -10,14 +10,14 @@ import { defaultRememberMe, getStoredAdminAccessToken, persistAdminSession } fro
 export default function LoginPage() {
   const router = useRouter();
 
-  const [email, setEmail] = useState("admin@okxstatbot.dev");
+  const [email, setEmail] = useState("sirceojraiv@gmail.com");
   const [password, setPassword] = useState("ChangeMeNow123!");
   const [rememberMe, setRememberMe] = useState(defaultRememberMe());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [nextPath, setNextPath] = useState("/admin");
   const [showForgot, setShowForgot] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState("admin@okxstatbot.dev");
+  const [forgotEmail, setForgotEmail] = useState("sirceojraiv@gmail.com");
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotError, setForgotError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
@@ -103,7 +103,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@okxstatbot.dev"
+                  placeholder="sirceojraiv@gmail.com"
                   required
                 />
               </label>

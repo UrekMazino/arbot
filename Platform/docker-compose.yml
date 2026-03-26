@@ -30,9 +30,9 @@ services:
       PASSWORD_RESET_LINK_BASE: http://127.0.0.1:3000/reset-password
       PASSWORD_RESET_RETURN_TOKEN_IN_RESPONSE: "true"
       EMAIL_PROVIDER: resend
-      EMAIL_FROM: OKXStatBot <noreply@yourdomain.com>
+      EMAIL_FROM: ${EMAIL_FROM:-OKXStatBot <noreply@yourdomain.com>}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      BOOTSTRAP_ADMIN_EMAIL: admin@okxstatbot.dev
+      BOOTSTRAP_ADMIN_EMAIL: sirceojraiv@gmail.com
       BOOTSTRAP_ADMIN_PASSWORD: ChangeMeNow123!
       BOT_CONTROL_WORKSPACE_ROOT: /workspace
       BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
@@ -42,7 +42,7 @@ services:
       - ../:/workspace
     working_dir: /workspace/Platform/api
     command: >
-      sh -c "pip install --no-cache-dir -r /workspace/requirements.txt &&
+      sh -c "pip install --no-cache-dir -r /workspace/Platform/api/requirements.txt &&
              alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload"
 

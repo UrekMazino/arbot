@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useSyncExternalStore } from "react";
 
 type SidebarContextValue = {
   isExpanded: boolean;
@@ -13,35 +13,51 @@ type SidebarContextValue = {
 };
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
+const SIDEBAR_KEY = "v2_sidebar_collapsed";
+const SIDEBAR_EVENT = "v2_sidebar_change";
 
 function readStoredExpanded(): boolean {
   if (typeof window === "undefined") return true;
   try {
-    return localStorage.getItem("v2_sidebar_collapsed") !== "1";
+    return localStorage.getItem(SIDEBAR_KEY) !== "1";
   } catch {
     return true;
   }
 }
 
+function subscribeSidebar(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = () => onStoreChange();
+  window.addEventListener("storage", handler);
+  window.addEventListener(SIDEBAR_EVENT, handler);
+  return () => {
+    window.removeEventListener("storage", handler);
+    window.removeEventListener(SIDEBAR_EVENT, handler);
+  };
+}
+
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [isExpanded, setIsExpanded] = useState(readStoredExpanded);
+  const isExpanded = useSyncExternalStore<boolean>(subscribeSidebar, readStoredExpanded, () => true);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
-  const toggleSidebar = () => {
-    setIsExpanded((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("v2_sidebar_collapsed", next ? "0" : "1");
-      } catch {
-        // no-op
-      }
-      return next;
-    });
-  };
+  const toggleSidebar = useCallback(() => {
+    const next = !isExpanded;
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? "0" : "1");
+      window.dispatchEvent(new Event(SIDEBAR_EVENT));
+    } catch {
+      // no-op
+    }
+  }, [isExpanded]);
 
-  const toggleMobileSidebar = () => setIsMobileOpen((prev) => !prev);
-  const closeMobileSidebar = () => setIsMobileOpen(false);
+  const toggleMobileSidebar = useCallback(() => {
+    setIsMobileOpen((prev) => !prev);
+  }, []);
+
+  const closeMobileSidebar = useCallback(() => {
+    setIsMobileOpen(false);
+  }, []);
 
   const value = useMemo<SidebarContextValue>(
     () => ({
@@ -53,7 +69,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       closeMobileSidebar,
       setHovered: setIsHovered,
     }),
-    [isExpanded, isHovered, isMobileOpen],
+    [closeMobileSidebar, isExpanded, isHovered, isMobileOpen, toggleMobileSidebar, toggleSidebar],
   );
 
   return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;

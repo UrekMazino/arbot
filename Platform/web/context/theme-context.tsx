@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, useState, useEffect } from "react";
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 
 type Theme = "light" | "dark";
 
@@ -10,18 +10,31 @@ type ThemeContextValue = {
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+const THEME_KEY = "v2_theme";
+const THEME_EVENT = "v2_theme_change";
 
 function readStoredTheme(): Theme {
   if (typeof window === "undefined") return "light";
   try {
-    return localStorage.getItem("v2_theme") === "dark" ? "dark" : "light";
+    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
   } catch {
     return "light";
   }
 }
 
+function subscribeTheme(onStoreChange: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const handler = () => onStoreChange();
+  window.addEventListener("storage", handler);
+  window.addEventListener(THEME_EVENT, handler);
+  return () => {
+    window.removeEventListener("storage", handler);
+    window.removeEventListener(THEME_EVENT, handler);
+  };
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(readStoredTheme);
+  const theme = useSyncExternalStore<Theme>(subscribeTheme, readStoredTheme, () => "light");
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -30,17 +43,21 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } else {
       document.documentElement.classList.remove("dark");
     }
-    try {
-      localStorage.setItem("v2_theme", theme);
-    } catch {
-      // no-op
-    }
   }, [theme]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
-      toggleTheme: () => setTheme((prev) => (prev === "light" ? "dark" : "light")),
+      toggleTheme: () => {
+        if (typeof window === "undefined") return;
+        const nextTheme = theme === "light" ? "dark" : "light";
+        try {
+          localStorage.setItem(THEME_KEY, nextTheme);
+          window.dispatchEvent(new Event(THEME_EVENT));
+        } catch {
+          // no-op
+        }
+      },
     }),
     [theme],
   );

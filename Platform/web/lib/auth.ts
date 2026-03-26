@@ -3,9 +3,17 @@ export const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
 export const LEGACY_ACCESS_TOKEN_KEY = "v2_access_token";
 export const LEGACY_REFRESH_TOKEN_KEY = "v2_refresh_token";
 export const ADMIN_REMEMBER_ME_KEY = "v2_admin_remember_me";
+export const AUTH_STORAGE_EVENT = "v2_auth_storage_change";
 
 function inBrowser(): boolean {
   return typeof window !== "undefined";
+}
+
+function notifyAuthStorageChange(): void {
+  if (!inBrowser()) {
+    return;
+  }
+  window.dispatchEvent(new Event(AUTH_STORAGE_EVENT));
 }
 
 function readStorageKey(key: string): string {
@@ -38,6 +46,7 @@ export function persistAdminSession(accessToken: string, refreshToken: string, r
   const storage = rememberMe ? localStorage : sessionStorage;
   setTokenPair(storage, accessToken, refreshToken);
   localStorage.setItem(ADMIN_REMEMBER_ME_KEY, rememberMe ? "1" : "0");
+  notifyAuthStorageChange();
 }
 
 export function clearStoredAdminSession(): void {
@@ -46,6 +55,7 @@ export function clearStoredAdminSession(): void {
   }
   clearTokenPair(localStorage);
   clearTokenPair(sessionStorage);
+  notifyAuthStorageChange();
 }
 
 export function getStoredAdminAccessToken(): string {

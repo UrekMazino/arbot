@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   ConfigSnapshotResponse,
@@ -27,6 +28,7 @@ import {
 } from "../lib/api";
 import { DashboardShell } from "../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../components/panels";
+import { ADMIN_ACCESS_TOKEN_KEY, ADMIN_REFRESH_TOKEN_KEY } from "../lib/auth";
 
 type LiveMsg = {
   event_type?: string;
@@ -332,6 +334,7 @@ function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [email, setEmail] = useState("admin@okxstatbot.dev");
   const [password, setPassword] = useState("ChangeMeNow123!");
   const [token, setToken] = useState<string>("");
@@ -373,6 +376,8 @@ export default function HomePage() {
     setLiveFeed([]);
     localStorage.removeItem("v2_access_token");
     localStorage.removeItem("v2_refresh_token");
+    localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
+    localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
     setStatus(reason);
   }, []);
 
@@ -611,6 +616,7 @@ export default function HomePage() {
 
   function onLogout() {
     clearSession("Signed out");
+    router.replace("/login?next=/");
   }
 
   async function handleRefreshRuns() {
@@ -644,9 +650,14 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    const stored = localStorage.getItem("v2_access_token") || "";
-    const storedRefresh = localStorage.getItem("v2_refresh_token") || "";
+    const stored = localStorage.getItem("v2_access_token") || localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY) || "";
+    const storedRefresh =
+      localStorage.getItem("v2_refresh_token") || localStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || "";
     if (stored) {
+      localStorage.setItem("v2_access_token", stored);
+      if (storedRefresh) {
+        localStorage.setItem("v2_refresh_token", storedRefresh);
+      }
       setToken(stored);
       setRefreshToken(storedRefresh);
       setStatus("Session restored");

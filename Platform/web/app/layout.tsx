@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Fraunces } from "next/font/google";
+import { AuthRouteGuard } from "../components/auth-route-guard";
 import "./globals.css";
 
 const bodyFont = Space_Grotesk({
@@ -22,7 +23,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${bodyFont.variable} ${titleFont.variable}`}>{children}</body>
+      <body className={`${bodyFont.variable} ${titleFont.variable}`}>
+        <AuthRouteGuard>{children}</AuthRouteGuard>
+      </body>
     </html>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   AdminBotStatus,
@@ -21,17 +22,14 @@ import {
   isUnauthorizedError,
   listRoles,
   listUsers,
-  login,
   removeUserRole,
   startAdminBot,
   stopAdminBot,
   updateAdminEnvSetting,
 } from "../../lib/api";
+import { ADMIN_ACCESS_TOKEN_KEY, ADMIN_REFRESH_TOKEN_KEY } from "../../lib/auth";
 import { DashboardShell } from "../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../components/panels";
-
-const ADMIN_ACCESS_TOKEN_KEY = "v2_admin_access_token";
-const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";
@@ -53,11 +51,11 @@ function fmtUnix(value: number | null | undefined): string {
 }
 
 export default function SuperAdminPage() {
-  const [email, setEmail] = useState("admin@okxstatbot.dev");
-  const [password, setPassword] = useState("ChangeMeNow123!");
+  const router = useRouter();
   const [token, setToken] = useState<string>("");
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
+  const [authChecked, setAuthChecked] = useState(false);
 
   const [me, setMe] = useState<UserRecord | null>(null);
   const [botStatus, setBotStatus] = useState<AdminBotStatus | null>(null);
@@ -77,7 +75,7 @@ export default function SuperAdminPage() {
   const [roleTargetUser, setRoleTargetUser] = useState("");
   const [roleName, setRoleName] = useState("viewer");
 
-  const clearAdminSession = useCallback((reason = "Signed out") => {
+  const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     localStorage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
     localStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
     setToken("");
@@ -90,7 +88,10 @@ export default function SuperAdminPage() {
     setLogTail(null);
     setUsers([]);
     setRoles([]);
-  }, []);
+    if (redirectToLogin) {
+      router.replace("/login?next=/admin");
+    }
+  }, [router]);
 
   const sortedEnvKeys = useMemo(
     () => Object.keys(envSettings.values || {}).sort((a, b) => a.localeCompare(b)),
@@ -142,28 +143,33 @@ export default function SuperAdminPage() {
 
   useEffect(() => {
     const stored = localStorage.getItem(ADMIN_ACCESS_TOKEN_KEY) || "";
-    if (!stored) return;
+    if (!stored) {
+      setAuthChecked(true);
+      router.replace("/login?next=/admin");
+      return;
+    }
     setToken(stored);
     setStatus("Session restored");
     loadAdminData(stored)
       .then(() => refreshLogTail(stored, "latest"))
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
-          clearAdminSession("Session expired. Please sign in again.");
+          clearAdminSession("Session expired. Please sign in again.", true);
           setError("Session expired. Please sign in again.");
           return;
         }
         const msg = err instanceof Error ? err.message : "Failed loading admin data";
         setError(msg);
-      });
-  }, [clearAdminSession, loadAdminData, refreshLogTail]);
+      })
+      .finally(() => setAuthChecked(true));
+  }, [clearAdminSession, loadAdminData, refreshLogTail, router]);
 
   useEffect(() => {
     if (!token || !me?.is_superuser) return;
     const timer = window.setInterval(() => {
       refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
-          clearAdminSession("Session expired. Please sign in again.");
+          clearAdminSession("Session expired. Please sign in again.", true);
           setError("Session expired. Please sign in again.");
         }
       });
@@ -171,29 +177,8 @@ export default function SuperAdminPage() {
     return () => window.clearInterval(timer);
   }, [clearAdminSession, token, me?.is_superuser, selectedRunKey, refreshLogTail]);
 
-  async function onLoginSubmit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const pair = await login(email, password);
-      localStorage.setItem(ADMIN_ACCESS_TOKEN_KEY, pair.access_token);
-      localStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, pair.refresh_token);
-      setToken(pair.access_token);
-      await loadAdminData(pair.access_token);
-      await refreshLogTail(pair.access_token, "latest");
-      setStatus("Authenticated");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Login failed";
-      setError(msg);
-      setStatus("Authentication failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function handleLogout() {
-    clearAdminSession("Signed out");
+    clearAdminSession("Signed out", true);
   }
 
   async function handleStart() {
@@ -206,7 +191,7 @@ export default function SuperAdminPage() {
       setStatus("Bot start requested");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -227,7 +212,7 @@ export default function SuperAdminPage() {
       setStatus("Bot stop requested");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -248,7 +233,7 @@ export default function SuperAdminPage() {
       setStatus("Refreshed");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -271,7 +256,7 @@ export default function SuperAdminPage() {
       setStatus(`Saved ${key}`);
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -302,7 +287,7 @@ export default function SuperAdminPage() {
       setStatus("User created");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -325,7 +310,7 @@ export default function SuperAdminPage() {
       setStatus("Role assigned");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -347,7 +332,7 @@ export default function SuperAdminPage() {
       setStatus("Role removed");
     } catch (err) {
       if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.");
+        clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
         return;
       }
@@ -364,40 +349,16 @@ export default function SuperAdminPage() {
     "inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700";
   const sectionCardClasses = "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900";
 
-  if (!token) {
+  if (!authChecked) {
     return (
-      <DashboardShell
-        title="Super Admin Console"
-        subtitle="Control bot runs, live logs, settings, users, and roles."
-        status={status}
-        activeHref="/admin"
-        navItems={[
-          { href: "/", label: "Analytics", hint: "Runs, quality, reports", group: "Monitor", icon: "AN" },
-          { href: "/admin", label: "Super Admin", hint: "Control plane", group: "Operate", icon: "SA" },
-        ]}
-      >
-        <div className="grid gap-4">
-          <section className={`${sectionCardClasses} mx-auto w-full max-w-2xl`}>
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Super Admin Console</h1>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Control bot runs, live logs, settings, users, and roles.</p>
-            <form onSubmit={onLoginSubmit} className="mt-4 grid max-w-md gap-2">
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" required />
-              <input
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                type="password"
-                placeholder="Password"
-                required
-              />
-              <button type="submit" disabled={busy} className={primaryButtonClasses}>
-                {busy ? "Signing in..." : "Sign in"}
-              </button>
-            </form>
-            {error ? <p className="mt-3 text-sm text-error-600 dark:text-error-400">{error}</p> : null}
-          </section>
-        </div>
-      </DashboardShell>
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <p className="text-sm text-gray-500 dark:text-gray-400">Checking admin session...</p>
+      </div>
     );
+  }
+
+  if (!token) {
+    return null;
   }
 
   if (me && !me.is_superuser) {

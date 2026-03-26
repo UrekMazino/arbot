@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     refresh_token_secret: str = "change-me-refresh"
     refresh_token_days: int = 14
     password_reset_minutes: int = 30
+    password_reset_link_base: str = "http://127.0.0.1:3000/reset-password"
+    password_reset_return_token_in_response: bool = False
+    email_provider: str = "resend"
+    email_from: str = ""
+    resend_api_key: str = ""
+    resend_api_base: str = "https://api.resend.com"
     jwt_algorithm: str = "HS256"
 
     bootstrap_admin_email: str = "admin@okxstatbot.dev"

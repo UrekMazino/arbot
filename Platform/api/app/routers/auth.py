@@ -29,6 +29,7 @@ from ..security import (
     hash_refresh_token,
     verify_password,
 )
+from ..services.email_delivery import build_password_reset_link, send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -68,7 +69,7 @@ def forgot_password(
     db: Session = Depends(get_db_session),
 ):
     user = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
-    generic_message = "If the account exists, a password reset token has been generated."
+    generic_message = "If the account exists, a password reset link has been sent."
     if not user or not user.is_active:
         return ForgotPasswordOut(message=generic_message)
 
@@ -84,18 +85,36 @@ def forgot_password(
         token.used_at = now
 
     raw_token, token_hash, expires = create_password_reset_token()
-    db.add(
-        PasswordResetToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=expires,
-            ip=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
-        )
+    token_row = PasswordResetToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires,
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
     )
-    db.commit()
+    db.add(token_row)
 
-    if settings.app_env.lower() != "production":
+    reset_link = build_password_reset_link(raw_token)
+    try:
+        send_password_reset_email(user.email, reset_link)
+    except Exception:
+        token_row.used_at = datetime.now(timezone.utc)
+        db.commit()
+        if settings.app_env.lower() != "production" and settings.password_reset_return_token_in_response:
+            return ForgotPasswordOut(
+                message=(
+                    "Email delivery is not configured. Using development fallback token flow. "
+                    "Configure RESEND_API_KEY and EMAIL_FROM for real email delivery."
+                ),
+                reset_token=raw_token,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to send reset email right now.",
+        )
+
+    db.commit()
+    if settings.app_env.lower() != "production" and settings.password_reset_return_token_in_response:
         return ForgotPasswordOut(message=generic_message, reset_token=raw_token)
     return ForgotPasswordOut(message=generic_message)
 

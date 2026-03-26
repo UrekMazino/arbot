@@ -1,9 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { forgotPassword, getMe, login, resetPassword } from "../../lib/api";
+import { forgotPassword, getMe, login } from "../../lib/api";
 import { defaultRememberMe, getStoredAdminAccessToken, persistAdminSession } from "../../lib/auth";
 
 export default function LoginPage() {
@@ -20,12 +21,7 @@ export default function LoginPage() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotError, setForgotError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
-  const [resetTokenValue, setResetTokenValue] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [resetBusy, setResetBusy] = useState(false);
-  const [resetError, setResetError] = useState("");
-  const [resetMessage, setResetMessage] = useState("");
+  const [devResetToken, setDevResetToken] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -70,52 +66,18 @@ export default function LoginPage() {
     setForgotBusy(true);
     setForgotError("");
     setForgotMessage("");
-    setResetMessage("");
+    setDevResetToken("");
     try {
       const response = await forgotPassword(forgotEmail);
       setForgotMessage(response.message || "If this account exists, a reset flow has been started.");
       if (response.reset_token) {
-        setResetTokenValue(response.reset_token);
+        setDevResetToken(response.reset_token);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to request password reset";
       setForgotError(msg);
     } finally {
       setForgotBusy(false);
-    }
-  }
-
-  async function onResetSubmit(e: FormEvent) {
-    e.preventDefault();
-    setResetError("");
-    setResetMessage("");
-    const normalizedToken = resetTokenValue.trim();
-    if (!normalizedToken) {
-      setResetError("Reset token is required.");
-      return;
-    }
-    if (newPassword.length < 8) {
-      setResetError("New password must be at least 8 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setResetError("Password confirmation does not match.");
-      return;
-    }
-
-    setResetBusy(true);
-    try {
-      const response = await resetPassword(normalizedToken, newPassword);
-      setResetMessage(response.message || "Password updated successfully.");
-      setPassword("");
-      setResetTokenValue("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to reset password";
-      setResetError(msg);
-    } finally {
-      setResetBusy(false);
     }
   }
 
@@ -175,8 +137,7 @@ export default function LoginPage() {
                     setForgotEmail(email || forgotEmail);
                     setForgotError("");
                     setForgotMessage("");
-                    setResetError("");
-                    setResetMessage("");
+                    setDevResetToken("");
                   }}
                   className="text-xs font-semibold text-brand-600 transition hover:text-brand-500 dark:text-brand-400 dark:hover:text-brand-300"
                 >
@@ -199,7 +160,7 @@ export default function LoginPage() {
               <div className="mt-5 rounded-2xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-800/40">
                 <h2 className="text-sm font-semibold text-gray-900 dark:text-white/90">Forgot password</h2>
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Request a one-time reset token, then set a new admin password.
+                  Enter your admin email and we will send you a reset link.
                 </p>
 
                 <form onSubmit={onForgotSubmit} className="mt-3 grid gap-2">
@@ -224,53 +185,17 @@ export default function LoginPage() {
 
                 {forgotError ? <p className="mt-2 text-xs text-error-600 dark:text-error-400">{forgotError}</p> : null}
                 {forgotMessage ? <p className="mt-2 text-xs text-success-700 dark:text-success-400">{forgotMessage}</p> : null}
-
-                <form onSubmit={onResetSubmit} className="mt-4 grid gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
-                    Reset token
-                    <input
-                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
-                      value={resetTokenValue}
-                      onChange={(e) => setResetTokenValue(e.target.value)}
-                      placeholder="Paste reset token"
-                      required
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
-                    New password
-                    <input
-                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
-                      type="password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="At least 8 characters"
-                      minLength={8}
-                      required
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs font-medium text-gray-700 dark:text-gray-300">
-                    Confirm new password
-                    <input
-                      className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90 dark:focus:border-brand-500"
-                      type="password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="Repeat new password"
-                      minLength={8}
-                      required
-                    />
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={resetBusy}
-                    className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-70 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white"
-                  >
-                    {resetBusy ? "Updating..." : "Reset Password"}
-                  </button>
-                </form>
-
-                {resetError ? <p className="mt-2 text-xs text-error-600 dark:text-error-400">{resetError}</p> : null}
-                {resetMessage ? <p className="mt-2 text-xs text-success-700 dark:text-success-400">{resetMessage}</p> : null}
+                {devResetToken ? (
+                  <p className="mt-2 text-xs text-warning-700 dark:text-warning-400">
+                    Dev fallback token issued. Continue here:{" "}
+                    <Link
+                      href={`/reset-password?token=${encodeURIComponent(devResetToken)}`}
+                      className="font-semibold text-brand-600 underline dark:text-brand-300"
+                    >
+                      Open reset page
+                    </Link>
+                  </p>
+                ) : null}
               </div>
             ) : null}
 

@@ -28,7 +28,7 @@ import {
   updateAdminEnvSetting,
 } from "../../lib/api";
 import { DashboardShell } from "../../components/dashboard-shell";
-import { PanelCard, TableFrame } from "../../components/panels";
+import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../components/panels";
 
 const ADMIN_ACCESS_TOKEN_KEY = "v2_admin_access_token";
 const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
@@ -50,6 +50,33 @@ function fmtBytes(value: number | null | undefined): string {
 function fmtUnix(value: number | null | undefined): string {
   if (!value || Number.isNaN(value)) return "n/a";
   return new Date(value * 1000).toLocaleString();
+}
+
+function statusTone(value: string | null | undefined): "success" | "warn" | "error" | "info" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "info";
+  if (
+    normalized.includes("running") ||
+    normalized.includes("pass") ||
+    normalized.includes("active") ||
+    normalized.includes("ok") ||
+    normalized.includes("success")
+  ) {
+    return "success";
+  }
+  if (normalized.includes("warn") || normalized.includes("pending") || normalized.includes("start")) {
+    return "warn";
+  }
+  if (
+    normalized.includes("fail") ||
+    normalized.includes("error") ||
+    normalized.includes("critical") ||
+    normalized.includes("stop") ||
+    normalized.includes("inactive")
+  ) {
+    return "error";
+  }
+  return "info";
 }
 
 export default function SuperAdminPage() {
@@ -95,6 +122,10 @@ export default function SuperAdminPage() {
   const sortedEnvKeys = useMemo(
     () => Object.keys(envSettings.values || {}).sort((a, b) => a.localeCompare(b)),
     [envSettings.values],
+  );
+  const reportFileCount = useMemo(
+    () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
+    [reportRuns],
   );
 
   const loadAdminData = useCallback(
@@ -450,10 +481,50 @@ export default function SuperAdminPage() {
 
       {error ? <p className="error">{error}</p> : null}
 
+      <section className="ta-metrics-grid">
+        <MetricCard
+          label="Bot Runtime"
+          value={botStatus?.running ? "RUNNING" : "STOPPED"}
+          hint={botStatus?.pid ? `pid ${botStatus.pid}` : "process not active"}
+          tone={botStatus?.running ? "teal" : "rose"}
+        />
+        <MetricCard
+          label="Latest Run Key"
+          value={botStatus?.latest_run_key || "n/a"}
+          hint={`selected ${selectedRunKey}`}
+          tone="sky"
+        />
+        <MetricCard
+          label="Log Runs"
+          value={String(logRuns.length)}
+          hint={logRuns[0] ? `last update ${fmtUnix(logRuns[0].mtime_ts)}` : "no logs yet"}
+          tone="amber"
+        />
+        <MetricCard
+          label="Report Files"
+          value={String(reportFileCount)}
+          hint={`${reportRuns.length} report batches`}
+          tone="violet"
+        />
+        <MetricCard
+          label="Users"
+          value={String(users.length)}
+          hint={`${users.filter((user) => user.is_superuser).length} superusers`}
+          tone="teal"
+        />
+        <MetricCard
+          label="Roles"
+          value={String(roles.length)}
+          hint={roles.map((role) => role.name).slice(0, 3).join(", ") || "none"}
+          tone="sky"
+        />
+      </section>
+
       <section className="admin-grid">
         <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
           <p>
-            <strong>Running:</strong> {botStatus?.running ? "yes" : "no"}
+            <strong>Running:</strong>{" "}
+            <StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} />
           </p>
           <p>
             <strong>PID:</strong> {botStatus?.pid || "n/a"}
@@ -534,7 +605,9 @@ export default function SuperAdminPage() {
                   <tr key={row.run_key}>
                     <td>{row.run_key}</td>
                     <td>{row.file_count}</td>
-                    <td>{row.summary_json ? "yes" : "no"}</td>
+                    <td>
+                      <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
+                    </td>
                     <td>{fmtUnix(row.mtime_ts)}</td>
                   </tr>
                 ))}

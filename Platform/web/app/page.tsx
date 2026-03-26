@@ -26,7 +26,7 @@ import {
   wsDashboardUrl,
 } from "../lib/api";
 import { DashboardShell } from "../components/dashboard-shell";
-import { PanelCard, TableFrame } from "../components/panels";
+import { MetricCard, PanelCard, StatusPill, TableFrame } from "../components/panels";
 
 type LiveMsg = {
   event_type?: string;
@@ -178,6 +178,40 @@ function qualityClass(status: string | null | undefined): string {
   if (normalized === "pass") return "quality-pass";
   if (normalized === "warn" || normalized === "unknown") return "quality-warn";
   return "quality-fail";
+}
+
+function statusTone(value: string | null | undefined): "success" | "warn" | "error" | "info" {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "info";
+  if (
+    normalized.includes("running") ||
+    normalized.includes("pass") ||
+    normalized.includes("active") ||
+    normalized.includes("ok") ||
+    normalized.includes("success") ||
+    normalized.includes("done")
+  ) {
+    return "success";
+  }
+  if (
+    normalized.includes("warn") ||
+    normalized.includes("pending") ||
+    normalized.includes("queue") ||
+    normalized.includes("start") ||
+    normalized.includes("refresh")
+  ) {
+    return "warn";
+  }
+  if (
+    normalized.includes("fail") ||
+    normalized.includes("error") ||
+    normalized.includes("critical") ||
+    normalized.includes("stop") ||
+    normalized.includes("inactive")
+  ) {
+    return "error";
+  }
+  return "info";
 }
 
 type ChartPoint = {
@@ -369,6 +403,11 @@ export default function HomePage() {
     const worst = values.length ? Math.min(...values) : 0;
     return { points, path: pointsToPath(points), worst };
   }, [drawdownSeries]);
+
+  const reportFileCount = useMemo(
+    () => reportArtifacts.reduce((acc, row) => acc + row.files.length, 0),
+    [reportArtifacts],
+  );
 
   const configSnapshotText = useMemo(() => {
     if (!configSnapshot?.config_snapshot) return "";
@@ -612,6 +651,45 @@ export default function HomePage() {
         {error ? <p className="error">{error}</p> : null}
       </section>
 
+      <section className="ta-metrics-grid">
+        <MetricCard
+          label="Selected Run"
+          value={selectedRun?.run_key || "n/a"}
+          hint={`${runs.length} runs loaded`}
+          tone="sky"
+        />
+        <MetricCard
+          label="Session PnL"
+          value={`${fmtNumber(selectedRun?.session_pnl)} USDT`}
+          hint={`equity close ${fmtNumber(selectedRun?.end_equity)}`}
+          tone={selectedRun && (selectedRun.session_pnl || 0) < 0 ? "rose" : "teal"}
+        />
+        <MetricCard
+          label="Win Rate"
+          value={`${fmtNumber(tradeStats.winRate)}%`}
+          hint={`${tradeStats.wins}W / ${tradeStats.losses}L`}
+          tone="violet"
+        />
+        <MetricCard
+          label="Worst Drawdown"
+          value={`${fmtNumber(drawdownChart.worst)} USDT`}
+          hint={`${drawdownChart.points.length} points`}
+          tone="amber"
+        />
+        <MetricCard
+          label="Data Quality"
+          value={String(qualitySummary?.overall_status || "unknown").toUpperCase()}
+          hint={`${qualitySummary?.recent_issues?.length || 0} recent issues`}
+          tone={qualitySummary?.overall_status === "pass" ? "teal" : qualitySummary ? "amber" : "sky"}
+        />
+        <MetricCard
+          label="Report Files"
+          value={String(reportFileCount)}
+          hint={`${reportArtifacts.length} report batches`}
+          tone="sky"
+        />
+      </section>
+
       <section className="grid-main">
         <PanelCard title="Runs" subtitle="Select run to load trades, events, and quality snapshots.">
           <TableFrame>
@@ -634,7 +712,9 @@ export default function HomePage() {
                       onClick={() => setSelectedRunId(run.id)}
                     >
                       <td>{run.run_key}</td>
-                      <td>{run.status}</td>
+                      <td>
+                        <StatusPill label={run.status || "unknown"} tone={statusTone(run.status)} />
+                      </td>
                       <td>{fmtNumber(run.session_pnl)}</td>
                       <td>{fmtDuration(run.start_ts, run.end_ts)}</td>
                     </tr>

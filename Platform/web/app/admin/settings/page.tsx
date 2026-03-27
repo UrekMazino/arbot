@@ -237,7 +237,7 @@ export default function SettingsPage() {
                       <tr className="border-b border-gray-200 dark:border-gray-700">
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Key</th>
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Value</th>
-                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Action</th>
+                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-40">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -262,7 +262,7 @@ export default function SettingsPage() {
                                 <span className="text-gray-700 dark:text-gray-300">{currentValue || "(empty)"}</span>
                               )}
                             </td>
-                            <td className="px-4 py-2 text-sm">
+                            <td className="px-4 py-2 text-sm w-40">
                               {isEditing ? (
                                 <div className="flex gap-2">
                                   <button
@@ -327,7 +327,7 @@ export default function SettingsPage() {
                       <tr className="border-b border-gray-200 dark:border-gray-700">
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Key</th>
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Value</th>
-                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Action</th>
+                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-40">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -355,7 +355,7 @@ export default function SettingsPage() {
                                 </span>
                               )}
                             </td>
-                            <td className="px-4 py-2 text-sm">
+                            <td className="px-4 py-2 text-sm w-40">
                               {isEditing ? (
                                 <div className="flex gap-2">
                                   <button

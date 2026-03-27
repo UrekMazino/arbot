@@ -11,12 +11,10 @@ import {
   createUser,
   deleteRole,
   getMe,
-  getRolePermissions,
   isUnauthorizedError,
   listRoles,
   listUsers,
   removeUserRole,
-  setRolePermissions,
   updateRole,
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
@@ -54,8 +52,7 @@ export default function UserManagementPage() {
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingRoleName, setEditingRoleName] = useState("");
   const [editingRoleDescription, setEditingRoleDescription] = useState("");
-  const [selectedRoleForPermissions, setSelectedRoleForPermissions] = useState<string | null>(null);
-  const [rolePermissionsMap, setRolePermissionsMap] = useState<Record<string, string[]>>({});
+
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -241,16 +238,14 @@ export default function UserManagementPage() {
     }
   }
 
-  async function handleDeleteRole(roleName: string) {
+  async function handleDeleteRole(roleId: string, roleName: string) {
     if (!token || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
 
     setBusy(true);
     setError("");
     try {
-      await deleteRole(token, roleName);
-      if (selectedRoleForPermissions === roleName) {
-        setSelectedRoleForPermissions(null);
-      }
+      await deleteRole(token, roleId);
+
       setStatus("Role deleted");
       await loadUserManagementData(token);
     } catch (err) {
@@ -266,32 +261,7 @@ export default function UserManagementPage() {
     }
   }
 
-  async function handleToggleRolePermission(roleName: string, permissionId: string) {
-    if (!token) return;
 
-    setBusy(true);
-    setError("");
-    try {
-      const currentPerms = rolePermissionsMap[roleName] || [];
-      const updated = currentPerms.includes(permissionId)
-        ? currentPerms.filter((p) => p !== permissionId)
-        : [...currentPerms, permissionId];
-
-      await setRolePermissions(token, roleName, updated);
-      setRolePermissionsMap((prev) => ({ ...prev, [roleName]: updated }));
-      setStatus("Role permissions updated");
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Update role permissions failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   function toggleUserPermission(userId: string, permissionId: string) {
     setUserPermissionsMap((prev) => {
@@ -631,17 +601,10 @@ export default function UserManagementPage() {
                                   >
                                     Edit
                                   </button>
-                                  <button
-                                    onClick={() => {
-                                      setSelectedRoleForPermissions(role.name);
-                                    }}
-                                    className="text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
-                                  >
-                                    Permissions
-                                  </button>
+
                                   {role.name !== "admin" && role.name !== "editor" && role.name !== "viewer" && (
                                     <button
-                                      onClick={() => handleDeleteRole(role.name)}
+                                      onClick={() => handleDeleteRole(role.id, role.name)}
                                       className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                                       disabled={busy}
                                     >
@@ -666,73 +629,7 @@ export default function UserManagementPage() {
                 </div>
 
                 {/* Role Permissions Management */}
-                {selectedRoleForPermissions && (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-900/20">
-                    <div className="mb-4 flex items-center justify-between">
-                      <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
-                        Manage Permissions for "{selectedRoleForPermissions}"
-                      </h4>
-                      <button
-                        onClick={() => setSelectedRoleForPermissions(null)}
-                        className="text-blue-600 hover:text-blue-700 dark:text-blue-400"
-                      >
-                        ✕
-                      </button>
-                    </div>
 
-                    <div className="space-y-2">
-                      {AVAILABLE_PERMISSIONS.map((perm) => {
-                        const rolePerms = rolePermissionsMap[selectedRoleForPermissions] || [];
-                        const hasPermission = rolePerms.includes(perm.id);
-                        return (
-                          <label
-                            key={perm.id}
-                            className="flex items-start gap-3 rounded border border-blue-200 p-3 dark:border-blue-800"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={hasPermission}
-                              onChange={() =>
-                                handleToggleRolePermission(selectedRoleForPermissions, perm.id)
-                              }
-                              disabled={busy}
-                              className="mt-1 h-4 w-4 cursor-pointer rounded"
-                            />
-                            <div className="flex-1">
-                              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
-                                {perm.label}
-                              </p>
-                              <p className="text-xs text-blue-700 dark:text-blue-300">
-                                {perm.description}
-                              </p>
-                            </div>
-                          </label>
-                        );
-                      })}
-                    </div>
-
-                    {(rolePermissionsMap[selectedRoleForPermissions] || []).length > 0 && (
-                      <div className="mt-4 rounded bg-blue-100 p-3 dark:bg-blue-900">
-                        <p className="mb-2 text-xs font-semibold text-blue-900 dark:text-blue-200">
-                          Assigned Permissions:
-                        </p>
-                        <div className="flex flex-wrap gap-1">
-                          {(rolePermissionsMap[selectedRoleForPermissions] || []).map((permId) => {
-                            const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
-                            return (
-                              <span
-                                key={permId}
-                                className="inline-flex items-center rounded-full bg-blue-200 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-800 dark:text-blue-200"
-                              >
-                                {perm?.label || permId}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 

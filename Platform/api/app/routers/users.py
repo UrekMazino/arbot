@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..deps import get_db_session, require_roles
 from ..models import Role, User
-from ..schemas import MessageOut, RoleOut, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
+from ..schemas import MessageOut, RoleOut, RoleCreateIn, RoleUpdateIn, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
 from ..security import hash_password
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -19,6 +19,79 @@ def list_roles(
 ):
     stmt = select(Role).order_by(Role.name.asc())
     return list(db.execute(stmt).scalars().all())
+
+
+@router.get("/roles/{role_id}", response_model=RoleOut)
+def get_role(
+    role_id: str,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db_session),
+):
+    role = db.get(Role, role_id)
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    return role
+
+
+@router.post("/roles", response_model=RoleOut)
+def create_role(
+    body: RoleCreateIn,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db_session),
+):
+    exists = db.execute(select(Role).where(Role.name == body.name.lower())).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role name already exists")
+
+    role = Role(name=body.name.lower(), description=body.description)
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@router.put("/roles/{role_id}", response_model=RoleOut)
+def update_role(
+    role_id: str,
+    body: RoleUpdateIn,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db_session),
+):
+    role = db.get(Role, role_id)
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+    if body.name is not None:
+        exists = db.execute(select(Role).where(Role.name == body.name.lower())).scalar_one_or_none()
+        if exists and exists.id != role_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role name already exists")
+        role.name = body.name.lower()
+
+    if body.description is not None:
+        role.description = body.description
+
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@router.delete("/roles/{role_id}", response_model=MessageOut)
+def delete_role(
+    role_id: str,
+    _: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db_session),
+):
+    role = db.get(Role, role_id)
+    if not role:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+
+    # Prevent deletion of built-in roles
+    if role.name in ["admin", "trader", "viewer"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot delete built-in roles")
+
+    db.delete(role)
+    db.commit()
+    return MessageOut(message="Role deleted")
 
 
 @router.get("", response_model=list[UserOut])

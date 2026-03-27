@@ -51,6 +51,16 @@ class RoleOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RoleCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class RoleUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=255)
+
+
 class UserOut(BaseModel):
     id: str
     email: str

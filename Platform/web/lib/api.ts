@@ -381,6 +381,11 @@ export async function removeUserRole(token: string, userId: string, role: string
   return apiRequest<{ message: string }>(`/users/${encodedUser}/roles/${encodedRole}`, { method: "DELETE" }, token);
 }
 
+export async function deleteUser(token: string, userId: string): Promise<{ message: string }> {
+  const encodedUser = encodeURIComponent(userId);
+  return apiRequest<{ message: string }>(`/users/${encodedUser}`, { method: "DELETE" }, token);
+}
+
 export async function createRole(
   token: string,
   body: { name: string; description?: string },

@@ -10,6 +10,7 @@ import {
   createRole,
   createUser,
   deleteRole,
+  deleteUser,
   getMe,
   isUnauthorizedError,
   listRoles,
@@ -41,8 +42,6 @@ export default function UserManagementPage() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserSuper, setNewUserSuper] = useState(false);
-  const [roleTargetUser, setRoleTargetUser] = useState("");
-  const [roleName, setRoleName] = useState("viewer");
   const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
   const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
 
@@ -52,6 +51,12 @@ export default function UserManagementPage() {
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingRoleName, setEditingRoleName] = useState("");
   const [editingRoleDescription, setEditingRoleDescription] = useState("");
+
+  // Modal states
+  const [assignRoleModalUser, setAssignRoleModalUser] = useState<UserRecord | null>(null);
+  const [assignRoleModalRoleName, setAssignRoleModalRoleName] = useState("");
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<UserRecord | null>(null);
+  const [viewPermissionsUser, setViewPermissionsUser] = useState<UserRecord | null>(null);
 
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
@@ -77,11 +82,8 @@ export default function UserManagementPage() {
       setMe(meData);
       setUsers(usersData);
       setRoles(rolesData);
-      if (!roleTargetUser && usersData.length > 0) {
-        setRoleTargetUser(usersData[0].id);
-      }
     },
-    [roleTargetUser],
+    [],
   );
 
   useEffect(() => {
@@ -136,29 +138,6 @@ export default function UserManagementPage() {
     }
   }
 
-  async function handleAssignRole(e: FormEvent) {
-    e.preventDefault();
-    if (!token || !roleTargetUser || !roleName) return;
-
-    setBusy(true);
-    setError("");
-    try {
-      await assignUserRole(token, roleTargetUser, roleName);
-      setStatus("Role assigned");
-      await loadUserManagementData(token);
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Assign role failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleRemoveRole(userId: string, roleNameToRemove: string) {
     if (!token) return;
 
@@ -175,6 +154,54 @@ export default function UserManagementPage() {
         return;
       }
       const msg = err instanceof Error ? err.message : "Remove role failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteUser(userId: string) {
+    if (!token) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      await deleteUser(token, userId);
+      setDeleteConfirmUser(null);
+      setStatus("User deleted");
+      await loadUserManagementData(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Delete user failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAssignRoleFromModal(e: FormEvent) {
+    e.preventDefault();
+    if (!token || !assignRoleModalUser || !assignRoleModalRoleName) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      await assignUserRole(token, assignRoleModalUser.id, assignRoleModalRoleName);
+      setAssignRoleModalUser(null);
+      setAssignRoleModalRoleName("");
+      setStatus("Role assigned");
+      await loadUserManagementData(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Assign role failed";
       setError(msg);
     } finally {
       setBusy(false);
@@ -395,71 +422,107 @@ export default function UserManagementPage() {
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">User Management</h3>
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Create new users and manage their roles and permissions.</p>
                 </div>
-                <form onSubmit={handleCreateUser} className="mb-6 flex flex-wrap items-center gap-2">
-                  <input
-                    value={newUserEmail}
-                    onChange={(e) => setNewUserEmail(e.target.value)}
-                    placeholder="email"
-                    required
-                    className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  />
-                  <input
-                    value={newUserPassword}
-                    onChange={(e) => setNewUserPassword(e.target.value)}
-                    placeholder="password"
-                    type="password"
-                    required
-                    className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  />
-                  <label className="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    <input
-                      className="h-4 w-4 min-w-0"
-                      type="checkbox"
-                      checked={newUserSuper}
-                      onChange={(e) => setNewUserSuper(e.target.checked)}
-                    />
-                    superuser
-                  </label>
-                  <button type="submit" disabled={busy} className={primaryButtonClasses}>
-                    Create User
-                  </button>
-                </form>
 
+                {/* Create User Form */}
+                <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-white/90">Create New User</h4>
+                  <form onSubmit={handleCreateUser} className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={newUserEmail}
+                      onChange={(e) => setNewUserEmail(e.target.value)}
+                      placeholder="email"
+                      required
+                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    />
+                    <input
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      placeholder="password"
+                      type="password"
+                      required
+                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    />
+                    <label className="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <input
+                        className="h-4 w-4 min-w-0"
+                        type="checkbox"
+                        checked={newUserSuper}
+                        onChange={(e) => setNewUserSuper(e.target.checked)}
+                      />
+                      superuser
+                    </label>
+                    <button type="submit" disabled={busy} className={primaryButtonClasses}>
+                      Create User
+                    </button>
+                  </form>
+                </div>
+
+                {/* Users List */}
                 <TableFrame compact>
                   <table>
                     <thead>
                       <tr>
                         <th>Email</th>
                         <th>Active</th>
-                        <th>Super</th>
                         <th>Roles</th>
+                        <th>Permissions</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {users.map((user) => (
                         <tr key={user.id}>
-                          <td>{user.email}</td>
+                          <td className="font-medium">{user.email}</td>
                           <td>{user.is_active ? "yes" : "no"}</td>
-                          <td>{user.is_superuser ? "yes" : "no"}</td>
                           <td>
                             <div className="flex flex-wrap items-center gap-1.5">
-                              {user.roles.map((role) => (
-                                <button
-                                  key={`${user.id}-${role.name}`}
-                                  className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                                  onClick={() => handleRemoveRole(user.id, role.name)}
-                                  disabled={busy}
-                                >
-                                  {role.name} x
-                                </button>
-                              ))}
+                              {user.roles.length > 0 ? (
+                                user.roles.map((role) => (
+                                  <button
+                                    key={`${user.id}-${role.name}`}
+                                    className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                                    onClick={() => handleRemoveRole(user.id, role.name)}
+                                    disabled={busy}
+                                  >
+                                    {role.name} x
+                                  </button>
+                                ))
+                              ) : (
+                                <span className="text-xs text-gray-400">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => setViewPermissionsUser(user)}
+                              className="text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
+                            >
+                              View
+                            </button>
+                          </td>
+                          <td>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setAssignRoleModalUser(user)}
+                                className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                                disabled={busy}
+                              >
+                                Assign Role
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirmUser(user)}
+                                className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                                disabled={busy}
+                              >
+                                Delete
+                              </button>
                             </div>
                           </td>
                         </tr>
                       ))}
                       {!users.length ? (
                         <tr>
-                          <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                          <td colSpan={5} className="text-sm text-gray-500 dark:text-gray-400">
                             No users found.
                           </td>
                         </tr>
@@ -467,6 +530,148 @@ export default function UserManagementPage() {
                     </tbody>
                   </table>
                 </TableFrame>
+
+                {/* Assign Role Modal */}
+                {assignRoleModalUser && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
+                      <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white/90">
+                        Assign Role to {assignRoleModalUser.email}
+                      </h3>
+                      <form onSubmit={handleAssignRoleFromModal} className="space-y-4">
+                        <select
+                          value={assignRoleModalRoleName}
+                          onChange={(e) => setAssignRoleModalRoleName(e.target.value)}
+                          className="w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                          required
+                        >
+                          <option value="">-- Select Role --</option>
+                          {roles.map((role) => (
+                            <option key={role.id} value={role.name}>
+                              {role.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex gap-2">
+                          <button type="submit" disabled={busy} className={primaryButtonClasses}>
+                            Assign
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssignRoleModalUser(null);
+                              setAssignRoleModalRoleName("");
+                            }}
+                            className={secondaryButtonClasses}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirmation Modal */}
+                {deleteConfirmUser && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
+                      <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white/90">Delete User?</h3>
+                      <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
+                        Are you sure you want to delete <span className="font-medium">{deleteConfirmUser.email}</span>? This action cannot be undone.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleDeleteUser(deleteConfirmUser.id)}
+                          disabled={busy}
+                          className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 dark:bg-red-700 dark:hover:bg-red-800"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirmUser(null)}
+                          className={secondaryButtonClasses}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* View Permissions Modal */}
+                {viewPermissionsUser && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="w-full max-w-2xl rounded-lg bg-white p-6 dark:bg-gray-800">
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">
+                          Permissions for {viewPermissionsUser.email}
+                        </h3>
+                        <button
+                          onClick={() => setViewPermissionsUser(null)}
+                          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="mb-4 space-y-3">
+                        <div>
+                          <p className="mb-2 text-xs font-semibold uppercase text-gray-600 dark:text-gray-400">
+                            From Roles
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {getRolePermissions(viewPermissionsUser).length > 0 ? (
+                              getRolePermissions(viewPermissionsUser).map((permId) => {
+                                const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
+                                return (
+                                  <span
+                                    key={permId}
+                                    className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                  >
+                                    {perm?.label || permId}
+                                  </span>
+                                );
+                              })
+                            ) : (
+                              <span className="text-xs text-gray-400">No role permissions</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-2 text-xs font-semibold uppercase text-gray-600 dark:text-gray-400">
+                            Custom Permissions
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {getUserPermissions(viewPermissionsUser.id).length > 0 ? (
+                              getUserPermissions(viewPermissionsUser.id).map((permId) => {
+                                const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
+                                return (
+                                  <span
+                                    key={permId}
+                                    className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200"
+                                  >
+                                    {perm?.label || permId}
+                                  </span>
+                                );
+                              })
+                            ) : (
+                              <span className="text-xs text-gray-400">No custom permissions</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setViewPermissionsUser(null)}
+                        className={secondaryButtonClasses}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -529,39 +734,6 @@ export default function UserManagementPage() {
                   </form>
                 </div>
 
-                {/* Assign Role to User Section */}
-                <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <h4 className="mb-4 text-sm font-semibold text-gray-900 dark:text-white/90">Assign Role to User</h4>
-                  <form onSubmit={handleAssignRole} className="flex flex-wrap items-center gap-2">
-                    <select
-                      value={roleTargetUser}
-                      onChange={(e) => setRoleTargetUser(e.target.value)}
-                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                    >
-                      <option value="">-- Select User --</option>
-                      {users.map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {user.email}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={roleName}
-                      onChange={(e) => setRoleName(e.target.value)}
-                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                    >
-                      <option value="">-- Select Role --</option>
-                      {roles.map((role) => (
-                        <option key={role.id} value={role.name}>
-                          {role.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="submit" disabled={busy} className={primaryButtonClasses}>
-                      Assign Role
-                    </button>
-                  </form>
-                </div>
 
                 {/* Roles List */}
                 <div className="mb-6">

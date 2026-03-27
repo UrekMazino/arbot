@@ -8,19 +8,13 @@ import {
   AdminLogRun,
   AdminLogTail,
   AdminReportRun,
-  RoleRecord,
   UserRecord,
-  assignUserRole,
-  createUser,
   getAdminBotLogTail,
   getAdminBotStatus,
   getAdminLogRuns,
   getAdminReportRuns,
   getMe,
   isUnauthorizedError,
-  listRoles,
-  listUsers,
-  removeUserRole,
   startAdminBot,
   stopAdminBot,
 } from "../../../lib/api";
@@ -61,15 +55,7 @@ export default function SuperAdminPage() {
   const [reportRuns, setReportRuns] = useState<AdminReportRun[]>([]);
   const [selectedRunKey, setSelectedRunKey] = useState("latest");
   const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
-  const [users, setUsers] = useState<UserRecord[]>([]);
-  const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [busy, setBusy] = useState(false);
-
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserSuper, setNewUserSuper] = useState(false);
-  const [roleTargetUser, setRoleTargetUser] = useState("");
-  const [roleName, setRoleName] = useState("viewer");
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -81,8 +67,6 @@ export default function SuperAdminPage() {
     setLogRuns([]);
     setReportRuns([]);
     setLogTail(null);
-    setUsers([]);
-    setRoles([]);
     if (redirectToLogin) {
       router.replace("/login?next=/admin/console");
     }
@@ -95,25 +79,18 @@ export default function SuperAdminPage() {
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
-      const [meData, statusData, logsData, reportsData, usersData, rolesData] = await Promise.all([
+      const [meData, statusData, logsData, reportsData] = await Promise.all([
         getMe(authToken),
         getAdminBotStatus(authToken),
         getAdminLogRuns(authToken),
         getAdminReportRuns(authToken),
-        listUsers(authToken),
-        listRoles(authToken),
       ]);
       setMe(meData);
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
-      setUsers(usersData);
-      setRoles(rolesData);
-      if (!roleTargetUser && usersData.length > 0) {
-        setRoleTargetUser(usersData[0].id);
-      }
     },
-    [roleTargetUser],
+    [],
   );
 
   const refreshLogTail = useCallback(
@@ -235,82 +212,6 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleCreateUser(e: FormEvent) {
-    e.preventDefault();
-    if (!token || !newUserEmail || !newUserPassword) return;
-    setBusy(true);
-    setError("");
-    try {
-      await createUser(token, {
-        email: newUserEmail,
-        password: newUserPassword,
-        is_superuser: newUserSuper,
-        is_active: true,
-      });
-      setNewUserEmail("");
-      setNewUserPassword("");
-      setNewUserSuper(false);
-      const nextUsers = await listUsers(token);
-      setUsers(nextUsers);
-      setStatus("User created");
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Create user failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleAssignRole(e: FormEvent) {
-    e.preventDefault();
-    if (!token || !roleTargetUser || !roleName) return;
-    setBusy(true);
-    setError("");
-    try {
-      await assignUserRole(token, roleTargetUser, roleName);
-      const nextUsers = await listUsers(token);
-      setUsers(nextUsers);
-      setStatus("Role assigned");
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Assign role failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRemoveRole(userId: string, role: string) {
-    if (!token) return;
-    setBusy(true);
-    setError("");
-    try {
-      await removeUserRole(token, userId, role);
-      const nextUsers = await listUsers(token);
-      setUsers(nextUsers);
-      setStatus("Role removed");
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Remove role failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
@@ -331,12 +232,13 @@ export default function SuperAdminPage() {
     return (
       <DashboardShell
         title="Console"
-        subtitle="Control bot runs, live logs, settings, users, and roles."
+        subtitle="Control bot runs and monitor live terminal logs."
         status={status}
         activeHref="/admin/console"
         navItems={[
           { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
           { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
+          { href: "/admin/users", label: "User Management", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
           { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
         ]}
       >
@@ -359,6 +261,7 @@ export default function SuperAdminPage() {
       navItems={[
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
+        { href: "/admin/users", label: "User Management", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
         { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
       ]}
       auth={{
@@ -413,18 +316,6 @@ export default function SuperAdminPage() {
           value={String(reportFileCount)}
           hint={`${reportRuns.length} report batches`}
           tone="violet"
-        />
-        <MetricCard
-          label="Users"
-          value={String(users.length)}
-          hint={`${users.filter((user) => user.is_superuser).length} superusers`}
-          tone="teal"
-        />
-        <MetricCard
-          label="Roles"
-          value={String(roles.length)}
-          hint={roles.map((role) => role.name).slice(0, 3).join(", ") || "none"}
-          tone="sky"
         />
         </section>
 
@@ -534,89 +425,6 @@ export default function SuperAdminPage() {
             </table>
           </TableFrame>
         </PanelCard>
-        </section>
-
-        <section className="grid gap-4 xl:grid-cols-2">
-          <article className={sectionCardClasses}>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">User Management</h3>
-            <form onSubmit={handleCreateUser} className="mb-3 mt-3 flex flex-wrap items-center gap-2">
-            <input value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} placeholder="email" required />
-            <input
-              value={newUserPassword}
-              onChange={(e) => setNewUserPassword(e.target.value)}
-              placeholder="password"
-              type="password"
-              required
-            />
-            <label className="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <input className="h-4 w-4 min-w-0" type="checkbox" checked={newUserSuper} onChange={(e) => setNewUserSuper(e.target.checked)} />
-              superuser
-            </label>
-            <button type="submit" disabled={busy} className={primaryButtonClasses}>
-              Create
-            </button>
-          </form>
-
-          <TableFrame compact>
-            <table>
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Active</th>
-                  <th>Super</th>
-                  <th>Roles</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td>{user.email}</td>
-                    <td>{user.is_active ? "yes" : "no"}</td>
-                    <td>{user.is_superuser ? "yes" : "no"}</td>
-                    <td>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {user.roles.map((role) => (
-                          <button
-                            key={`${user.id}-${role.name}`}
-                            className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                            onClick={() => handleRemoveRole(user.id, role.name)}
-                            disabled={busy}
-                          >
-                            {role.name} x
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableFrame>
-        </article>
-
-        <article className={sectionCardClasses}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Role Management</h3>
-          <form onSubmit={handleAssignRole} className="mt-3 flex flex-wrap items-center gap-2">
-            <select value={roleTargetUser} onChange={(e) => setRoleTargetUser(e.target.value)}>
-              {users.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.email}
-                </option>
-              ))}
-            </select>
-            <select value={roleName} onChange={(e) => setRoleName(e.target.value)}>
-              {roles.map((role) => (
-                <option key={role.id} value={role.name}>
-                  {role.name}
-                </option>
-              ))}
-            </select>
-            <button type="submit" disabled={busy} className={primaryButtonClasses}>
-              Assign Role
-            </button>
-          </form>
-          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Click role chips in User Management table to remove roles.</p>
-        </article>
         </section>
       </div>
     </DashboardShell>

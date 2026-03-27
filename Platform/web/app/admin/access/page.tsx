@@ -7,12 +7,17 @@ import {
   RoleRecord,
   UserRecord,
   assignUserRole,
+  createRole,
   createUser,
+  deleteRole,
   getMe,
+  getRolePermissions,
   isUnauthorizedError,
   listRoles,
   listUsers,
   removeUserRole,
+  setRolePermissions,
+  updateRole,
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
@@ -42,6 +47,15 @@ export default function UserManagementPage() {
   const [roleName, setRoleName] = useState("viewer");
   const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
   const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
+
+  // Role CRUD state
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleDescription, setNewRoleDescription] = useState("");
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [editingRoleName, setEditingRoleName] = useState("");
+  const [editingRoleDescription, setEditingRoleDescription] = useState("");
+  const [selectedRoleForPermissions, setSelectedRoleForPermissions] = useState<string | null>(null);
+  const [rolePermissionsMap, setRolePermissionsMap] = useState<Record<string, string[]>>({});
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -164,6 +178,115 @@ export default function UserManagementPage() {
         return;
       }
       const msg = err instanceof Error ? err.message : "Remove role failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCreateRole(e: FormEvent) {
+    e.preventDefault();
+    if (!token || !newRoleName) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      await createRole(token, {
+        name: newRoleName,
+        description: newRoleDescription,
+      });
+      setNewRoleName("");
+      setNewRoleDescription("");
+      setStatus("Role created");
+      await loadUserManagementData(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Create role failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateRole(e: FormEvent) {
+    e.preventDefault();
+    if (!token || !editingRoleId || !editingRoleName) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      await updateRole(token, editingRoleId, {
+        name: editingRoleName,
+        description: editingRoleDescription,
+      });
+      setEditingRoleId(null);
+      setEditingRoleName("");
+      setEditingRoleDescription("");
+      setStatus("Role updated");
+      await loadUserManagementData(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Update role failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteRole(roleName: string) {
+    if (!token || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      await deleteRole(token, roleName);
+      if (selectedRoleForPermissions === roleName) {
+        setSelectedRoleForPermissions(null);
+      }
+      setStatus("Role deleted");
+      await loadUserManagementData(token);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Delete role failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleRolePermission(roleName: string, permissionId: string) {
+    if (!token) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      const currentPerms = rolePermissionsMap[roleName] || [];
+      const updated = currentPerms.includes(permissionId)
+        ? currentPerms.filter((p) => p !== permissionId)
+        : [...currentPerms, permissionId];
+
+      await setRolePermissions(token, roleName, updated);
+      setRolePermissionsMap((prev) => ({ ...prev, [roleName]: updated }));
+      setStatus("Role permissions updated");
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Update role permissions failed";
       setError(msg);
     } finally {
       setBusy(false);
@@ -381,74 +504,235 @@ export default function UserManagementPage() {
               <div>
                 <div className="mb-4">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Role Management</h3>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Assign roles to users and manage role-based access control.</p>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Create, edit, and manage roles with custom permissions.</p>
                 </div>
-                <form onSubmit={handleAssignRole} className="mb-6 flex flex-wrap items-center gap-2">
-                  <select
-                    value={roleTargetUser}
-                    onChange={(e) => setRoleTargetUser(e.target.value)}
-                    className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  >
-                    {users.map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {user.email}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={roleName}
-                    onChange={(e) => setRoleName(e.target.value)}
-                    className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                  >
-                    {roles.map((role) => (
-                      <option key={role.id} value={role.name}>
-                        {role.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="submit" disabled={busy} className={primaryButtonClasses}>
-                    Assign Role
-                  </button>
-                </form>
 
-                <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">Click role chips in the Users tab to remove roles.</p>
+                {/* Create Role Form */}
+                <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <h4 className="mb-4 text-sm font-semibold text-gray-900 dark:text-white/90">
+                    {editingRoleId ? "Edit Role" : "Create New Role"}
+                  </h4>
+                  <form
+                    onSubmit={editingRoleId ? handleUpdateRole : handleCreateRole}
+                    className="flex flex-col gap-3"
+                  >
+                    <input
+                      value={editingRoleId ? editingRoleName : newRoleName}
+                      onChange={(e) =>
+                        editingRoleId
+                          ? setEditingRoleName(e.target.value)
+                          : setNewRoleName(e.target.value)
+                      }
+                      placeholder="Role name (e.g., editor, analyst)"
+                      required
+                      className="rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    />
+                    <textarea
+                      value={editingRoleId ? editingRoleDescription : newRoleDescription}
+                      onChange={(e) =>
+                        editingRoleId
+                          ? setEditingRoleDescription(e.target.value)
+                          : setNewRoleDescription(e.target.value)
+                      }
+                      placeholder="Role description (optional)"
+                      rows={2}
+                      className="rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    />
+                    <div className="flex gap-2">
+                      <button type="submit" disabled={busy} className={primaryButtonClasses}>
+                        {editingRoleId ? "Update Role" : "Create Role"}
+                      </button>
+                      {editingRoleId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRoleId(null);
+                            setEditingRoleName("");
+                            setEditingRoleDescription("");
+                          }}
+                          className={secondaryButtonClasses}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
 
-                <TableFrame compact>
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Role Name</th>
-                        <th>Users Assigned</th>
-                        <th>Description</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {roles.map((role) => {
-                        const usersWithRole = users.filter((user) =>
-                          user.roles.some((r) => r.name === role.name)
-                        );
-                        return (
-                          <tr key={role.id}>
-                            <td className="font-mono text-sm">{role.name}</td>
-                            <td>{usersWithRole.length}</td>
-                            <td className="text-xs text-gray-600 dark:text-gray-400">
-                              {usersWithRole.length > 0
-                                ? usersWithRole.map((u) => u.email).join(", ")
-                                : "No users assigned"}
+                {/* Assign Role to User Section */}
+                <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <h4 className="mb-4 text-sm font-semibold text-gray-900 dark:text-white/90">Assign Role to User</h4>
+                  <form onSubmit={handleAssignRole} className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={roleTargetUser}
+                      onChange={(e) => setRoleTargetUser(e.target.value)}
+                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="">-- Select User --</option>
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.email}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={roleName}
+                      onChange={(e) => setRoleName(e.target.value)}
+                      className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="">-- Select Role --</option>
+                      {roles.map((role) => (
+                        <option key={role.id} value={role.name}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="submit" disabled={busy} className={primaryButtonClasses}>
+                      Assign Role
+                    </button>
+                  </form>
+                </div>
+
+                {/* Roles List */}
+                <div className="mb-6">
+                  <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-white/90">All Roles</h4>
+                  <TableFrame compact>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Role Name</th>
+                          <th>Users Assigned</th>
+                          <th>Description</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {roles.map((role) => {
+                          const usersWithRole = users.filter((user) =>
+                            user.roles.some((r) => r.name === role.name)
+                          );
+                          return (
+                            <tr key={role.id}>
+                              <td className="font-mono text-sm font-medium">{role.name}</td>
+                              <td className="text-sm">{usersWithRole.length}</td>
+                              <td className="text-xs text-gray-600 dark:text-gray-400">
+                                {role.description || "—"}
+                              </td>
+                              <td>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => {
+                                      setEditingRoleId(role.id);
+                                      setEditingRoleName(role.name);
+                                      setEditingRoleDescription(role.description || "");
+                                    }}
+                                    className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                                    disabled={busy}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedRoleForPermissions(role.name);
+                                    }}
+                                    className="text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
+                                  >
+                                    Permissions
+                                  </button>
+                                  {role.name !== "admin" && role.name !== "editor" && role.name !== "viewer" && (
+                                    <button
+                                      onClick={() => handleDeleteRole(role.name)}
+                                      className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                                      disabled={busy}
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!roles.length ? (
+                          <tr>
+                            <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                              No roles found.
                             </td>
                           </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </div>
+
+                {/* Role Permissions Management */}
+                {selectedRoleForPermissions && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-900/20">
+                    <div className="mb-4 flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-200">
+                        Manage Permissions for "{selectedRoleForPermissions}"
+                      </h4>
+                      <button
+                        onClick={() => setSelectedRoleForPermissions(null)}
+                        className="text-blue-600 hover:text-blue-700 dark:text-blue-400"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {AVAILABLE_PERMISSIONS.map((perm) => {
+                        const rolePerms = rolePermissionsMap[selectedRoleForPermissions] || [];
+                        const hasPermission = rolePerms.includes(perm.id);
+                        return (
+                          <label
+                            key={perm.id}
+                            className="flex items-start gap-3 rounded border border-blue-200 p-3 dark:border-blue-800"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={hasPermission}
+                              onChange={() =>
+                                handleToggleRolePermission(selectedRoleForPermissions, perm.id)
+                              }
+                              disabled={busy}
+                              className="mt-1 h-4 w-4 cursor-pointer rounded"
+                            />
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                                {perm.label}
+                              </p>
+                              <p className="text-xs text-blue-700 dark:text-blue-300">
+                                {perm.description}
+                              </p>
+                            </div>
+                          </label>
                         );
                       })}
-                      {!roles.length ? (
-                        <tr>
-                          <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
-                            No roles found.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </TableFrame>
+                    </div>
+
+                    {(rolePermissionsMap[selectedRoleForPermissions] || []).length > 0 && (
+                      <div className="mt-4 rounded bg-blue-100 p-3 dark:bg-blue-900">
+                        <p className="mb-2 text-xs font-semibold text-blue-900 dark:text-blue-200">
+                          Assigned Permissions:
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {(rolePermissionsMap[selectedRoleForPermissions] || []).map((permId) => {
+                            const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
+                            return (
+                              <span
+                                key={permId}
+                                className="inline-flex items-center rounded-full bg-blue-200 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-800 dark:text-blue-200"
+                              >
+                                {perm?.label || permId}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

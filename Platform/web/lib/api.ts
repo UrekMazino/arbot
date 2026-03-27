@@ -381,6 +381,65 @@ export async function removeUserRole(token: string, userId: string, role: string
   return apiRequest<{ message: string }>(`/users/${encodedUser}/roles/${encodedRole}`, { method: "DELETE" }, token);
 }
 
+export async function createRole(
+  token: string,
+  body: { name: string; description?: string },
+): Promise<RoleRecord> {
+  return apiRequest<RoleRecord>(
+    "/users/roles",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: body.name,
+        description: body.description || null,
+      }),
+    },
+    token,
+  );
+}
+
+export async function updateRole(
+  token: string,
+  roleName: string,
+  body: { name?: string; description?: string },
+): Promise<RoleRecord> {
+  const encodedRole = encodeURIComponent(roleName);
+  return apiRequest<RoleRecord>(
+    `/users/roles/${encodedRole}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(body),
+    },
+    token,
+  );
+}
+
+export async function deleteRole(token: string, roleName: string): Promise<{ message: string }> {
+  const encodedRole = encodeURIComponent(roleName);
+  return apiRequest<{ message: string }>(`/users/roles/${encodedRole}`, { method: "DELETE" }, token);
+}
+
+export async function getRolePermissions(token: string, roleName: string): Promise<string[]> {
+  const encodedRole = encodeURIComponent(roleName);
+  return apiRequest<string[]>(`/users/roles/${encodedRole}/permissions`, { method: "GET" }, token);
+}
+
+export async function setRolePermissions(
+  token: string,
+  roleName: string,
+  permissions: string[],
+): Promise<{ message: string }> {
+  const encodedRole = encodeURIComponent(roleName);
+  return apiRequest<{ message: string }>(
+    `/users/roles/${encodedRole}/permissions`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permissions }),
+    },
+    token,
+  );
+}
+
 export function apiBaseUrl(): string {
   return API_BASE;
 }

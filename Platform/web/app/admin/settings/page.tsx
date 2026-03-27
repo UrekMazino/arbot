@@ -69,6 +69,18 @@ export default function SettingsPage() {
       .finally(() => setAuthChecked(true));
   }, [clearAdminSession, loadEnvSettings, router]);
 
+  // Handle Esc key to cancel editing
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && editingEnvKeys.size > 0) {
+        setEditingEnvKeys(new Set());
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [editingEnvKeys]);
+
   const apiKeys = useMemo(
     () => new Set(["OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"]),
     [],
@@ -122,16 +134,17 @@ export default function SettingsPage() {
     }
   }
 
-  function toggleEnvEditMode(key: string) {
+  function cancelEditMode(key: string) {
     setEditingEnvKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+      next.delete(key);
       return next;
     });
+    // Reset the value to the original
+    setEnvEdits((prev) => ({
+      ...prev,
+      [key]: envSettings.values?.[key] ?? "",
+    }));
   }
 
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
@@ -177,7 +190,6 @@ export default function SettingsPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Configuration</p>
-              <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white/90">Settings</h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
             </div>
           </div>
@@ -252,17 +264,26 @@ export default function SettingsPage() {
                             </td>
                             <td className="px-4 py-2 text-sm">
                               {isEditing ? (
-                                <button
-                                  className={UI_CLASSES.primaryButton}
-                                  onClick={() => saveEnvKey(key)}
-                                  disabled={busy}
-                                >
-                                  Save
-                                </button>
+                                <div className="flex gap-2">
+                                  <button
+                                    className={UI_CLASSES.primaryButton}
+                                    onClick={() => saveEnvKey(key)}
+                                    disabled={busy}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    className={secondaryButtonClasses}
+                                    onClick={() => cancelEditMode(key)}
+                                    disabled={busy}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
                               ) : (
                                 <button
                                   className={secondaryButtonClasses}
-                                  onClick={() => toggleEnvEditMode(key)}
+                                  onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
                                   disabled={busy}
                                 >
                                   Edit
@@ -336,17 +357,26 @@ export default function SettingsPage() {
                             </td>
                             <td className="px-4 py-2 text-sm">
                               {isEditing ? (
-                                <button
-                                  className={UI_CLASSES.primaryButton}
-                                  onClick={() => saveEnvKey(key)}
-                                  disabled={busy}
-                                >
-                                  Save
-                                </button>
+                                <div className="flex gap-2">
+                                  <button
+                                    className={UI_CLASSES.primaryButton}
+                                    onClick={() => saveEnvKey(key)}
+                                    disabled={busy}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    className={secondaryButtonClasses}
+                                    onClick={() => cancelEditMode(key)}
+                                    disabled={busy}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
                               ) : (
                                 <button
                                   className={secondaryButtonClasses}
-                                  onClick={() => toggleEnvEditMode(key)}
+                                  onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
                                   disabled={busy}
                                 >
                                   Edit

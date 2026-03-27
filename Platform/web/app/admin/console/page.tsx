@@ -66,6 +66,7 @@ export default function SuperAdminPage() {
   const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
   const [envSettings, setEnvSettings] = useState<AdminEnvSettings>({ path: "Execution/.env", values: {} });
   const [envEdits, setEnvEdits] = useState<Record<string, string>>({});
+  const [editingEnvKeys, setEditingEnvKeys] = useState<Set<string>>(new Set());
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -259,6 +260,12 @@ export default function SuperAdminPage() {
       setEnvSettings(next);
       setEnvEdits(next.values || {});
       setStatus(`Saved ${key}`);
+      // Exit edit mode for this key
+      setEditingEnvKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -270,6 +277,18 @@ export default function SuperAdminPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleEnvEditMode(key: string) {
+    setEditingEnvKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
   }
 
   async function handleCreateUser(e: FormEvent) {
@@ -584,27 +603,49 @@ export default function SuperAdminPage() {
               </tr>
             </thead>
             <tbody>
-              {sortedEnvKeys.map((key) => (
-                <tr key={key}>
-                  <td>{key}</td>
-                  <td>
-                    <input
-                      value={envEdits[key] ?? ""}
-                      onChange={(e) =>
-                        setEnvEdits((prev) => ({
-                          ...prev,
-                          [key]: e.target.value,
-                        }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <button className={secondaryButtonClasses} onClick={() => saveEnvKey(key)} disabled={busy}>
-                      Save
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {sortedEnvKeys.map((key) => {
+                const isEditing = editingEnvKeys.has(key);
+                const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
+                return (
+                  <tr key={key}>
+                    <td>{key}</td>
+                    <td>
+                      {isEditing ? (
+                        <input
+                          value={currentValue}
+                          onChange={(e) =>
+                            setEnvEdits((prev) => ({
+                              ...prev,
+                              [key]: e.target.value,
+                            }))
+                          }
+                        />
+                      ) : (
+                        <span className="text-gray-700 dark:text-gray-300">{currentValue || "(empty)"}</span>
+                      )}
+                    </td>
+                    <td>
+                      {isEditing ? (
+                        <button
+                          className={UI_CLASSES.primaryButton}
+                          onClick={() => saveEnvKey(key)}
+                          disabled={busy}
+                        >
+                          Save
+                        </button>
+                      ) : (
+                        <button
+                          className={secondaryButtonClasses}
+                          onClick={() => toggleEnvEditMode(key)}
+                          disabled={busy}
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {!sortedEnvKeys.length ? (
                 <tr>
                   <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">

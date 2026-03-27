@@ -729,6 +729,10 @@ export default function HomePage() {
     };
   }, [selectedRun?.bot_instance_id]);
 
+  const sectionCardClasses = UI_CLASSES.sectionCard;
+  const primaryButtonClasses = UI_CLASSES.primaryButton;
+  const secondaryButtonClasses = UI_CLASSES.secondaryButton;
+
   return (
     <DashboardShell
       title="Run Browser + Live Event Stream"
@@ -756,13 +760,13 @@ export default function HomePage() {
                 <>
                   <button
                     onClick={handleRefreshRuns}
-                    className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                    className={primaryButtonClasses}
                   >
                     Refresh Runs
                   </button>
                   <button
                     onClick={handleRefreshDetail}
-                    className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                    className={secondaryButtonClasses}
                   >
                     Refresh Detail
                   </button>

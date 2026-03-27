@@ -49,7 +49,7 @@ export default function UserManagementPage() {
     setUsers([]);
     setRoles([]);
     if (redirectToLogin) {
-      router.replace("/login?next=/admin/users");
+      router.replace("/login?next=/admin/access");
     }
   }, [router]);
 
@@ -74,7 +74,7 @@ export default function UserManagementPage() {
     const stored = getStoredAdminAccessToken();
     if (!stored) {
       setAuthChecked(true);
-      router.replace("/login?next=/admin/users");
+      router.replace("/login?next=/admin/access");
       return;
     }
     setToken(stored);
@@ -189,12 +189,12 @@ export default function UserManagementPage() {
         title="User Management"
         subtitle="Manage users, roles, and permissions."
         status={status}
-        activeHref="/admin/users"
+        activeHref="/admin/access"
         navItems={[
           { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
           { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-          { href: "/admin/users", label: "User Management", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
           { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
+          { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
         ]}
       >
         <div className="grid gap-4">
@@ -219,12 +219,12 @@ export default function UserManagementPage() {
       title="User Management"
       subtitle="Manage users, roles, and permissions."
       status={status}
-      activeHref="/admin/users"
+      activeHref="/admin/access"
       navItems={[
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-        { href: "/admin/users", label: "User Management", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
         { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
+        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
       ]}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),

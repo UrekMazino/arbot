@@ -180,6 +180,7 @@ export default function SettingsPage() {
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
         { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
+        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
       ]}
       auth={{
         email: typeof window !== "undefined" ? getStoredAdminEmail() : "",

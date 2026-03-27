@@ -23,7 +23,6 @@ export type UserRecord = {
   id: string;
   email: string;
   is_active: boolean;
-  is_superuser: boolean;
   roles: RoleRecord[];
   created_at: string;
   updated_at: string;
@@ -230,7 +229,21 @@ async function apiRequest<T>(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object") {
+        const parsedRecord = parsed as Record<string, unknown>;
+        if (typeof parsedRecord.detail === "string") {
+          message = parsedRecord.detail;
+        } else if (typeof parsedRecord.message === "string") {
+          message = parsedRecord.message;
+        }
+      }
+    } catch {
+      // ignore parse errors and keep raw text
+    }
+    throw new Error(`HTTP ${response.status}: ${message}`);
   }
 
   return (await response.json()) as T;
@@ -349,7 +362,7 @@ export async function listRoles(token: string): Promise<RoleRecord[]> {
 
 export async function createUser(
   token: string,
-  body: { email: string; password: string; is_active?: boolean; is_superuser?: boolean },
+  body: { email: string; password: string; is_active?: boolean },
 ): Promise<UserRecord> {
   return apiRequest<UserRecord>(
     "/users",
@@ -359,7 +372,6 @@ export async function createUser(
         email: body.email,
         password: body.password,
         is_active: body.is_active ?? true,
-        is_superuser: body.is_superuser ?? false,
       }),
     },
     token,
@@ -440,4 +452,8 @@ export function wsDashboardUrl(botInstanceId: string): string {
 
 export function isUnauthorizedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("HTTP 401");
+}
+
+export function isForbiddenError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("HTTP 403");
 }

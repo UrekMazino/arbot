@@ -15,6 +15,7 @@ import {
   getAdminReportRuns,
   getMe,
   isUnauthorizedError,
+  isForbiddenError,
   startAdminBot,
   stopAdminBot,
 } from "../../../lib/api";
@@ -79,13 +80,23 @@ export default function SuperAdminPage() {
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
-      const [meData, statusData, logsData, reportsData] = await Promise.all([
-        getMe(authToken),
+      const meData = await getMe(authToken);
+      setMe(meData);
+
+      const hasAdminRole = meData.roles.some((role) => /super_admin|admin/i.test(role.name));
+      if (!hasAdminRole) {
+        setBotStatus(null);
+        setLogRuns([]);
+        setReportRuns([]);
+        setLogTail(null);
+        return;
+      }
+
+      const [statusData, logsData, reportsData] = await Promise.all([
         getAdminBotStatus(authToken),
         getAdminLogRuns(authToken),
         getAdminReportRuns(authToken),
       ]);
-      setMe(meData);
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
@@ -116,7 +127,15 @@ export default function SuperAdminPage() {
     setStatus("Session restored");
     // Set stored email as fallback while API data loads
     if (storedEmail) {
-      setMe((prev) => (prev ? { ...prev, email: storedEmail } : { email: storedEmail } as any));
+      const fallbackMe: UserRecord = {
+        id: "",
+        email: storedEmail,
+        is_active: false,
+        roles: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
     loadAdminData(stored)
       .then(() => refreshLogTail(stored, "latest"))
@@ -126,6 +145,10 @@ export default function SuperAdminPage() {
           setError("Session expired. Please sign in again.");
           return;
         }
+        if (isForbiddenError(err)) {
+          setError("Insufficient permissions. Contact admin/super_admin.");
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Failed loading admin data";
         setError(msg);
       })
@@ -133,17 +156,21 @@ export default function SuperAdminPage() {
   }, [clearAdminSession, loadAdminData, refreshLogTail, router]);
 
   useEffect(() => {
-    if (!token || !me?.is_superuser) return;
+    if (!token || !me?.roles.some((role) => /super_admin|admin/i.test(role.name))) return;
     const timer = window.setInterval(() => {
       refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
           setError("Session expired. Please sign in again.");
+          return;
+        }
+        if (isForbiddenError(err)) {
+          setError("Insufficient permissions to read log tail.");
         }
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [clearAdminSession, token, me?.is_superuser, selectedRunKey, refreshLogTail]);
+  }, [clearAdminSession, token, me?.roles, selectedRunKey, refreshLogTail]);
 
   function handleLogout() {
     clearAdminSession("Signed out", true);
@@ -161,6 +188,10 @@ export default function SuperAdminPage() {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to start the bot.");
         return;
       }
       const msg = err instanceof Error ? err.message : "Start failed";
@@ -184,6 +215,10 @@ export default function SuperAdminPage() {
         setError("Session expired. Please sign in again.");
         return;
       }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to stop the bot.");
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Stop failed";
       setError(msg);
     } finally {
@@ -203,6 +238,10 @@ export default function SuperAdminPage() {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to refresh admin console.");
         return;
       }
       const msg = err instanceof Error ? err.message : "Refresh failed";
@@ -228,7 +267,7 @@ export default function SuperAdminPage() {
     return null;
   }
 
-  if (me && !me.is_superuser) {
+  if (me && !me.roles.some((role) => role.name.toLowerCase() === "admin")) {
     return (
       <DashboardShell
         title="Console"

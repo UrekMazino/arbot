@@ -39,6 +39,20 @@ export default function UserManagementPage() {
   const [newUserSuper, setNewUserSuper] = useState(false);
   const [roleTargetUser, setRoleTargetUser] = useState("");
   const [roleName, setRoleName] = useState("viewer");
+  const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
+  const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
+
+  // Available permissions that can be assigned to users
+  const availablePermissions = [
+    { id: "view_dashboard", label: "View Dashboard", description: "Access dashboard and metrics" },
+    { id: "view_logs", label: "View Logs", description: "View bot logs and terminal output" },
+    { id: "manage_bot", label: "Manage Bot", description: "Start/stop bot and control execution" },
+    { id: "view_reports", label: "View Reports", description: "Access generated reports" },
+    { id: "edit_settings", label: "Edit Settings", description: "Modify configuration and environment variables" },
+    { id: "manage_api", label: "Manage API Credentials", description: "View and edit API keys" },
+    { id: "manage_users", label: "Manage Users", description: "Create and modify user accounts" },
+    { id: "manage_roles", label: "Manage Roles", description: "Assign and remove user roles" },
+  ];
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -165,6 +179,43 @@ export default function UserManagementPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleUserPermission(userId: string, permissionId: string) {
+    setUserPermissionsMap((prev) => {
+      const userPerms = prev[userId] ? [...prev[userId]] : [];
+      const index = userPerms.indexOf(permissionId);
+      if (index > -1) {
+        userPerms.splice(index, 1);
+      } else {
+        userPerms.push(permissionId);
+      }
+      if (userPerms.length === 0) {
+        const { [userId]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [userId]: userPerms };
+    });
+    const hasPermission = userPermissionsMap[userId]?.includes(permissionId) ?? false;
+    setStatus(`Permission ${hasPermission ? "removed" : "added"}`);
+  }
+
+  function getUserPermissions(userId: string): string[] {
+    return userPermissionsMap[userId] ? [...userPermissionsMap[userId]] : [];
+  }
+
+  function getRolePermissions(user: UserRecord): string[] {
+    const rolePerms: string[] = [];
+    user.roles.forEach((role) => {
+      if (role.name === "admin") {
+        rolePerms.push(...availablePermissions.map((p) => p.id));
+      } else if (role.name === "editor") {
+        rolePerms.push("view_dashboard", "view_logs", "view_reports", "edit_settings");
+      } else if (role.name === "viewer") {
+        rolePerms.push("view_dashboard", "view_logs", "view_reports");
+      }
+    });
+    return [...new Set(rolePerms)];
   }
 
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
@@ -417,19 +468,131 @@ export default function UserManagementPage() {
 
             {activeTab === "permissions" && (
               <div>
-                <div className="mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Permissions</h3>
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Manage role-based permissions and access control levels.</p>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white/90">Available Roles & Permissions</h4>
+                <div className="mb-6 space-y-6">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Custom User Permissions</h3>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      The following roles are available with their respective permissions:
+                      Assign individual permissions to users in addition to their role permissions.
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                    <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white/90">Select User</label>
+                    <select
+                      value={selectedPermissionUser}
+                      onChange={(e) => setSelectedPermissionUser(e.target.value)}
+                      className="mb-4 w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    >
+                      <option value="">-- Choose a user --</option>
+                      {users.map((user) => (
+                        <option key={user.id} value={user.id}>
+                          {user.email}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedPermissionUser && (
+                      <div>
+                        {(() => {
+                          const user = users.find((u) => u.id === selectedPermissionUser);
+                          if (!user) return null;
+                          const rolePerms = getRolePermissions(user);
+                          const userPerms = getUserPermissions(user.id);
+                          return (
+                            <div>
+                              <div className="mb-4">
+                                <h4 className="mb-2 text-sm font-semibold text-gray-900 dark:text-white/90">
+                                  {user.email}
+                                </h4>
+                                <p className="mb-3 text-xs text-gray-600 dark:text-gray-400">
+                                  Roles: {user.roles.length > 0 ? user.roles.map((r) => r.name).join(", ") : "None"}
+                                </p>
+                              </div>
+
+                              <div className="space-y-2">
+                                <h5 className="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
+                                  Available Permissions
+                                </h5>
+                                <div className="grid gap-3">
+                                  {availablePermissions.map((perm) => {
+                                    const hasPermission = userPerms.includes(perm.id);
+                                    const fromRole = rolePerms.includes(perm.id);
+                                    return (
+                                      <div
+                                        key={perm.id}
+                                        className="flex items-start rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          id={`perm-${perm.id}`}
+                                          checked={hasPermission}
+                                          onChange={() => toggleUserPermission(user.id, perm.id)}
+                                          disabled={fromRole}
+                                          className="mt-1 h-4 w-4 cursor-pointer rounded"
+                                        />
+                                        <label
+                                          htmlFor={`perm-${perm.id}`}
+                                          className="ml-3 flex-1 cursor-pointer"
+                                        >
+                                          <p className="text-sm font-medium text-gray-900 dark:text-white/90">
+                                            {perm.label}
+                                          </p>
+                                          <p className="text-xs text-gray-600 dark:text-gray-400">
+                                            {perm.description}
+                                            {fromRole && (
+                                              <span className="ml-2 inline-block rounded-full bg-blue-100 px-2 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                                from role
+                                              </span>
+                                            )}
+                                          </p>
+                                        </label>
+                                        {hasPermission && !fromRole && (
+                                          <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
+                                            custom
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              {userPerms.length > 0 && (
+                                <div className="mt-4 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+                                  <p className="mb-2 text-xs font-semibold text-blue-900 dark:text-blue-200">
+                                    Custom Permissions Assigned:
+                                  </p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {userPerms.map((permId) => {
+                                      const perm = availablePermissions.find((p) => p.id === permId);
+                                      return (
+                                        <span
+                                          key={permId}
+                                          className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                        >
+                                          {perm?.label || permId}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                    <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-white/90">
+                      Available Roles & Role Permissions
+                    </h4>
+                    <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
+                      These are the default permissions granted by each role:
                     </p>
 
-                    <div className="mt-4 space-y-3">
+                    <div className="space-y-3">
                       {roles.map((role) => (
                         <div key={role.id} className="rounded border border-gray-200 p-3 dark:border-gray-700">
                           <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white/90">{role.name}</p>

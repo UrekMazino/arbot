@@ -28,6 +28,7 @@ import {
   updateAdminEnvSetting,
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
+import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
@@ -347,11 +348,9 @@ export default function SuperAdminPage() {
     }
   }
 
-  const primaryButtonClasses =
-    "inline-flex items-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-70";
-  const secondaryButtonClasses =
-    "inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700";
-  const sectionCardClasses = "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900";
+  const sectionCardClasses = UI_CLASSES.sectionCard;
+  const primaryButtonClasses = UI_CLASSES.primaryButton;
+  const secondaryButtonClasses = UI_CLASSES.secondaryButton;
 
   if (!authChecked) {
     return (
@@ -406,8 +405,7 @@ export default function SuperAdminPage() {
         <section className={sectionCardClasses}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">V2 Control Plane</p>
-              <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-white/90">Console</h1>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Control Panel</p>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

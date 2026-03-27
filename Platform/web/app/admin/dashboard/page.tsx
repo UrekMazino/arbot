@@ -37,6 +37,7 @@ import {
   getStoredAdminEmail,
   persistAdminSession,
 } from "../../../lib/auth";
+import { UI_CLASSES } from "../../../lib/ui-classes";
 
 type LiveMsg = {
   event_type?: string;
@@ -748,7 +749,6 @@ export default function HomePage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Live Analytics</p>
-              <h1 className="mt-1 text-3xl font-semibold text-gray-900 dark:text-white/90">Run Browser + Event Stream</h1>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Monitor strategy performance, quality checks, and execution reports in real-time.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -768,9 +768,6 @@ export default function HomePage() {
                   </button>
                 </>
               ) : null}
-              <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                API <code className="font-mono text-xs text-gray-700 dark:text-gray-300">{apiBaseUrl()}</code>
-              </span>
             </div>
           </div>
         </section>

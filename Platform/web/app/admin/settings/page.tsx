@@ -26,6 +26,7 @@ export default function SettingsPage() {
   const [envSettings, setEnvSettings] = useState<AdminEnvSettings>({ path: "Execution/.env", values: {} });
   const [envEdits, setEnvEdits] = useState<Record<string, string>>({});
   const [editingEnvKeys, setEditingEnvKeys] = useState<Set<string>>(new Set());
+  const [showPasswordKeys, setShowPasswordKeys] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [busy, setBusy] = useState(false);
 
@@ -352,9 +353,13 @@ export default function SettingsPage() {
                                   className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                                 />
                               ) : (
-                                <span className="font-mono text-gray-700 dark:text-gray-300">
-                                  {currentValue ? "•".repeat(Math.min(currentValue.length, 16)) : "(empty)"}
-                                </span>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-mono text-gray-700 dark:text-gray-300 flex-1 truncate">
+                                    {showPasswordKeys.has(key)
+                                      ? currentValue || "(empty)"
+                                      : currentValue ? "•".repeat(Math.min(currentValue.length, 16)) : "(empty)"}
+                                  </span>
+                                </div>
                               )}
                             </td>
                             <td className="px-4 py-2 text-sm w-40">
@@ -376,13 +381,29 @@ export default function SettingsPage() {
                                   </button>
                                 </div>
                               ) : (
-                                <button
-                                  className={secondaryButtonClasses}
-                                  onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
-                                  disabled={busy}
-                                >
-                                  Edit
-                                </button>
+                                <div className="flex gap-2">
+                                  <button
+                                    className={secondaryButtonClasses}
+                                    onClick={() =>
+                                      setShowPasswordKeys((prev) =>
+                                        prev.has(key)
+                                          ? new Set([...prev].filter((k) => k !== key))
+                                          : new Set(prev).add(key)
+                                      )
+                                    }
+                                    disabled={busy}
+                                    title={showPasswordKeys.has(key) ? "Hide password" : "Show password"}
+                                  >
+                                    {showPasswordKeys.has(key) ? "Hide" : "Show"}
+                                  </button>
+                                  <button
+                                    className={secondaryButtonClasses}
+                                    onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
+                                    disabled={busy}
+                                  >
+                                    Edit
+                                  </button>
+                                </div>
                               )}
                             </td>
                           </tr>

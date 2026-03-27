@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 
 import {
   AdminBotStatus,
-  AdminEnvSettings,
   AdminLogRun,
   AdminLogTail,
   AdminReportRun,
@@ -15,7 +14,6 @@ import {
   createUser,
   getAdminBotLogTail,
   getAdminBotStatus,
-  getAdminEnvSettings,
   getAdminLogRuns,
   getAdminReportRuns,
   getMe,
@@ -25,7 +23,6 @@ import {
   removeUserRole,
   startAdminBot,
   stopAdminBot,
-  updateAdminEnvSetting,
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
@@ -64,9 +61,6 @@ export default function SuperAdminPage() {
   const [reportRuns, setReportRuns] = useState<AdminReportRun[]>([]);
   const [selectedRunKey, setSelectedRunKey] = useState("latest");
   const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
-  const [envSettings, setEnvSettings] = useState<AdminEnvSettings>({ path: "Execution/.env", values: {} });
-  const [envEdits, setEnvEdits] = useState<Record<string, string>>({});
-  const [editingEnvKeys, setEditingEnvKeys] = useState<Set<string>>(new Set());
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -94,10 +88,6 @@ export default function SuperAdminPage() {
     }
   }, [router]);
 
-  const sortedEnvKeys = useMemo(
-    () => Object.keys(envSettings.values || {}).sort((a, b) => a.localeCompare(b)),
-    [envSettings.values],
-  );
   const reportFileCount = useMemo(
     () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
     [reportRuns],
@@ -105,12 +95,11 @@ export default function SuperAdminPage() {
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
-      const [meData, statusData, logsData, reportsData, envData, usersData, rolesData] = await Promise.all([
+      const [meData, statusData, logsData, reportsData, usersData, rolesData] = await Promise.all([
         getMe(authToken),
         getAdminBotStatus(authToken),
         getAdminLogRuns(authToken),
         getAdminReportRuns(authToken),
-        getAdminEnvSettings(authToken),
         listUsers(authToken),
         listRoles(authToken),
       ]);
@@ -118,14 +107,10 @@ export default function SuperAdminPage() {
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
-      setEnvSettings(envData);
       setUsers(usersData);
       setRoles(rolesData);
       if (!roleTargetUser && usersData.length > 0) {
         setRoleTargetUser(usersData[0].id);
-      }
-      if (envData?.values) {
-        setEnvEdits(envData.values);
       }
     },
     [roleTargetUser],
@@ -250,47 +235,6 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function saveEnvKey(key: string) {
-    if (!token) return;
-    const value = envEdits[key] ?? "";
-    setBusy(true);
-    setError("");
-    try {
-      const next = await updateAdminEnvSetting(token, key, value);
-      setEnvSettings(next);
-      setEnvEdits(next.values || {});
-      setStatus(`Saved ${key}`);
-      // Exit edit mode for this key
-      setEditingEnvKeys((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Failed saving env key";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function toggleEnvEditMode(key: string) {
-    setEditingEnvKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }
-
   async function handleCreateUser(e: FormEvent) {
     e.preventDefault();
     if (!token || !newUserEmail || !newUserPassword) return;
@@ -393,6 +337,7 @@ export default function SuperAdminPage() {
         navItems={[
           { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
           { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
+          { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
         ]}
       >
         <div className="grid gap-4">
@@ -414,6 +359,7 @@ export default function SuperAdminPage() {
       navItems={[
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
+        { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
       ]}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
@@ -588,74 +534,6 @@ export default function SuperAdminPage() {
             </table>
           </TableFrame>
         </PanelCard>
-        </section>
-
-        <section className={sectionCardClasses}>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Settings (.env)</h3>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Editing values here updates `Execution/.env` directly.</p>
-          <TableFrame>
-          <table>
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Value</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedEnvKeys.map((key) => {
-                const isEditing = editingEnvKeys.has(key);
-                const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
-                return (
-                  <tr key={key}>
-                    <td>{key}</td>
-                    <td>
-                      {isEditing ? (
-                        <input
-                          value={currentValue}
-                          onChange={(e) =>
-                            setEnvEdits((prev) => ({
-                              ...prev,
-                              [key]: e.target.value,
-                            }))
-                          }
-                        />
-                      ) : (
-                        <span className="text-gray-700 dark:text-gray-300">{currentValue || "(empty)"}</span>
-                      )}
-                    </td>
-                    <td>
-                      {isEditing ? (
-                        <button
-                          className={UI_CLASSES.primaryButton}
-                          onClick={() => saveEnvKey(key)}
-                          disabled={busy}
-                        >
-                          Save
-                        </button>
-                      ) : (
-                        <button
-                          className={secondaryButtonClasses}
-                          onClick={() => toggleEnvEditMode(key)}
-                          disabled={busy}
-                        >
-                          Edit
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {!sortedEnvKeys.length ? (
-                <tr>
-                  <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
-                    No settings found.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-          </TableFrame>
         </section>
 
         <section className="grid gap-4 xl:grid-cols-2">

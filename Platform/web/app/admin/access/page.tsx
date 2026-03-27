@@ -16,6 +16,7 @@ import {
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
+import { AVAILABLE_PERMISSIONS, ROLE_PERMISSIONS } from "../../../lib/permissions";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { TableFrame } from "../../../components/panels";
 
@@ -41,18 +42,6 @@ export default function UserManagementPage() {
   const [roleName, setRoleName] = useState("viewer");
   const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
   const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
-
-  // Available permissions that can be assigned to users
-  const availablePermissions = [
-    { id: "view_dashboard", label: "View Dashboard", description: "Access dashboard and metrics" },
-    { id: "view_logs", label: "View Logs", description: "View bot logs and terminal output" },
-    { id: "manage_bot", label: "Manage Bot", description: "Start/stop bot and control execution" },
-    { id: "view_reports", label: "View Reports", description: "Access generated reports" },
-    { id: "edit_settings", label: "Edit Settings", description: "Modify configuration and environment variables" },
-    { id: "manage_api", label: "Manage API Credentials", description: "View and edit API keys" },
-    { id: "manage_users", label: "Manage Users", description: "Create and modify user accounts" },
-    { id: "manage_roles", label: "Manage Roles", description: "Assign and remove user roles" },
-  ];
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -207,12 +196,9 @@ export default function UserManagementPage() {
   function getRolePermissions(user: UserRecord): string[] {
     const rolePerms: string[] = [];
     user.roles.forEach((role) => {
-      if (role.name === "admin") {
-        rolePerms.push(...availablePermissions.map((p) => p.id));
-      } else if (role.name === "editor") {
-        rolePerms.push("view_dashboard", "view_logs", "view_reports", "edit_settings");
-      } else if (role.name === "viewer") {
-        rolePerms.push("view_dashboard", "view_logs", "view_reports");
+      const permsForRole = ROLE_PERMISSIONS[role.name];
+      if (permsForRole) {
+        rolePerms.push(...permsForRole);
       }
     });
     return [...new Set(rolePerms)];
@@ -514,7 +500,7 @@ export default function UserManagementPage() {
                                   Available Permissions
                                 </h5>
                                 <div className="grid gap-3">
-                                  {availablePermissions.map((perm) => {
+                                  {AVAILABLE_PERMISSIONS.map((perm) => {
                                     const hasPermission = userPerms.includes(perm.id);
                                     const fromRole = rolePerms.includes(perm.id);
                                     return (
@@ -564,7 +550,7 @@ export default function UserManagementPage() {
                                   </p>
                                   <div className="flex flex-wrap gap-2">
                                     {userPerms.map((permId) => {
-                                      const perm = availablePermissions.find((p) => p.id === permId);
+                                      const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
                                       return (
                                         <span
                                           key={permId}

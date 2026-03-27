@@ -236,7 +236,7 @@ export default function SettingsPage() {
                     <thead>
                       <tr className="border-b border-gray-200 dark:border-gray-700">
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Key</th>
-                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Value</th>
+                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-96">Value</th>
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-40">Action</th>
                       </tr>
                     </thead>
@@ -245,9 +245,9 @@ export default function SettingsPage() {
                         const isEditing = editingEnvKeys.has(key);
                         const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
                         return (
-                          <tr key={key} className="border-b border-gray-100 dark:border-gray-800">
+                          <tr key={key} className="h-10 border-b border-gray-100 dark:border-gray-800">
                             <td className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400">{key}</td>
-                            <td className="px-4 py-2 text-sm">
+                            <td className="px-4 py-2 text-sm w-96">
                               {isEditing ? (
                                 <input
                                   value={currentValue}
@@ -257,6 +257,7 @@ export default function SettingsPage() {
                                       [key]: e.target.value,
                                     }))
                                   }
+                                  className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                                 />
                               ) : (
                                 <span className="text-gray-700 dark:text-gray-300">{currentValue || "(empty)"}</span>
@@ -326,7 +327,7 @@ export default function SettingsPage() {
                     <thead>
                       <tr className="border-b border-gray-200 dark:border-gray-700">
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Key</th>
-                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90">Value</th>
+                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-96">Value</th>
                         <th className="px-4 py-2 text-left text-sm font-semibold text-gray-900 dark:text-white/90 w-40">Action</th>
                       </tr>
                     </thead>
@@ -335,9 +336,9 @@ export default function SettingsPage() {
                         const isEditing = editingEnvKeys.has(key);
                         const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
                         return (
-                          <tr key={key} className="border-b border-gray-100 dark:border-gray-800">
+                          <tr key={key} className="h-10 border-b border-gray-100 dark:border-gray-800">
                             <td className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400">{key}</td>
-                            <td className="px-4 py-2 text-sm">
+                            <td className="px-4 py-2 text-sm w-96">
                               {isEditing ? (
                                 <input
                                   value={currentValue}
@@ -348,6 +349,7 @@ export default function SettingsPage() {
                                     }))
                                   }
                                   type="password"
+                                  className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
                                 />
                               ) : (
                                 <span className="font-mono text-gray-700 dark:text-gray-300">

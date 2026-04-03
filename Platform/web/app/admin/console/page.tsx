@@ -55,6 +55,7 @@ export default function AdminConsolePage() {
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
 
   const [me, setMe] = useState<UserRecord | null>(null);
   const [botStatus, setBotStatus] = useState<AdminBotStatus | null>(null);
@@ -69,6 +70,7 @@ export default function AdminConsolePage() {
     setToken("");
     setStatus(reason);
     setError("");
+    setProfileResolved(false);
     setMe(null);
     setBotStatus(null);
     setLogRuns([]);
@@ -106,14 +108,19 @@ export default function AdminConsolePage() {
       const canLoadStatus = hasPermission(meData, "manage_bot") || hasPermission(meData, "view_logs");
       const canLoadLogs = hasPermission(meData, "view_logs");
       const canLoadReports = hasPermission(meData, "view_reports");
-      const [statusData, logsData, reportsData] = await Promise.all([
+      const [statusData, logsData, reportsData, logTailData] = await Promise.all([
         canLoadStatus ? getAdminBotStatus(authToken) : Promise.resolve(null),
         canLoadLogs ? getAdminLogRuns(authToken) : Promise.resolve([] as AdminLogRun[]),
         canLoadReports ? getAdminReportRuns(authToken) : Promise.resolve([] as AdminReportRun[]),
+        canLoadLogs ? getAdminBotLogTail(authToken, "latest", 320) : Promise.resolve(null),
       ]);
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
+      setLogTail(logTailData);
+      if (logTailData?.run_key) {
+        setSelectedRunKey(logTailData.run_key);
+      }
     },
     [],
   );
@@ -142,7 +149,9 @@ export default function AdminConsolePage() {
       return;
     }
     setToken(stored);
-    setStatus("Session restored");
+    setStatus("Loading console...");
+    setAuthChecked(true);
+    setProfileResolved(false);
     // Set stored email as fallback while API data loads
     if (storedEmail) {
       const fallbackMe: UserRecord = {
@@ -157,7 +166,9 @@ export default function AdminConsolePage() {
       setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
     loadAdminData(stored)
-      .then(() => (canViewLogs ? refreshLogTail(stored, "latest") : Promise.resolve()))
+      .then(() => {
+        setStatus("Session restored");
+      })
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
@@ -171,11 +182,11 @@ export default function AdminConsolePage() {
         const msg = err instanceof Error ? err.message : "Failed loading admin data";
         setError(msg);
       })
-      .finally(() => setAuthChecked(true));
-  }, [canViewLogs, clearAdminSession, loadAdminData, refreshLogTail, router]);
+      .finally(() => setProfileResolved(true));
+  }, [clearAdminSession, loadAdminData, router]);
 
   useEffect(() => {
-    if (!me || canViewConsole) {
+    if (!profileResolved || !me || canViewConsole) {
       return;
     }
     setBotStatus(null);
@@ -187,7 +198,7 @@ export default function AdminConsolePage() {
       setError("Console access is not enabled for your account.");
       router.replace(fallbackHref);
     }
-  }, [canViewConsole, fallbackHref, me, router]);
+  }, [canViewConsole, fallbackHref, me, profileResolved, router]);
 
   useEffect(() => {
     if (!token || !canViewConsole || !canViewLogs) return;
@@ -299,7 +310,7 @@ export default function AdminConsolePage() {
     return null;
   }
 
-  if (me && !canViewConsole && !fallbackHref) {
+  if (profileResolved && me && !canViewConsole && !fallbackHref) {
     return (
       <DashboardShell
         title="Console"

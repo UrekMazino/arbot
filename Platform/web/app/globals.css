@@ -97,6 +97,7 @@
     margin: 0;
     padding: 0;
     min-height: 100%;
+    scroll-behavior: smooth;
   }
 
   body {
@@ -201,4 +202,32 @@
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb {
   background: #344054;
+}
+
+:root {
+  --ui-motion-fast: 160ms;
+  --ui-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ui-motion-ease-soft: cubic-bezier(0.2, 0.9, 0.22, 1);
+}
+
+.app-shell-shift {
+  transition-property: margin, width, transform, opacity, background-color, border-color;
+  transition-duration: var(--ui-motion-fast);
+  transition-timing-function: var(--ui-motion-ease-soft);
+}
+
+.app-overlay-fade {
+  transition: opacity 140ms var(--ui-motion-ease-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body {
+    scroll-behavior: auto;
+  }
+
+  .app-shell-shift,
+  .app-overlay-fade {
+    transition-duration: 1ms !important;
+  }
 }

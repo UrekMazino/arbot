@@ -40,6 +40,7 @@ export default function UserManagementPage() {
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("users");
 
   const [me, setMe] = useState<UserRecord | null>(null);
@@ -76,6 +77,7 @@ export default function UserManagementPage() {
     setToken("");
     setStatus(reason);
     setError("");
+    setProfileResolved(false);
     setMe(null);
     setUsers([]);
     setRoles([]);
@@ -112,9 +114,27 @@ export default function UserManagementPage() {
       router.replace("/login?next=/admin/access");
       return;
     }
+    const storedEmail = getStoredAdminEmail();
     setToken(stored);
-    setStatus("Session restored");
+    setStatus("Loading access...");
+    setAuthChecked(true);
+    setProfileResolved(false);
+    if (storedEmail) {
+      const fallbackMe: UserRecord = {
+        id: "",
+        email: storedEmail,
+        is_active: false,
+        permissions: [],
+        roles: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
+    }
     loadUserManagementData(stored)
+      .then(() => {
+        setStatus("Session restored");
+      })
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
@@ -124,11 +144,11 @@ export default function UserManagementPage() {
         const msg = err instanceof Error ? err.message : "Failed loading user management";
         setError(msg);
       })
-      .finally(() => setAuthChecked(true));
+      .finally(() => setProfileResolved(true));
   }, [clearAdminSession, loadUserManagementData, router]);
 
   useEffect(() => {
-    if (!me || canViewAccess) {
+    if (!profileResolved || !me || canViewAccess) {
       return;
     }
     setUsers([]);
@@ -138,7 +158,7 @@ export default function UserManagementPage() {
       setError("Access management permissions are not enabled for your account.");
       router.replace(fallbackHref);
     }
-  }, [canViewAccess, fallbackHref, me, router]);
+  }, [canViewAccess, fallbackHref, me, profileResolved, router]);
 
   useEffect(() => {
     if (canManageUsers) {
@@ -427,7 +447,7 @@ export default function UserManagementPage() {
     return null;
   }
 
-  if (me && !canViewAccess && !fallbackHref) {
+  if (profileResolved && me && !canViewAccess && !fallbackHref) {
     return (
       <DashboardShell
         title="User Management"
@@ -444,6 +464,31 @@ export default function UserManagementPage() {
           <section className={sectionCardClasses}>
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
             <p className="mt-2 text-sm text-error-600 dark:text-error-400">Access management permissions are not enabled for this account.</p>
+          </section>
+        </div>
+      </DashboardShell>
+    );
+  }
+
+  if (token && !profileResolved) {
+    return (
+      <DashboardShell
+        title="User Management"
+        subtitle="Manage users, roles, and permissions."
+        status={status}
+        activeHref="/admin/access"
+        navItems={navItems}
+        auth={{
+          email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <div className="grid gap-4">
+          <section className={sectionCardClasses}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Access</p>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
+            </div>
           </section>
         </div>
       </DashboardShell>

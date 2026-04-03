@@ -31,7 +31,7 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
 
   return (
     <aside
-      className={`fixed top-0 left-0 z-50 h-screen border-r border-gray-200 bg-white transition-all duration-300 ease-in-out dark:border-gray-800 dark:bg-gray-900 ${widthClass} ${
+      className={`app-shell-shift fixed top-0 left-0 z-50 h-screen border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 ${widthClass} ${
         isMobileOpen ? "translate-x-0" : "-translate-x-full"
       } lg:translate-x-0`}
       onMouseEnter={() => {

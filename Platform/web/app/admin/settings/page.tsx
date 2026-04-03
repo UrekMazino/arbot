@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("bot");
   const [me, setMe] = useState<UserRecord | null>(null);
 
@@ -49,6 +50,8 @@ export default function SettingsPage() {
     setToken("");
     setStatus(reason);
     setError("");
+    setProfileResolved(false);
+    setMe(null);
     if (redirectToLogin) {
       router.replace("/login?next=/admin/settings");
     }
@@ -69,8 +72,23 @@ export default function SettingsPage() {
       router.replace("/login?next=/admin/settings");
       return;
     }
+    const storedEmail = getStoredAdminEmail();
     setToken(stored);
-    setStatus("Session restored");
+    setStatus("Loading settings...");
+    setAuthChecked(true);
+    setProfileResolved(false);
+    if (storedEmail) {
+      const fallbackMe: UserRecord = {
+        id: "",
+        email: storedEmail,
+        is_active: false,
+        permissions: [],
+        roles: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
+    }
     getMe(stored)
       .then(async (userData) => {
         setMe(userData);
@@ -84,6 +102,7 @@ export default function SettingsPage() {
           return;
         }
         await loadEnvSettings(stored);
+        setStatus("Session restored");
       })
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
@@ -94,11 +113,11 @@ export default function SettingsPage() {
         const msg = err instanceof Error ? err.message : "Failed loading settings";
         setError(msg);
       })
-      .finally(() => setAuthChecked(true));
+      .finally(() => setProfileResolved(true));
   }, [clearAdminSession, loadEnvSettings, router]);
 
   useEffect(() => {
-    if (!me || canViewSettings) {
+    if (!profileResolved || !me || canViewSettings) {
       return;
     }
     setEnvSettings({ path: "Execution/.env", values: {} });
@@ -108,7 +127,7 @@ export default function SettingsPage() {
       setError("Settings access is not enabled for your account.");
       router.replace(fallbackHref);
     }
-  }, [canViewSettings, fallbackHref, me, router]);
+  }, [canViewSettings, fallbackHref, me, profileResolved, router]);
 
   useEffect(() => {
     if (canEditSettings) {
@@ -213,7 +232,7 @@ export default function SettingsPage() {
     return null;
   }
 
-  if (me && !canViewSettings && !fallbackHref) {
+  if (profileResolved && me && !canViewSettings && !fallbackHref) {
     return (
       <DashboardShell
         title="Settings"
@@ -229,6 +248,29 @@ export default function SettingsPage() {
         <section className={sectionCardClasses}>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Settings</h1>
           <p className="mt-2 text-sm text-error-600 dark:text-error-400">Settings permissions are not enabled for this account.</p>
+        </section>
+      </DashboardShell>
+    );
+  }
+
+  if (token && !profileResolved) {
+    return (
+      <DashboardShell
+        title="Settings"
+        subtitle="Configure environment variables and API credentials."
+        status={status}
+        activeHref="/admin/settings"
+        navItems={navItems}
+        auth={{
+          email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <section className={sectionCardClasses}>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Configuration</p>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
+          </div>
         </section>
       </DashboardShell>
     );

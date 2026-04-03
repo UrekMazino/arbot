@@ -50,7 +50,7 @@ function DashboardFrame({
       <AppSidebar activeHref={activeHref} navItems={navItems} />
       <Backdrop />
 
-      <div className={`flex-1 transition-all duration-300 ease-in-out ${contentMargin}`}>
+      <div className={`app-shell-shift flex-1 ${contentMargin}`}>
         <AppHeader title={title} subtitle={subtitle} status={status} actions={actions} auth={auth} />
         <main className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-6">{children}</main>
       </div>

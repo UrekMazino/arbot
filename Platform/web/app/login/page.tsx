@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { forgotPassword, getMe, login } from "../../lib/api";
+import { canAccessAdminPath, getFirstAccessibleAdminPath } from "../../lib/admin-access";
 import {
   clearStoredAdminSession,
   defaultRememberMe,
@@ -50,7 +51,13 @@ export default function LoginPage() {
     getMe(token)
       .then((meData) => {
         if (hasAdminRole(meData.roles)) {
-          router.replace(nextPath);
+          const redirectPath = canAccessAdminPath(meData, nextPath) ? nextPath : getFirstAccessibleAdminPath(meData);
+          if (redirectPath) {
+            router.replace(redirectPath);
+            return;
+          }
+          clearStoredAdminSession();
+          setError("Your admin role has no enabled UI permissions.");
           return;
         }
         clearStoredAdminSession();
@@ -74,7 +81,13 @@ export default function LoginPage() {
         return;
       }
       persistAdminSession(pair.access_token, pair.refresh_token, rememberMe, meData.email);
-      router.replace(nextPath);
+      const redirectPath = canAccessAdminPath(meData, nextPath) ? nextPath : getFirstAccessibleAdminPath(meData);
+      if (!redirectPath) {
+        clearStoredAdminSession();
+        setError("Your admin role has no enabled UI permissions.");
+        return;
+      }
+      router.replace(redirectPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sign-in failed";
       setError(msg);

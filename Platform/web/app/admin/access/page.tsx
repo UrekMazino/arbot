@@ -1,6 +1,6 @@
 "use client";
 
-import { Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -18,6 +18,13 @@ import {
   removeUserRole,
   updateRole,
 } from "../../../lib/api";
+import {
+  canAccessAdminPath,
+  getAdminNavItems,
+  getFirstAccessibleAdminPath,
+  hasAdminRole,
+  hasPermission,
+} from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { AVAILABLE_PERMISSIONS, resolveRolePermissionIds } from "../../../lib/permissions";
@@ -25,10 +32,6 @@ import { DashboardShell } from "../../../components/dashboard-shell";
 import { TableFrame } from "../../../components/panels";
 
 type TabType = "users" | "roles" | "permissions";
-
-function hasAdminRole(user: UserRecord | null): boolean {
-  return Boolean(user?.roles.some((role) => role.name.toLowerCase() === "admin"));
-}
 
 export default function UserManagementPage() {
   const router = useRouter();
@@ -42,6 +45,12 @@ export default function UserManagementPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [roles, setRoles] = useState<RoleRecord[]>([]);
   const [busy, setBusy] = useState(false);
+  const navItems = useMemo(() => getAdminNavItems(me), [me]);
+  const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
+  const canManageUsers = hasPermission(me, "manage_users");
+  const canManageRoles = hasPermission(me, "manage_roles");
+  const canReadRoles = canManageUsers || canManageRoles;
+  const canViewAccess = canAccessAdminPath(me, "/admin/access");
 
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
@@ -81,14 +90,16 @@ export default function UserManagementPage() {
     async (authToken: string) => {
       const meData = await getMe(authToken);
       setMe(meData);
-      if (!hasAdminRole(meData)) {
+      if (!hasAdminRole(meData) || !canAccessAdminPath(meData, "/admin/access")) {
         setUsers([]);
         setRoles([]);
         return;
       }
+      const canLoadUsers = hasPermission(meData, "manage_users");
+      const canLoadRoles = canLoadUsers || hasPermission(meData, "manage_roles");
       const [usersData, rolesData] = await Promise.all([
-        listUsers(authToken),
-        listRoles(authToken),
+        canLoadUsers ? listUsers(authToken) : Promise.resolve([] as UserRecord[]),
+        canLoadRoles ? listRoles(authToken) : Promise.resolve([] as RoleRecord[]),
       ]);
       setUsers(usersData);
       setRoles(rolesData);
@@ -118,9 +129,33 @@ export default function UserManagementPage() {
       .finally(() => setAuthChecked(true));
   }, [clearAdminSession, loadUserManagementData, router]);
 
+  useEffect(() => {
+    if (!me || !hasAdminRole(me) || canViewAccess) {
+      return;
+    }
+    setUsers([]);
+    setRoles([]);
+    if (fallbackHref && fallbackHref !== "/admin/access") {
+      setStatus("Redirecting");
+      setError("Access management permissions have been removed from your role.");
+      router.replace(fallbackHref);
+    }
+  }, [canViewAccess, fallbackHref, me, router]);
+
+  useEffect(() => {
+    if (canManageUsers) {
+      setActiveTab((prev) => (prev === "roles" && !canManageRoles ? "users" : prev));
+      return;
+    }
+    if (canManageRoles) {
+      setActiveTab("roles");
+      return;
+    }
+  }, [canManageUsers, canManageRoles]);
+
   async function handleCreateUser(e: FormEvent) {
     e.preventDefault();
-    if (!token || !newUserEmail || !newUserPassword) return;
+    if (!token || !canManageUsers || !newUserEmail || !newUserPassword) return;
 
     setBusy(true);
     setError("");
@@ -147,7 +182,7 @@ export default function UserManagementPage() {
   }
 
   async function handleRemoveRole(userId: string, roleNameToRemove: string) {
-    if (!token) return;
+    if (!token || (!canManageUsers && !canManageRoles)) return;
 
     setBusy(true);
     setError("");
@@ -169,7 +204,7 @@ export default function UserManagementPage() {
   }
 
   async function handleDeleteUser(userId: string) {
-    if (!token) return;
+    if (!token || !canManageUsers) return;
 
     setBusy(true);
     setError("");
@@ -193,7 +228,7 @@ export default function UserManagementPage() {
 
   async function handleAssignRoleFromModal(e: FormEvent) {
     e.preventDefault();
-    if (!token || !assignRoleModalUser || !assignRoleModalRoleName) return;
+    if (!token || (!canManageUsers && !canManageRoles) || !assignRoleModalUser || !assignRoleModalRoleName) return;
 
     setBusy(true);
     setError("");
@@ -218,7 +253,7 @@ export default function UserManagementPage() {
 
   async function handleCreateRole(e: FormEvent) {
     e.preventDefault();
-    if (!token || !newRoleName) return;
+    if (!token || !canManageRoles || !newRoleName) return;
 
     setBusy(true);
     setError("");
@@ -248,7 +283,7 @@ export default function UserManagementPage() {
 
   async function handleUpdateRole(e: FormEvent) {
     e.preventDefault();
-    if (!token || !editingRoleId || !editingRoleName) return;
+    if (!token || !canManageRoles || !editingRoleId || !editingRoleName) return;
 
     setBusy(true);
     setError("");
@@ -275,7 +310,7 @@ export default function UserManagementPage() {
   }
 
   async function handleDeleteRole(roleId: string, roleName: string) {
-    if (!token || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
+    if (!token || !canManageRoles || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
 
     setBusy(true);
     setError("");
@@ -387,17 +422,35 @@ export default function UserManagementPage() {
         subtitle="Manage users, roles, and permissions."
         status={status}
         activeHref="/admin/access"
-        navItems={[
-          { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-          { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-          { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-          { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-        ]}
+        navItems={navItems}
       >
         <div className="grid gap-4">
           <section className={sectionCardClasses}>
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
             <p className="mt-2 text-sm text-error-600 dark:text-error-400">Admin role required for access.</p>
+          </section>
+        </div>
+      </DashboardShell>
+    );
+  }
+
+  if (me && hasAdminRole(me) && !canViewAccess && !fallbackHref) {
+    return (
+      <DashboardShell
+        title="User Management"
+        subtitle="Manage users, roles, and permissions."
+        status="Access restricted"
+        activeHref="/admin/access"
+        navItems={navItems}
+        auth={{
+          email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <div className="grid gap-4">
+          <section className={sectionCardClasses}>
+            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
+            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Access management permissions are not enabled for your role.</p>
           </section>
         </div>
       </DashboardShell>
@@ -417,12 +470,7 @@ export default function UserManagementPage() {
       subtitle="Manage users, roles, and permissions."
       status={status}
       activeHref="/admin/access"
-      navItems={[
-        { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-        { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-        { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-      ]}
+      navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
@@ -432,31 +480,37 @@ export default function UserManagementPage() {
         <section className={sectionCardClasses}>
           <div className="border-b border-gray-200 dark:border-gray-700">
             <div className="flex gap-8">
-              <button
-                onClick={() => setActiveTab("users")}
-                className={tabButtonClass(activeTab === "users")}
-              >
-                Users
-              </button>
-              <button
-                onClick={() => setActiveTab("roles")}
-                className={tabButtonClass(activeTab === "roles")}
-              >
-                Roles
-              </button>
-              <button
-                onClick={() => setActiveTab("permissions")}
-                className={tabButtonClass(activeTab === "permissions")}
-              >
-                Permissions
-              </button>
+              {canManageUsers ? (
+                <button
+                  onClick={() => setActiveTab("users")}
+                  className={tabButtonClass(activeTab === "users")}
+                >
+                  Users
+                </button>
+              ) : null}
+              {canManageRoles ? (
+                <button
+                  onClick={() => setActiveTab("roles")}
+                  className={tabButtonClass(activeTab === "roles")}
+                >
+                  Roles
+                </button>
+              ) : null}
+              {canManageUsers ? (
+                <button
+                  onClick={() => setActiveTab("permissions")}
+                  className={tabButtonClass(activeTab === "permissions")}
+                >
+                  Permissions
+                </button>
+              ) : null}
             </div>
           </div>
 
           {error ? <p className="mt-4 text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
           <div className="mt-6">
-            {activeTab === "users" && (
+            {activeTab === "users" && canManageUsers && (
               <div>
                 <div className="mb-4">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">User Management</h3>
@@ -706,7 +760,7 @@ export default function UserManagementPage() {
               </div>
             )}
 
-            {activeTab === "roles" && (
+            {activeTab === "roles" && canManageRoles && (
               <div>
                 <div className="mb-4">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Role Management</h3>
@@ -885,7 +939,7 @@ export default function UserManagementPage() {
               </div>
             )}
 
-            {activeTab === "permissions" && (
+            {activeTab === "permissions" && canManageUsers && (
               <div>
                 <div className="mb-6 space-y-6">
                   <div>

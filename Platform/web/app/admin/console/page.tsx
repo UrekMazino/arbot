@@ -19,14 +19,17 @@ import {
   startAdminBot,
   stopAdminBot,
 } from "../../../lib/api";
+import {
+  canAccessAdminPath,
+  getAdminNavItems,
+  getFirstAccessibleAdminPath,
+  hasAdminRole,
+  hasPermission,
+} from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
-
-function hasAdminRole(user: UserRecord | null): boolean {
-  return Boolean(user?.roles.some((role) => role.name.toLowerCase() === "admin"));
-}
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";
@@ -81,14 +84,20 @@ export default function AdminConsolePage() {
     () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
     [reportRuns],
   );
+  const navItems = useMemo(() => getAdminNavItems(me), [me]);
+  const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
   const isAdmin = hasAdminRole(me);
+  const canViewLogs = hasPermission(me, "view_logs");
+  const canManageBot = hasPermission(me, "manage_bot");
+  const canViewReports = hasPermission(me, "view_reports");
+  const canViewConsole = canAccessAdminPath(me, "/admin/console");
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
       const meData = await getMe(authToken);
       setMe(meData);
 
-      if (!hasAdminRole(meData)) {
+      if (!hasAdminRole(meData) || !canAccessAdminPath(meData, "/admin/console")) {
         setBotStatus(null);
         setLogRuns([]);
         setReportRuns([]);
@@ -96,10 +105,13 @@ export default function AdminConsolePage() {
         return;
       }
 
+      const canLoadStatus = hasPermission(meData, "manage_bot") || hasPermission(meData, "view_logs");
+      const canLoadLogs = hasPermission(meData, "view_logs");
+      const canLoadReports = hasPermission(meData, "view_reports");
       const [statusData, logsData, reportsData] = await Promise.all([
-        getAdminBotStatus(authToken),
-        getAdminLogRuns(authToken),
-        getAdminReportRuns(authToken),
+        canLoadStatus ? getAdminBotStatus(authToken) : Promise.resolve(null),
+        canLoadLogs ? getAdminLogRuns(authToken) : Promise.resolve([] as AdminLogRun[]),
+        canLoadReports ? getAdminReportRuns(authToken) : Promise.resolve([] as AdminReportRun[]),
       ]);
       setBotStatus(statusData);
       setLogRuns(logsData);
@@ -110,13 +122,17 @@ export default function AdminConsolePage() {
 
   const refreshLogTail = useCallback(
     async (authToken: string, runKey: string) => {
+      if (!canViewLogs) {
+        setLogTail(null);
+        return;
+      }
       const next = await getAdminBotLogTail(authToken, runKey || "latest", 320);
       setLogTail(next);
       if (runKey === "latest" && next?.run_key) {
         setSelectedRunKey(next.run_key);
       }
     },
-    [],
+    [canViewLogs],
   );
 
   useEffect(() => {
@@ -142,7 +158,7 @@ export default function AdminConsolePage() {
       setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
     loadAdminData(stored)
-      .then(() => refreshLogTail(stored, "latest"))
+      .then(() => (canViewLogs ? refreshLogTail(stored, "latest") : Promise.resolve()))
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
@@ -157,10 +173,25 @@ export default function AdminConsolePage() {
         setError(msg);
       })
       .finally(() => setAuthChecked(true));
-  }, [clearAdminSession, loadAdminData, refreshLogTail, router]);
+  }, [canViewLogs, clearAdminSession, loadAdminData, refreshLogTail, router]);
 
   useEffect(() => {
-    if (!token || !isAdmin) return;
+    if (!me || !isAdmin || canViewConsole) {
+      return;
+    }
+    setBotStatus(null);
+    setLogRuns([]);
+    setReportRuns([]);
+    setLogTail(null);
+    if (fallbackHref && fallbackHref !== "/admin/console") {
+      setStatus("Redirecting");
+      setError("Console access has been removed from your role.");
+      router.replace(fallbackHref);
+    }
+  }, [canViewConsole, fallbackHref, isAdmin, me, router]);
+
+  useEffect(() => {
+    if (!token || !isAdmin || !canViewLogs) return;
     const timer = window.setInterval(() => {
       refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
@@ -174,10 +205,10 @@ export default function AdminConsolePage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [clearAdminSession, token, isAdmin, selectedRunKey, refreshLogTail]);
+  }, [canViewLogs, clearAdminSession, token, isAdmin, selectedRunKey, refreshLogTail]);
 
   async function handleStart() {
-    if (!token) return;
+    if (!token || !canManageBot) return;
     setBusy(true);
     setError("");
     try {
@@ -202,7 +233,7 @@ export default function AdminConsolePage() {
   }
 
   async function handleStop() {
-    if (!token) return;
+    if (!token || !canManageBot) return;
     setBusy(true);
     setError("");
     try {
@@ -232,7 +263,9 @@ export default function AdminConsolePage() {
     setError("");
     try {
       await loadAdminData(token);
-      await refreshLogTail(token, selectedRunKey || "latest");
+      if (canViewLogs) {
+        await refreshLogTail(token, selectedRunKey || "latest");
+      }
       setStatus("Refreshed");
     } catch (err) {
       if (isUnauthorizedError(err)) {
@@ -267,18 +300,34 @@ export default function AdminConsolePage() {
     return null;
   }
 
+  if (me && isAdmin && !canViewConsole && !fallbackHref) {
+    return (
+      <DashboardShell
+        title="Console"
+        subtitle="Start/stop bot runs, monitor live terminal, and manage users and runtime settings."
+        status="Access restricted"
+        activeHref="/admin/console"
+        navItems={navItems}
+        auth={{
+          email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <section className={sectionCardClasses}>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Console</h1>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Console permissions are not enabled for your role.</p>
+        </section>
+      </DashboardShell>
+    );
+  }
+
   return (
     <DashboardShell
       title="Console"
       subtitle="Start/stop bot runs, monitor live terminal, and manage users and runtime settings."
       status={status}
       activeHref="/admin/console"
-      navItems={[
-        { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-        { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-        { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-      ]}
+      navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
@@ -295,12 +344,16 @@ export default function AdminConsolePage() {
               <button onClick={handleRefreshAll} disabled={busy} className={primaryButtonClasses}>
                 Refresh
               </button>
-              <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
-                Start Bot
-              </button>
-              <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
-                Stop Bot
-              </button>
+              {canManageBot ? (
+                <>
+                  <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
+                    Start Bot
+                  </button>
+                  <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
+                    Stop Bot
+                  </button>
+                </>
+              ) : null}
             </div>
           </div>
         </section>

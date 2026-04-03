@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..deps import get_db_session, require_roles
+from ..deps import get_db_session, require_permissions
 from ..models import Role, User
 from ..schemas import MessageOut, RoleOut, RoleCreateIn, RoleUpdateIn, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
 from ..security import hash_password
@@ -30,7 +30,7 @@ def validate_role_name(raw: str) -> str:
 
 @router.get("/roles", response_model=list[RoleOut])
 def list_roles(
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users", "manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     stmt = select(Role).order_by(Role.name.asc())
@@ -40,7 +40,7 @@ def list_roles(
 @router.get("/roles/{role_id}", response_model=RoleOut)
 def get_role(
     role_id: str,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users", "manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     role = db.get(Role, role_id)
@@ -52,7 +52,7 @@ def get_role(
 @router.post("/roles", response_model=RoleOut)
 def create_role(
     body: RoleCreateIn,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     role_name = validate_role_name(body.name)
@@ -71,7 +71,7 @@ def create_role(
 def update_role(
     role_id: str,
     body: RoleUpdateIn,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     role = db.get(Role, role_id)
@@ -99,7 +99,7 @@ def update_role(
 @router.delete("/roles/{role_id}", response_model=MessageOut)
 def delete_role(
     role_id: str,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     role = db.get(Role, role_id)
@@ -117,7 +117,7 @@ def delete_role(
 
 @router.get("", response_model=list[UserOut])
 def list_users(
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users")),
     db: Session = Depends(get_db_session),
 ):
     stmt = select(User).order_by(User.created_at.desc())
@@ -127,7 +127,7 @@ def list_users(
 @router.post("", response_model=UserOut)
 def create_user(
     body: UserCreateIn,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users")),
     db: Session = Depends(get_db_session),
 ):
     exists = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
@@ -152,7 +152,7 @@ def create_user(
 def update_user(
     user_id: str,
     body: UserUpdateIn,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users")),
     db: Session = Depends(get_db_session),
 ):
     user = db.get(User, user_id)
@@ -173,7 +173,7 @@ def update_user(
 def assign_role(
     user_id: str,
     body: UserRoleAssignIn,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users", "manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     user = db.get(User, user_id)
@@ -194,7 +194,7 @@ def assign_role(
 def remove_role(
     user_id: str,
     role_name: str,
-    _: User = Depends(require_roles("admin")),
+    _: User = Depends(require_permissions("manage_users", "manage_roles")),
     db: Session = Depends(get_db_session),
 ):
     user = db.get(User, user_id)

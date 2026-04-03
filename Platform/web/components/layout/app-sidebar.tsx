@@ -27,6 +27,7 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
 
   const showLabel = isExpanded || isMobileOpen || isHovered;
   const widthClass = showLabel ? "w-[290px]" : "w-[90px]";
+  const homeHref = navItems[0]?.href || "/admin";
 
   return (
     <aside
@@ -43,7 +44,7 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
           showLabel ? "justify-start" : "justify-center"
         }`}
       >
-        <Link href="/admin/dashboard" className="inline-flex items-center gap-2">
+        <Link href={homeHref} className="inline-flex items-center gap-2">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-500 text-xs font-bold text-white">
             OS
           </span>

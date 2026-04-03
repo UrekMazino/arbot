@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..deps import get_current_user, get_db_session
+from ..deps import get_db_session, require_permissions
 from ..models import Alert, BotConfig, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
 from ..schemas import RunEventOut, RunOut, TradeOut
 
@@ -58,7 +58,7 @@ def _get_run_or_404(db: Session, run_id: str) -> Run:
 def list_runs(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     stmt = select(Run).order_by(Run.start_ts.desc()).limit(limit).offset(offset)
@@ -68,7 +68,7 @@ def list_runs(
 @router.get("/{run_id}", response_model=RunOut)
 def get_run(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     return _get_run_or_404(db, run_id)
@@ -78,7 +78,7 @@ def get_run(
 def list_run_events(
     run_id: str,
     limit: int = Query(default=500, ge=1, le=2000),
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -95,7 +95,7 @@ def list_run_events(
 def list_run_trades(
     run_id: str,
     limit: int = Query(default=1000, ge=1, le=5000),
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -111,7 +111,7 @@ def list_run_trades(
 @router.get("/{run_id}/metrics/strategy")
 def strategy_metrics(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -134,7 +134,7 @@ def strategy_metrics(
 @router.get("/{run_id}/metrics/regime")
 def regime_metrics(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -154,7 +154,7 @@ def regime_metrics(
 @router.get("/{run_id}/analytics/scorecard")
 def analytics_scorecard(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -194,7 +194,7 @@ def analytics_scorecard(
 @router.get("/{run_id}/analytics/walk-forward")
 def analytics_walk_forward(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -211,7 +211,7 @@ def analytics_walk_forward(
 @router.get("/{run_id}/analytics/parameter-stability")
 def analytics_parameter_stability(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -242,7 +242,7 @@ def analytics_parameter_stability(
 @router.get("/{run_id}/analytics/data-quality")
 def analytics_data_quality(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     run = _get_run_or_404(db, run_id)
@@ -436,7 +436,7 @@ def analytics_data_quality(
 @router.get("/{run_id}/config-snapshot")
 def get_run_config_snapshot(
     run_id: str,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_dashboard")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)
@@ -529,7 +529,7 @@ def get_run_config_snapshot(
 def list_run_report_artifacts(
     run_id: str,
     limit: int = Query(default=10, ge=1, le=50),
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     _get_run_or_404(db, run_id)

@@ -5,10 +5,19 @@ import { useRouter } from "next/navigation";
 
 import {
   AdminEnvSettings,
+  UserRecord,
   getAdminEnvSettings,
+  getMe,
   isUnauthorizedError,
   updateAdminEnvSetting,
 } from "../../../lib/api";
+import {
+  canAccessAdminPath,
+  getAdminNavItems,
+  getFirstAccessibleAdminPath,
+  hasAdminRole,
+  hasPermission,
+} from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
@@ -22,6 +31,7 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>("bot");
+  const [me, setMe] = useState<UserRecord | null>(null);
 
   const [envSettings, setEnvSettings] = useState<AdminEnvSettings>({ path: "Execution/.env", values: {} });
   const [envEdits, setEnvEdits] = useState<Record<string, string>>({});
@@ -29,6 +39,11 @@ export default function SettingsPage() {
   const [showPasswordKeys, setShowPasswordKeys] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const navItems = useMemo(() => getAdminNavItems(me), [me]);
+  const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
+  const canEditSettings = hasPermission(me, "edit_settings");
+  const canManageApi = hasPermission(me, "manage_api");
+  const canViewSettings = canAccessAdminPath(me, "/admin/settings");
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -57,7 +72,24 @@ export default function SettingsPage() {
     }
     setToken(stored);
     setStatus("Session restored");
-    loadEnvSettings(stored)
+    getMe(stored)
+      .then(async (userData) => {
+        setMe(userData);
+        if (!hasAdminRole(userData)) {
+          clearAdminSession("Admin role required.", true);
+          return;
+        }
+        if (!canAccessAdminPath(userData, "/admin/settings")) {
+          setStatus("Redirecting");
+          setError("Settings access has been removed from your role.");
+          const nextHref = getFirstAccessibleAdminPath(userData);
+          if (nextHref && nextHref !== "/admin/settings") {
+            router.replace(nextHref);
+          }
+          return;
+        }
+        await loadEnvSettings(stored);
+      })
       .catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
@@ -69,6 +101,29 @@ export default function SettingsPage() {
       })
       .finally(() => setAuthChecked(true));
   }, [clearAdminSession, loadEnvSettings, router]);
+
+  useEffect(() => {
+    if (!me || !hasAdminRole(me) || canViewSettings) {
+      return;
+    }
+    setEnvSettings({ path: "Execution/.env", values: {} });
+    setEnvEdits({});
+    if (fallbackHref && fallbackHref !== "/admin/settings") {
+      setStatus("Redirecting");
+      setError("Settings access has been removed from your role.");
+      router.replace(fallbackHref);
+    }
+  }, [canViewSettings, fallbackHref, me, router]);
+
+  useEffect(() => {
+    if (canEditSettings) {
+      setActiveTab((prev) => (prev === "api" && !canManageApi ? "bot" : prev));
+      return;
+    }
+    if (canManageApi) {
+      setActiveTab("api");
+    }
+  }, [canEditSettings, canManageApi]);
 
   // Handle Esc key to cancel editing
   useEffect(() => {
@@ -163,6 +218,27 @@ export default function SettingsPage() {
     return null;
   }
 
+  if (me && hasAdminRole(me) && !canViewSettings && !fallbackHref) {
+    return (
+      <DashboardShell
+        title="Settings"
+        subtitle="Configure environment variables and API credentials."
+        status="Access restricted"
+        activeHref="/admin/settings"
+        navItems={navItems}
+        auth={{
+          email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <section className={sectionCardClasses}>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Settings</h1>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Settings permissions are not enabled for your role.</p>
+        </section>
+      </DashboardShell>
+    );
+  }
+
   const tabButtonClass = (isActive: boolean) =>
     `px-4 py-2 font-medium text-sm ${
       isActive
@@ -176,14 +252,9 @@ export default function SettingsPage() {
       subtitle="Configure environment variables and API credentials."
       status={status}
       activeHref="/admin/settings"
-      navItems={[
-        { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-        { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-        { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-      ]}
+      navItems={navItems}
       auth={{
-        email: typeof window !== "undefined" ? getStoredAdminEmail() : "",
+        email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
       }}
     >
@@ -202,23 +273,27 @@ export default function SettingsPage() {
         <section className={sectionCardClasses}>
           <div className="border-b border-gray-200 dark:border-gray-700">
             <div className="flex gap-8">
-              <button
-                onClick={() => setActiveTab("bot")}
-                className={tabButtonClass(activeTab === "bot")}
-              >
-                Bot Settings
-              </button>
-              <button
-                onClick={() => setActiveTab("api")}
-                className={tabButtonClass(activeTab === "api")}
-              >
-                API Credentials
-              </button>
+              {canEditSettings ? (
+                <button
+                  onClick={() => setActiveTab("bot")}
+                  className={tabButtonClass(activeTab === "bot")}
+                >
+                  Bot Settings
+                </button>
+              ) : null}
+              {canManageApi ? (
+                <button
+                  onClick={() => setActiveTab("api")}
+                  className={tabButtonClass(activeTab === "api")}
+                >
+                  API Credentials
+                </button>
+              ) : null}
             </div>
           </div>
 
           <div className="mt-6">
-            {activeTab === "bot" && (
+            {activeTab === "bot" && canEditSettings && (
               <div>
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
                   <div>
@@ -309,7 +384,7 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {activeTab === "api" && (
+            {activeTab === "api" && canManageApi && (
               <div>
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
                   <div>

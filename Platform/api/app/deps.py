@@ -72,3 +72,31 @@ def require_roles(*roles: str):
         return user
 
     return dependency
+
+
+def get_user_permission_ids(user: User) -> set[str]:
+    permissions: set[str] = set()
+    for role in user.roles:
+        for permission_id in role.permissions or []:
+            normalized = str(permission_id or "").strip().lower()
+            if normalized:
+                permissions.add(normalized)
+    return permissions
+
+
+def require_permissions(*permissions: str, match: str = "any"):
+    wanted = {permission.lower() for permission in permissions if permission}
+    if match not in {"any", "all"}:
+        raise ValueError("match must be 'any' or 'all'")
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        user_permissions = get_user_permission_ids(user)
+        if match == "all":
+            allowed = wanted.issubset(user_permissions)
+        else:
+            allowed = bool(user_permissions.intersection(wanted))
+        if not allowed:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        return user
+
+    return dependency

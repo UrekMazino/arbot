@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..deps import get_current_user, get_db_session
+from ..deps import get_db_session, require_permissions
 from ..models import Report, ReportFile, Run, User
 
 router = APIRouter(tags=["reports"])
@@ -36,7 +36,7 @@ def _enqueue_report_job(run_id: str, report_id: str) -> str | None:
 @router.post("/runs/{run_id}/reports/generate")
 def generate_report(
     run_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     run = db.get(Run, run_id)
@@ -67,7 +67,7 @@ def generate_report(
 @router.get("/runs/{run_id}/reports")
 def list_run_reports(
     run_id: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     stmt = select(Report).where(Report.run_id == run_id).order_by(Report.requested_at.desc())
@@ -89,7 +89,7 @@ def list_run_reports(
 @router.get("/reports/{report_id}")
 def get_report(
     report_id: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     row = db.get(Report, report_id)
@@ -109,7 +109,7 @@ def get_report(
 @router.get("/reports/{report_id}/files")
 def list_report_files(
     report_id: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     stmt = select(ReportFile).where(ReportFile.report_id == report_id).order_by(ReportFile.created_at.asc())
@@ -132,7 +132,7 @@ def list_report_files(
 def report_file_download(
     report_id: str,
     file_id: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_permissions("view_reports")),
     db: Session = Depends(get_db_session),
 ):
     row = db.get(ReportFile, file_id)

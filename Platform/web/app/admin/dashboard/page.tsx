@@ -37,6 +37,13 @@ import {
   getStoredAdminEmail,
   persistAdminSession,
 } from "../../../lib/auth";
+import {
+  canAccessAdminPath,
+  getAdminNavItems,
+  getFirstAccessibleAdminPath,
+  hasAdminRole,
+  hasPermission,
+} from "../../../lib/admin-access";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 
 type LiveMsg = {
@@ -436,6 +443,10 @@ export default function HomePage() {
       );
     });
   }, [runs, runSearch, runStatusFilter, runPnlFilter]);
+  const navItems = useMemo(() => getAdminNavItems(me), [me]);
+  const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
+  const canViewDashboard = hasPermission(me, "view_dashboard");
+  const canViewReports = hasPermission(me, "view_reports");
 
   const loadRuns = useCallback(async (authToken: string) => {
     const nextRuns = await getRuns(authToken);
@@ -454,7 +465,7 @@ export default function HomePage() {
       getRunScorecard(authToken, runId),
       getRunDataQuality(authToken, runId),
       getRunConfigSnapshot(authToken, runId),
-      getRunReportArtifacts(authToken, runId),
+      canViewReports ? getRunReportArtifacts(authToken, runId) : Promise.resolve([] as RunReportArtifact[]),
     ]);
     setEvents(runEvents);
     setTrades(runTrades);
@@ -463,7 +474,7 @@ export default function HomePage() {
     setQualitySummary(runQuality);
     setConfigSnapshot(runConfigSnapshot);
     setReportArtifacts(runReportArtifacts);
-  }, []);
+  }, [canViewReports]);
 
   const equitySeries = useMemo(() => {
     if (!walkForward.length) return [] as { ts: string; equity: number }[];
@@ -670,28 +681,52 @@ export default function HomePage() {
       setStatus("Session restored");
       if (stored) {
         getMe(stored)
-          .then((userData) => {
+          .then(async (userData) => {
             setMe(userData);
+            if (!hasAdminRole(userData)) {
+              clearSession("Admin role required.");
+              router.replace("/login?next=/admin/dashboard");
+              return;
+            }
+            if (!canAccessAdminPath(userData, "/admin/dashboard")) {
+              setStatus("Redirecting");
+              setError("Dashboard access has been removed from your role.");
+              const nextHref = getFirstAccessibleAdminPath(userData);
+              if (nextHref && nextHref !== "/admin/dashboard") {
+                router.replace(nextHref);
+              }
+              return;
+            }
+            await loadRuns(stored);
           })
-          .catch(() => {
-            // If getMe fails, continue with stored email fallback
+          .catch((err: unknown) => {
+            if (isUnauthorizedError(err)) {
+              clearSession("Session expired. Please sign in again.");
+              setError("Session expired. Please sign in again.");
+              return;
+            }
+            const msg = err instanceof Error ? err.message : "Failed to restore admin session";
+            setError(msg);
           });
-        loadRuns(stored).catch((err: unknown) => {
-          if (isUnauthorizedError(err)) {
-            clearSession("Session expired. Please sign in again.");
-            setError("Session expired. Please sign in again.");
-            return;
-          }
-          const msg = err instanceof Error ? err.message : "Failed to load runs";
-          setError(msg);
-        });
       }
     }
-  }, [clearSession, loadRuns]);
+  }, [clearSession, loadRuns, router]);
+
+  useEffect(() => {
+    if (!me || !hasAdminRole(me) || canViewDashboard) {
+      return;
+    }
+    setReportArtifacts([]);
+    if (fallbackHref && fallbackHref !== "/admin/dashboard") {
+      setStatus("Redirecting");
+      setError("Dashboard access has been removed from your role.");
+      router.replace(fallbackHref);
+    }
+  }, [canViewDashboard, fallbackHref, me, router]);
 
 
   useEffect(() => {
-    if (!token || !selectedRunId) return;
+    if (!token || !selectedRunId || !canViewDashboard) return;
     refreshRunDetails(token, selectedRunId).catch((err: unknown) => {
       if (isUnauthorizedError(err)) {
         clearSession("Session expired. Please sign in again.");
@@ -701,10 +736,10 @@ export default function HomePage() {
       const msg = err instanceof Error ? err.message : "Failed to load run detail";
       setError(msg);
     });
-  }, [clearSession, token, selectedRunId, refreshRunDetails]);
+  }, [canViewDashboard, clearSession, token, selectedRunId, refreshRunDetails]);
 
   useEffect(() => {
-    if (!selectedRun?.bot_instance_id) return;
+    if (!canViewDashboard || !selectedRun?.bot_instance_id) return;
     const ws = new WebSocket(wsDashboardUrl(selectedRun.bot_instance_id));
 
     ws.onmessage = (ev) => {
@@ -727,11 +762,32 @@ export default function HomePage() {
     return () => {
       ws.close();
     };
-  }, [selectedRun?.bot_instance_id]);
+  }, [canViewDashboard, selectedRun?.bot_instance_id]);
 
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
+
+  if (me && hasAdminRole(me) && !canViewDashboard && !fallbackHref) {
+    return (
+      <DashboardShell
+        title="Run Browser + Live Event Stream"
+        subtitle="Monitor attribution, quality checks, reconciliation, and artifact outputs."
+        status="Access restricted"
+        activeHref="/admin/dashboard"
+        navItems={navItems}
+        auth={{
+          email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
+          hasToken: Boolean(token),
+        }}
+      >
+        <section className={sectionCardClasses}>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Dashboard</h1>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">View Dashboard permission is not enabled for your role.</p>
+        </section>
+      </DashboardShell>
+    );
+  }
 
   return (
     <DashboardShell
@@ -739,12 +795,7 @@ export default function HomePage() {
       subtitle="Monitor attribution, quality checks, reconciliation, and artifact outputs."
       status={status}
       activeHref="/admin/dashboard"
-      navItems={[
-        { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-        { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-        { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-      ]}
+      navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
         hasToken: Boolean(token),
@@ -804,7 +855,9 @@ export default function HomePage() {
             hint={`${qualitySummary?.recent_issues?.length || 0} recent issues`}
             tone={qualitySummary?.overall_status === "pass" ? "teal" : qualitySummary ? "amber" : "sky"}
           />
-          <MetricCard label="Report Files" value={String(reportFileCount)} hint={`${reportArtifacts.length} report batches`} tone="sky" />
+          {canViewReports ? (
+            <MetricCard label="Report Files" value={String(reportFileCount)} hint={`${reportArtifacts.length} report batches`} tone="sky" />
+          ) : null}
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
@@ -1306,58 +1359,60 @@ export default function HomePage() {
             )}
           </article>
 
-          <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Report Artifacts</h3>
-            {reportArtifacts.length ? (
-              <TableFrame compact>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Report</th>
-                      <th>Status</th>
-                      <th>File</th>
-                      <th>Size</th>
-                      <th>Download</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportArtifacts.flatMap((report) =>
-                      report.files.length
-                        ? report.files.map((file) => (
-                            <tr key={`${report.id}-${file.id}`}>
-                              <td>{report.id.slice(0, 8)}</td>
-                              <td>{report.status}</td>
-                              <td>{file.name}</td>
-                              <td>{fmtBytes(file.size_bytes)}</td>
-                              <td>
-                                <button
-                                  type="button"
-                                  className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                                  disabled={!token || downloadingFileId === file.id}
-                                  onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
-                                >
-                                  {downloadingFileId === file.id ? "Downloading..." : "Download"}
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        : [
-                            <tr key={`${report.id}-nofile`}>
-                              <td>{report.id.slice(0, 8)}</td>
-                              <td>{report.status}</td>
-                              <td className="text-sm text-gray-500 dark:text-gray-400" colSpan={3}>
-                                No files linked for this report.
-                              </td>
-                            </tr>,
-                          ],
-                    )}
-                  </tbody>
-                </table>
-              </TableFrame>
-            ) : (
-              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No report artifacts found for this run.</p>
-            )}
-          </article>
+          {canViewReports ? (
+            <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Report Artifacts</h3>
+              {reportArtifacts.length ? (
+                <TableFrame compact>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Report</th>
+                        <th>Status</th>
+                        <th>File</th>
+                        <th>Size</th>
+                        <th>Download</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportArtifacts.flatMap((report) =>
+                        report.files.length
+                          ? report.files.map((file) => (
+                              <tr key={`${report.id}-${file.id}`}>
+                                <td>{report.id.slice(0, 8)}</td>
+                                <td>{report.status}</td>
+                                <td>{file.name}</td>
+                                <td>{fmtBytes(file.size_bytes)}</td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                                    disabled={!token || downloadingFileId === file.id}
+                                    onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
+                                  >
+                                    {downloadingFileId === file.id ? "Downloading..." : "Download"}
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          : [
+                              <tr key={`${report.id}-nofile`}>
+                                <td>{report.id.slice(0, 8)}</td>
+                                <td>{report.status}</td>
+                                <td className="text-sm text-gray-500 dark:text-gray-400" colSpan={3}>
+                                  No files linked for this report.
+                                </td>
+                              </tr>,
+                            ],
+                      )}
+                    </tbody>
+                  </table>
+                </TableFrame>
+              ) : (
+                <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">No report artifacts found for this run.</p>
+              )}
+            </article>
+          ) : null}
         </section>
       </div>
     </DashboardShell>

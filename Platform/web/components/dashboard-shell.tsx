@@ -7,13 +7,14 @@ import { ThemeProvider } from "../context/theme-context";
 import { AppHeader } from "./layout/app-header";
 import { AppSidebar } from "./layout/app-sidebar";
 import { Backdrop } from "./layout/backdrop";
+import type { SidebarIconName } from "./layout/sidebar-icons";
 
 export type DashboardNavItem = {
   href: string;
   label: string;
   hint?: string;
   group?: string;
-  icon?: string;
+  icon?: SidebarIconName;
 };
 
 type AuthInfo = {

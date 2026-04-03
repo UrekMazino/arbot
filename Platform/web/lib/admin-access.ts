@@ -1,12 +1,13 @@
 import type { UserRecord } from "./api";
 import { resolveRolePermissionIds } from "./permissions";
+import type { SidebarIconName } from "../components/layout/sidebar-icons";
 
 export type AdminNavItem = {
   href: string;
   label: string;
   hint?: string;
   group?: string;
-  icon?: string;
+  icon?: SidebarIconName;
   requiredPermissions?: string[];
 };
 
@@ -16,7 +17,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     label: "Dashboard",
     hint: "Runs, quality, reports",
     group: "Monitor",
-    icon: "DB",
+    icon: "dashboard",
     requiredPermissions: ["view_dashboard"],
   },
   {
@@ -24,7 +25,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     label: "Console",
     hint: "Control plane",
     group: "Operate",
-    icon: "CM",
+    icon: "console",
     requiredPermissions: ["view_logs", "manage_bot"],
   },
   {
@@ -32,7 +33,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     label: "Settings",
     hint: "Configuration & credentials",
     group: "Operate",
-    icon: "ST",
+    icon: "settings",
     requiredPermissions: ["edit_settings", "manage_api"],
   },
   {
@@ -40,7 +41,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     label: "Access",
     hint: "Users, roles, permissions",
     group: "Operate",
-    icon: "UM",
+    icon: "access",
     requiredPermissions: ["manage_users", "manage_roles"],
   },
 ];

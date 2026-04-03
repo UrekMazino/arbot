@@ -5,6 +5,7 @@ import { useMemo } from "react";
 
 import { useSidebar } from "../../context/sidebar-context";
 import type { DashboardNavItem } from "../dashboard-shell";
+import { SidebarIcon } from "./sidebar-icons";
 
 type AppSidebarProps = {
   activeHref: string;
@@ -65,7 +66,6 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
             <ul className="space-y-1.5">
               {section.items.map((item) => {
                 const active = item.href === activeHref;
-                const iconText = (item.icon || item.label.slice(0, 2)).toUpperCase().slice(0, 2);
                 return (
                   <li key={item.href}>
                     <Link
@@ -77,14 +77,8 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
                           : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5"
                       } ${showLabel ? "justify-start" : "justify-center"}`}
                     >
-                      <span
-                        className={`inline-flex h-6 w-6 items-center justify-center rounded-md border text-[10px] font-bold tracking-[0.08em] ${
-                          active
-                            ? "border-brand-500/60 bg-brand-500/20 text-brand-600 dark:text-brand-300"
-                            : "border-gray-300 bg-gray-100 text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
-                        }`}
-                      >
-                        {iconText}
+                      <span className="[&>svg]:size-8">
+                        <SidebarIcon name={item.icon} />
                       </span>
                       {showLabel ? (
                         <span className="flex min-w-0 flex-col">

@@ -82,6 +82,7 @@ class UserOut(BaseModel):
     id: str
     email: str
     is_active: bool
+    permissions: list[str] = []
     roles: list[RoleOut] = []
     created_at: datetime
     updated_at: datetime
@@ -102,6 +103,15 @@ class UserUpdateIn(BaseModel):
 
 class UserRoleAssignIn(BaseModel):
     role: str
+
+
+class UserPermissionsUpdateIn(BaseModel):
+    permissions: list[str] = Field(default_factory=list)
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, value: list[str]) -> list[str]:
+        return normalize_permission_ids(value)
 
 
 class EventEnvelopeIn(BaseModel):

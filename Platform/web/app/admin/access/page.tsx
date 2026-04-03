@@ -17,6 +17,7 @@ import {
   listUsers,
   removeUserRole,
   updateRole,
+  updateUserPermissions,
 } from "../../../lib/api";
 import {
   canAccessAdminPath,
@@ -30,8 +31,9 @@ import { UI_CLASSES } from "../../../lib/ui-classes";
 import { AVAILABLE_PERMISSIONS, resolveRolePermissionIds } from "../../../lib/permissions";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { TableFrame } from "../../../components/panels";
+import { AppModal } from "../../../components/ui/modal";
 
-type TabType = "users" | "roles" | "permissions";
+type TabType = "users" | "roles";
 
 export default function UserManagementPage() {
   const router = useRouter();
@@ -49,13 +51,10 @@ export default function UserManagementPage() {
   const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
   const canManageUsers = hasPermission(me, "manage_users");
   const canManageRoles = hasPermission(me, "manage_roles");
-  const canReadRoles = canManageUsers || canManageRoles;
   const canViewAccess = canAccessAdminPath(me, "/admin/access");
 
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
-  const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
-  const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
 
   // Role CRUD state
   const [newRoleName, setNewRoleName] = useState("");
@@ -70,7 +69,7 @@ export default function UserManagementPage() {
   const [assignRoleModalUser, setAssignRoleModalUser] = useState<UserRecord | null>(null);
   const [assignRoleModalRoleName, setAssignRoleModalRoleName] = useState("");
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<UserRecord | null>(null);
-  const [viewPermissionsUser, setViewPermissionsUser] = useState<UserRecord | null>(null);
+  const [permissionEditorUser, setPermissionEditorUser] = useState<UserRecord | null>(null);
 
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
@@ -332,30 +331,8 @@ export default function UserManagementPage() {
     }
   }
 
-
-
-  function toggleUserPermission(userId: string, permissionId: string) {
-    setUserPermissionsMap((prev) => {
-      const userPerms = prev[userId] ? [...prev[userId]] : [];
-      const index = userPerms.indexOf(permissionId);
-      if (index > -1) {
-        userPerms.splice(index, 1);
-      } else {
-        userPerms.push(permissionId);
-      }
-      if (userPerms.length === 0) {
-        const nextMap = { ...prev };
-        delete nextMap[userId];
-        return nextMap;
-      }
-      return { ...prev, [userId]: userPerms };
-    });
-    const hasPermission = userPermissionsMap[userId]?.includes(permissionId) ?? false;
-    setStatus(`Permission ${hasPermission ? "removed" : "added"}`);
-  }
-
-  function getUserPermissions(userId: string): string[] {
-    return userPermissionsMap[userId] ? [...userPermissionsMap[userId]] : [];
+  function getUserPermissions(user: UserRecord): string[] {
+    return [...(user.permissions || [])];
   }
 
   function getRolePermissions(user: UserRecord): string[] {
@@ -368,6 +345,42 @@ export default function UserManagementPage() {
 
   function getSavedRolePermissions(role: RoleRecord): string[] {
     return resolveRolePermissionIds(role.name, role.permissions);
+  }
+
+  function applyUpdatedUserRecord(updatedUser: UserRecord) {
+    setUsers((prev) => prev.map((user) => (user.id === updatedUser.id ? updatedUser : user)));
+    setMe((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
+    setAssignRoleModalUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
+    setDeleteConfirmUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
+    setPermissionEditorUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
+  }
+
+  async function handleToggleUserPermission(user: UserRecord, permissionId: string) {
+    if (!token || !canManageUsers) return;
+
+    const currentPermissions = getUserPermissions(user);
+    const hasCustomPermission = currentPermissions.includes(permissionId);
+    const nextPermissions = hasCustomPermission
+      ? currentPermissions.filter((id) => id !== permissionId)
+      : [...currentPermissions, permissionId];
+
+    setBusy(true);
+    setError("");
+    try {
+      const updatedUser = await updateUserPermissions(token, user.id, nextPermissions);
+      applyUpdatedUserRecord(updatedUser);
+      setStatus(`Permission ${hasCustomPermission ? "removed" : "added"}`);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Update user permissions failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function toggleRolePermission(
@@ -495,15 +508,7 @@ export default function UserManagementPage() {
                 >
                   Roles
                 </button>
-              ) : null}
-              {canManageUsers ? (
-                <button
-                  onClick={() => setActiveTab("permissions")}
-                  className={tabButtonClass(activeTab === "permissions")}
-                >
-                  Permissions
-                </button>
-              ) : null}
+                ) : null}
             </div>
           </div>
 
@@ -578,15 +583,24 @@ export default function UserManagementPage() {
                             </div>
                           </td>
                           <td>
-                            <button
-                              onClick={() => setViewPermissionsUser(user)}
-                              className="text-xs text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300"
-                            >
-                              View
-                            </button>
+                            <div className="flex flex-wrap gap-1.5">
+                              <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                                role {getRolePermissions(user).length}
+                              </span>
+                              <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-1 text-[11px] font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
+                                custom {getUserPermissions(user).length}
+                              </span>
+                            </div>
                           </td>
                           <td>
                             <div className="flex gap-2">
+                              <button
+                                onClick={() => setPermissionEditorUser(user)}
+                                className="text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+                                disabled={busy}
+                              >
+                                Permissions
+                              </button>
                               <button
                                 onClick={() => setAssignRoleModalUser(user)}
                                 className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
@@ -616,147 +630,187 @@ export default function UserManagementPage() {
                   </table>
                 </TableFrame>
 
-                {/* Assign Role Modal */}
-                {assignRoleModalUser && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
-                      <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white/90">
-                        Assign Role to {assignRoleModalUser.email}
-                      </h3>
-                      <form onSubmit={handleAssignRoleFromModal} className="space-y-4">
-                        <select
-                          value={assignRoleModalRoleName}
-                          onChange={(e) => setAssignRoleModalRoleName(e.target.value)}
-                          className="w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                          required
-                        >
-                          <option value="">-- Select Role --</option>
-                          {roles.map((role) => (
-                            <option key={role.id} value={role.name}>
-                              {role.name}
-                            </option>
-                          ))}
-                        </select>
-                        <div className="flex gap-2">
-                          <button type="submit" disabled={busy} className={primaryButtonClasses}>
-                            Assign
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAssignRoleModalUser(null);
-                              setAssignRoleModalRoleName("");
-                            }}
-                            className={secondaryButtonClasses}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </form>
-                    </div>
-                  </div>
-                )}
-
-                {/* Delete Confirmation Modal */}
-                {deleteConfirmUser && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="w-full max-w-md rounded-lg bg-white p-6 dark:bg-gray-800">
-                      <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white/90">Delete User?</h3>
-                      <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-                        Are you sure you want to delete <span className="font-medium">{deleteConfirmUser.email}</span>? This action cannot be undone.
-                      </p>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleDeleteUser(deleteConfirmUser.id)}
-                          disabled={busy}
-                          className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 dark:bg-red-700 dark:hover:bg-red-800"
-                        >
-                          Delete
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirmUser(null)}
-                          className={secondaryButtonClasses}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* View Permissions Modal */}
-                {viewPermissionsUser && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="w-full max-w-2xl rounded-lg bg-white p-6 dark:bg-gray-800">
-                      <div className="mb-4 flex items-center justify-between">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">
-                          Permissions for {viewPermissionsUser.email}
-                        </h3>
-                        <button
-                          onClick={() => setViewPermissionsUser(null)}
-                          className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300"
-                        >
-                          ✕
-                        </button>
-                      </div>
-
-                      <div className="mb-4 space-y-3">
-                        <div>
-                          <p className="mb-2 text-xs font-semibold uppercase text-gray-600 dark:text-gray-400">
-                            From Roles
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {getRolePermissions(viewPermissionsUser).length > 0 ? (
-                              getRolePermissions(viewPermissionsUser).map((permId) => {
-                                const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
-                                return (
-                                  <span
-                                    key={permId}
-                                    className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                                  >
-                                    {perm?.label || permId}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="text-xs text-gray-400">No role permissions</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <p className="mb-2 text-xs font-semibold uppercase text-gray-600 dark:text-gray-400">
-                            Custom Permissions
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {getUserPermissions(viewPermissionsUser.id).length > 0 ? (
-                              getUserPermissions(viewPermissionsUser.id).map((permId) => {
-                                const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
-                                return (
-                                  <span
-                                    key={permId}
-                                    className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200"
-                                  >
-                                    {perm?.label || permId}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="text-xs text-gray-400">No custom permissions</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
+                <AppModal
+                  open={Boolean(assignRoleModalUser)}
+                  title={assignRoleModalUser ? `Assign Role to ${assignRoleModalUser.email}` : "Assign Role"}
+                  description="Choose one of the existing roles for this user."
+                  size="sm"
+                  onClose={() => {
+                    setAssignRoleModalUser(null);
+                    setAssignRoleModalRoleName("");
+                  }}
+                  footer={
+                    <div className="flex justify-end gap-3">
                       <button
-                        onClick={() => setViewPermissionsUser(null)}
+                        type="button"
+                        onClick={() => {
+                          setAssignRoleModalUser(null);
+                          setAssignRoleModalRoleName("");
+                        }}
                         className={secondaryButtonClasses}
                       >
-                        Close
+                        Cancel
+                      </button>
+                      <button type="submit" form="assign-role-form" disabled={busy} className={primaryButtonClasses}>
+                        Assign Role
                       </button>
                     </div>
+                  }
+                >
+                  <form id="assign-role-form" onSubmit={handleAssignRoleFromModal} className="space-y-4">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Role
+                      <select
+                        value={assignRoleModalRoleName}
+                        onChange={(e) => setAssignRoleModalRoleName(e.target.value)}
+                        className="mt-2 w-full rounded-2xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-brand-400 focus:ring-3 focus:ring-brand-500/15 dark:border-gray-700 dark:bg-gray-800 dark:text-white/90"
+                        required
+                      >
+                        <option value="">Select role</option>
+                        {roles.map((role) => (
+                          <option key={role.id} value={role.name}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </form>
+                </AppModal>
+
+                <AppModal
+                  open={Boolean(deleteConfirmUser)}
+                  title="Delete User"
+                  description={
+                    deleteConfirmUser
+                      ? `This will permanently remove ${deleteConfirmUser.email} from the platform.`
+                      : "This action cannot be undone."
+                  }
+                  size="sm"
+                  onClose={() => setDeleteConfirmUser(null)}
+                  footer={
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirmUser(null)}
+                        className={secondaryButtonClasses}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteConfirmUser && handleDeleteUser(deleteConfirmUser.id)}
+                        disabled={busy}
+                        className="inline-flex items-center rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-70 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                      >
+                        Delete User
+                      </button>
+                    </div>
+                  }
+                >
+                  <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
+                    User roles and custom permissions will be removed together with this account.
                   </div>
-                )}
+                </AppModal>
+
+                <AppModal
+                  open={Boolean(permissionEditorUser)}
+                  title={permissionEditorUser ? `Manage Permissions for ${permissionEditorUser.email}` : "Manage Permissions"}
+                  description="Role-granted permissions are read-only here. Use add and remove for user-specific overrides."
+                  size="md"
+                  onClose={() => setPermissionEditorUser(null)}
+                  footer={
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPermissionEditorUser(null)}
+                        className={secondaryButtonClasses}
+                      >
+                        Done
+                      </button>
+                    </div>
+                  }
+                >
+                  {permissionEditorUser ? (
+                    <div className="space-y-5">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                          From Roles
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {getRolePermissions(permissionEditorUser).length > 0 ? (
+                            getRolePermissions(permissionEditorUser).map((permId) => {
+                              const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
+                              return (
+                                <span
+                                  key={permId}
+                                  className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300"
+                                >
+                                  {perm?.label || permId}
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <span className="text-sm text-gray-400">No role permissions</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">
+                          Custom Permissions
+                        </p>
+                        <div className="mt-3 grid gap-3">
+                          {AVAILABLE_PERMISSIONS.map((perm) => {
+                            const fromRole = getRolePermissions(permissionEditorUser).includes(perm.id);
+                            const hasCustomPermission = getUserPermissions(permissionEditorUser).includes(perm.id);
+                            return (
+                              <div
+                                key={`${permissionEditorUser.id}-${perm.id}`}
+                                className="flex items-start justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-gray-900 dark:text-white/90">{perm.label}</p>
+                                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{perm.description}</p>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {fromRole ? (
+                                      <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
+                                        granted by role
+                                      </span>
+                                    ) : null}
+                                    {hasCustomPermission ? (
+                                      <span className="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-[11px] font-medium text-green-700 dark:border-green-900 dark:bg-green-950/20 dark:text-green-300">
+                                        custom override
+                                      </span>
+                                    ) : null}
+                                    {!fromRole && !hasCustomPermission ? (
+                                      <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                                        not assigned
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleUserPermission(permissionEditorUser, perm.id)}
+                                  disabled={busy || fromRole}
+                                  className={
+                                    fromRole
+                                      ? "inline-flex items-center rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2 text-xs font-medium text-gray-500 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+                                      : hasCustomPermission
+                                        ? "inline-flex items-center rounded-xl border border-red-300 bg-red-50 px-3.5 py-2 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                                        : "inline-flex items-center rounded-xl border border-brand-300 bg-brand-50 px-3.5 py-2 text-xs font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-60 dark:border-brand-900 dark:bg-brand-950/20 dark:text-brand-300 dark:hover:bg-brand-950/40"
+                                  }
+                                >
+                                  {fromRole ? "From Role" : hasCustomPermission ? "Remove" : "Add"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </AppModal>
               </div>
             )}
 
@@ -939,171 +993,6 @@ export default function UserManagementPage() {
               </div>
             )}
 
-            {activeTab === "permissions" && canManageUsers && (
-              <div>
-                <div className="mb-6 space-y-6">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Custom User Permissions</h3>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Assign individual permissions to users in addition to their role permissions.
-                    </p>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                    <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white/90">Select User</label>
-                    <select
-                      value={selectedPermissionUser}
-                      onChange={(e) => setSelectedPermissionUser(e.target.value)}
-                      className="mb-4 w-full rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                    >
-                      <option value="">-- Choose a user --</option>
-                      {users.map((user) => (
-                        <option key={user.id} value={user.id}>
-                          {user.email}
-                        </option>
-                      ))}
-                    </select>
-
-                    {selectedPermissionUser && (
-                      <div>
-                        {(() => {
-                          const user = users.find((u) => u.id === selectedPermissionUser);
-                          if (!user) return null;
-                          const rolePerms = getRolePermissions(user);
-                          const userPerms = getUserPermissions(user.id);
-                          return (
-                            <div>
-                              <div className="mb-4">
-                                <h4 className="mb-2 text-sm font-semibold text-gray-900 dark:text-white/90">
-                                  {user.email}
-                                </h4>
-                                <p className="mb-3 text-xs text-gray-600 dark:text-gray-400">
-                                  Roles: {user.roles.length > 0 ? user.roles.map((r) => r.name).join(", ") : "None"}
-                                </p>
-                              </div>
-
-                              <div className="space-y-2">
-                                <h5 className="text-xs font-semibold uppercase tracking-wide text-gray-700 dark:text-gray-300">
-                                  Available Permissions
-                                </h5>
-                                <div className="grid gap-3">
-                                  {AVAILABLE_PERMISSIONS.map((perm) => {
-                                    const hasPermission = userPerms.includes(perm.id);
-                                    const fromRole = rolePerms.includes(perm.id);
-                                    return (
-                                      <div
-                                        key={perm.id}
-                                        className="flex items-start rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          id={`perm-${perm.id}`}
-                                          checked={hasPermission}
-                                          onChange={() => toggleUserPermission(user.id, perm.id)}
-                                          disabled={fromRole}
-                                          className="mt-1 h-4 w-4 cursor-pointer rounded"
-                                        />
-                                        <label
-                                          htmlFor={`perm-${perm.id}`}
-                                          className="ml-3 flex-1 cursor-pointer"
-                                        >
-                                          <p className="text-sm font-medium text-gray-900 dark:text-white/90">
-                                            {perm.label}
-                                          </p>
-                                          <p className="text-xs text-gray-600 dark:text-gray-400">
-                                            {perm.description}
-                                            {fromRole && (
-                                              <span className="ml-2 inline-block rounded-full bg-blue-100 px-2 py-0.5 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                                from role
-                                              </span>
-                                            )}
-                                          </p>
-                                        </label>
-                                        {hasPermission && !fromRole && (
-                                          <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
-                                            custom
-                                          </span>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-
-                              {userPerms.length > 0 && (
-                                <div className="mt-4 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
-                                  <p className="mb-2 text-xs font-semibold text-blue-900 dark:text-blue-200">
-                                    Custom Permissions Assigned:
-                                  </p>
-                                  <div className="flex flex-wrap gap-2">
-                                    {userPerms.map((permId) => {
-                                      const perm = AVAILABLE_PERMISSIONS.find((p) => p.id === permId);
-                                      return (
-                                        <span
-                                          key={permId}
-                                          className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                                        >
-                                          {perm?.label || permId}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                    <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-white/90">
-                      Available Roles & Role Permissions
-                    </h4>
-                    <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-                      These are the default permissions granted by each role:
-                    </p>
-
-                    <div className="space-y-3">
-                      {roles.map((role) => (
-                        <div key={role.id} className="rounded border border-gray-200 p-3 dark:border-gray-700">
-                          <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white/90">{role.name}</p>
-                          <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                            {role.name === "admin"
-                              ? "Full access to all features and settings. Can manage users and system configuration."
-                              : role.name === "trader"
-                              ? "Can monitor the bot, control execution, and review logs and reports."
-                              : role.name === "viewer"
-                              ? "Read-only access to dashboards and reports. Cannot modify any settings."
-                              : "Custom role with limited permissions."}
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {getSavedRolePermissions(role).length > 0 ? (
-                              getSavedRolePermissions(role).map((permId) => {
-                                const perm = AVAILABLE_PERMISSIONS.find((row) => row.id === permId);
-                                return (
-                                  <span
-                                    key={`${role.id}-summary-${permId}`}
-                                    className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                                  >
-                                    {perm?.label || permId}
-                                  </span>
-                                );
-                              })
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800 dark:bg-gray-900 dark:text-gray-200">
-                                No permissions assigned
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </section>
       </div>

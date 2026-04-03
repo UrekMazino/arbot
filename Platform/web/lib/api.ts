@@ -24,6 +24,7 @@ export type UserRecord = {
   id: string;
   email: string;
   is_active: boolean;
+  permissions: string[];
   roles: RoleRecord[];
   created_at: string;
   updated_at: string;
@@ -397,6 +398,22 @@ export async function removeUserRole(token: string, userId: string, role: string
 export async function deleteUser(token: string, userId: string): Promise<{ message: string }> {
   const encodedUser = encodeURIComponent(userId);
   return apiRequest<{ message: string }>(`/users/${encodedUser}`, { method: "DELETE" }, token);
+}
+
+export async function updateUserPermissions(
+  token: string,
+  userId: string,
+  permissions: string[],
+): Promise<UserRecord> {
+  const encodedUser = encodeURIComponent(userId);
+  return apiRequest<UserRecord>(
+    `/users/${encodedUser}/permissions`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ permissions }),
+    },
+    token,
+  );
 }
 
 export async function createRole(

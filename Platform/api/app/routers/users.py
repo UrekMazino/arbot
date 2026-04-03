@@ -6,7 +6,17 @@ from sqlalchemy.orm import Session
 
 from ..deps import get_db_session, require_permissions
 from ..models import Role, User
-from ..schemas import MessageOut, RoleOut, RoleCreateIn, RoleUpdateIn, UserCreateIn, UserOut, UserRoleAssignIn, UserUpdateIn
+from ..schemas import (
+    MessageOut,
+    RoleOut,
+    RoleCreateIn,
+    RoleUpdateIn,
+    UserCreateIn,
+    UserOut,
+    UserPermissionsUpdateIn,
+    UserRoleAssignIn,
+    UserUpdateIn,
+)
 from ..security import hash_password
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -138,6 +148,7 @@ def create_user(
         email=body.email,
         password_hash=hash_password(body.password),
         is_active=body.is_active,
+        permissions=[],
     )
     viewer_role = db.execute(select(Role).where(Role.name == "viewer")).scalar_one_or_none()
     if viewer_role:
@@ -164,6 +175,23 @@ def update_user(
     if body.password:
         user.password_hash = hash_password(body.password)
 
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.put("/{user_id}/permissions", response_model=UserOut)
+def update_user_permissions(
+    user_id: str,
+    body: UserPermissionsUpdateIn,
+    _: User = Depends(require_permissions("manage_users")),
+    db: Session = Depends(get_db_session),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.permissions = body.permissions
     db.commit()
     db.refresh(user)
     return user

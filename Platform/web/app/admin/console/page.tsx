@@ -151,6 +151,7 @@ export default function AdminConsolePage() {
         id: "",
         email: storedEmail,
         is_active: false,
+        permissions: [],
         roles: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

@@ -76,6 +76,10 @@ def require_roles(*roles: str):
 
 def get_user_permission_ids(user: User) -> set[str]:
     permissions: set[str] = set()
+    for permission_id in user.permissions or []:
+        normalized = str(permission_id or "").strip().lower()
+        if normalized:
+            permissions.add(normalized)
     for role in user.roles:
         for permission_id in role.permissions or []:
             normalized = str(permission_id or "").strip().lower()

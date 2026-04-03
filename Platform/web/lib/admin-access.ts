@@ -51,6 +51,9 @@ export function hasAdminRole(user: UserRecord | null | undefined): boolean {
 
 export function getUserPermissionIds(user: UserRecord | null | undefined): string[] {
   const permissions = new Set<string>();
+  for (const permissionId of user?.permissions || []) {
+    permissions.add(permissionId);
+  }
   for (const role of user?.roles || []) {
     for (const permissionId of resolveRolePermissionIds(role.name, role.permissions)) {
       permissions.add(permissionId);

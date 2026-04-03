@@ -64,6 +64,10 @@ export default function AdminConsolePage() {
   const [selectedRunKey, setSelectedRunKey] = useState("latest");
   const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
   const [busy, setBusy] = useState(false);
+  const [terminalFullscreen, setTerminalFullscreen] = useState(false);
+  const [terminalPosition, setTerminalPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -303,6 +307,27 @@ export default function AdminConsolePage() {
   const primaryButtonClasses = UI_CLASSES.primaryButton;
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
 
+  const handleTerminalDragStart = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
+    setIsDragging(true);
+    setDragOffset({
+      x: e.clientX - terminalPosition.x,
+      y: e.clientY - terminalPosition.y,
+    });
+  };
+
+  const handleTerminalDragMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setTerminalPosition({
+      x: e.clientX - dragOffset.x,
+      y: e.clientY - dragOffset.y,
+    });
+  };
+
+  const handleTerminalDragEnd = () => {
+    setIsDragging(false);
+  };
+
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -348,7 +373,7 @@ export default function AdminConsolePage() {
         hasToken: Boolean(token),
       }}
     >
-      <div className="grid gap-4">
+      <div className="grid gap-2">
         <section className={sectionCardClasses}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -364,7 +389,7 @@ export default function AdminConsolePage() {
                   <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
                     Start Bot
                   </button>
-                  <button className={secondaryButtonClasses} onClick={handleStop} disabled={busy || !botStatus?.running}>
+                  <button className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700" onClick={handleStop} disabled={busy || !botStatus?.running}>
                     Stop Bot
                   </button>
                 </>
@@ -375,7 +400,7 @@ export default function AdminConsolePage() {
 
         {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-6">
+        <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           label="Bot Runtime"
           value={botStatus?.running ? "RUNNING" : "STOPPED"}
@@ -402,32 +427,80 @@ export default function AdminConsolePage() {
         />
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-2">
+        <section className="grid gap-2">
         <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
-          <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
-          <p>
-            <strong>Running:</strong>{" "}
-            <StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} />
-          </p>
-          <p>
-            <strong>PID:</strong> {botStatus?.pid || "n/a"}
-          </p>
-          <p>
-            <strong>Latest run:</strong> {botStatus?.latest_run_key || "n/a"}
-          </p>
-          <p>
-            <strong>Started:</strong> {fmtDate(botStatus?.started_at || null)}
-          </p>
-          <p>
-            <strong>Stopped:</strong> {fmtDate(botStatus?.stopped_at || null)}
-          </p>
-          <p>
-            <strong>Detail:</strong> {botStatus?.detail || "n/a"}
-          </p>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
+            <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
+          </div>
+          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">PID</p>
+            <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.pid || "n/a"}</p>
+          </div>
+          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
+            <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
+          </div>
+          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Detail</p>
+            <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.detail || "n/a"}</p>
+          </div>
+          <div className="pt-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
+            <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
+          </div>
+          <div className="pt-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
+            <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
+          </div>
           </div>
         </PanelCard>
 
-        <PanelCard title="Live Terminal" className="grid min-h-[460px] grid-rows-[auto_1fr]">
+        {terminalFullscreen ? (
+          <div
+            className="fixed inset-0 z-50 flex flex-col bg-gray-900"
+            onMouseMove={handleTerminalDragMove}
+            onMouseUp={handleTerminalDragEnd}
+            onMouseLeave={handleTerminalDragEnd}
+          >
+            <div
+              className="flex items-center justify-between border-b border-gray-700 bg-gray-800 px-4 py-3 cursor-move"
+              onMouseDown={handleTerminalDragStart}
+              data-no-drag="false"
+            >
+              <h3 className="text-lg font-semibold text-white">Live Terminal</h3>
+              <button
+                onClick={() => setTerminalFullscreen(false)}
+                className="rounded px-3 py-1 text-sm font-medium text-gray-300 hover:bg-gray-700"
+                data-no-drag="true"
+              >
+                Exit Fullscreen
+              </button>
+            </div>
+            <div className="flex flex-1 flex-col overflow-hidden p-4">
+              <div className="mb-3 flex items-center justify-between gap-2" data-no-drag="true">
+                <select className="min-w-[180px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-white" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
+                  <option value="latest">latest</option>
+                  {logRuns.map((row) => (
+                    <option key={row.run_key} value={row.run_key}>
+                      {row.run_key}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {showingControlLog ? (
+                <p className="mb-2 text-xs text-gray-400">
+                  Showing current startup/control output until a fresh run log is created.
+                </p>
+              ) : null}
+              <pre className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
+                {(logTail?.lines || []).join("\n") || "No log lines yet."}
+              </pre>
+            </div>
+          </div>
+        ) : null}
+        <PanelCard title="Live Terminal" className="grid min-h-[560px] grid-rows-[auto_1fr]">
           <div className="mb-2 flex items-center justify-between gap-2">
             <select className="min-w-[180px]" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
               <option value="latest">latest</option>
@@ -437,19 +510,25 @@ export default function AdminConsolePage() {
                 </option>
               ))}
             </select>
+            <button
+              onClick={() => setTerminalFullscreen(true)}
+              className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+            >
+              ⛶ Fullscreen
+            </button>
           </div>
           {showingControlLog ? (
             <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
               Showing current startup/control output until a fresh run log is created.
             </p>
           ) : null}
-          <pre className="custom-scrollbar mt-1 max-h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
+          <pre className="custom-scrollbar mt-1 max-h-[620px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
             {(logTail?.lines || []).join("\n") || "No log lines yet."}
           </pre>
         </PanelCard>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-2">
+        <section className="grid gap-2 xl:grid-cols-2">
         <PanelCard title="All Logs">
           <TableFrame compact>
             <table>

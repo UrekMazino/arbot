@@ -66,7 +66,7 @@ export function MetricCard({ label, value, hint, tone = "teal" }: MetricCardProp
       className={`rounded-2xl border p-4 shadow-sm dark:shadow-none ${toneClasses[tone]}`}
     >
       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{label}</p>
-      <p className="mt-2 truncate text-2xl font-semibold text-gray-900 dark:text-white/90">{value}</p>
+      <p className="mt-2 truncate font-mono text-lg font-semibold text-gray-900 dark:text-white/90">{value}</p>
       {hint ? <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{hint}</p> : null}
     </article>
   );

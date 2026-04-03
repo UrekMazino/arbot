@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -20,7 +20,7 @@ import {
 } from "../../../lib/api";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
-import { AVAILABLE_PERMISSIONS, ROLE_PERMISSIONS } from "../../../lib/permissions";
+import { AVAILABLE_PERMISSIONS, resolveRolePermissionIds } from "../../../lib/permissions";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { TableFrame } from "../../../components/panels";
 
@@ -51,9 +51,11 @@ export default function UserManagementPage() {
   // Role CRUD state
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDescription, setNewRoleDescription] = useState("");
+  const [newRolePermissions, setNewRolePermissions] = useState<string[]>([]);
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [editingRoleName, setEditingRoleName] = useState("");
   const [editingRoleDescription, setEditingRoleDescription] = useState("");
+  const [editingRolePermissions, setEditingRolePermissions] = useState<string[]>([]);
 
   // Modal states
   const [assignRoleModalUser, setAssignRoleModalUser] = useState<UserRecord | null>(null);
@@ -224,9 +226,11 @@ export default function UserManagementPage() {
       await createRole(token, {
         name: newRoleName,
         description: newRoleDescription,
+        permissions: newRolePermissions,
       });
       setNewRoleName("");
       setNewRoleDescription("");
+      setNewRolePermissions([]);
       setStatus("Role created");
       await loadUserManagementData(token);
     } catch (err) {
@@ -252,10 +256,9 @@ export default function UserManagementPage() {
       await updateRole(token, editingRoleId, {
         name: editingRoleName,
         description: editingRoleDescription,
+        permissions: editingRolePermissions,
       });
-      setEditingRoleId(null);
-      setEditingRoleName("");
-      setEditingRoleDescription("");
+      resetRoleEditor();
       setStatus("Role updated");
       await loadUserManagementData(token);
     } catch (err) {
@@ -323,12 +326,42 @@ export default function UserManagementPage() {
   function getRolePermissions(user: UserRecord): string[] {
     const rolePerms: string[] = [];
     user.roles.forEach((role) => {
-      const permsForRole = ROLE_PERMISSIONS[role.name];
-      if (permsForRole) {
-        rolePerms.push(...permsForRole);
-      }
+      rolePerms.push(...resolveRolePermissionIds(role.name, role.permissions));
     });
     return [...new Set(rolePerms)];
+  }
+
+  function getSavedRolePermissions(role: RoleRecord): string[] {
+    return resolveRolePermissionIds(role.name, role.permissions);
+  }
+
+  function toggleRolePermission(
+    permissionId: string,
+    selectedPermissions: string[],
+    setSelectedPermissions: Dispatch<SetStateAction<string[]>>,
+  ) {
+    setSelectedPermissions((prev) =>
+      prev.includes(permissionId)
+        ? prev.filter((id) => id !== permissionId)
+        : [...prev, permissionId],
+    );
+    setStatus(
+      `${selectedPermissions.includes(permissionId) ? "Removed" : "Added"} role permission ${permissionId}`,
+    );
+  }
+
+  function beginRoleEdit(role: RoleRecord) {
+    setEditingRoleId(role.id);
+    setEditingRoleName(role.name);
+    setEditingRoleDescription(role.description || "");
+    setEditingRolePermissions(getSavedRolePermissions(role));
+  }
+
+  function resetRoleEditor() {
+    setEditingRoleId(null);
+    setEditingRoleName("");
+    setEditingRoleDescription("");
+    setEditingRolePermissions([]);
   }
 
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
@@ -711,6 +744,43 @@ export default function UserManagementPage() {
                       rows={2}
                       className="rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                     />
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-gray-900 dark:text-white/90">Role Permissions</p>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {(editingRoleId ? editingRolePermissions : newRolePermissions).length} selected
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {AVAILABLE_PERMISSIONS.map((perm) => {
+                          const selectedPermissions = editingRoleId ? editingRolePermissions : newRolePermissions;
+                          const isChecked = selectedPermissions.includes(perm.id);
+                          return (
+                            <label
+                              key={perm.id}
+                              className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3 text-sm dark:border-gray-700 dark:bg-gray-800"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() =>
+                                  toggleRolePermission(
+                                    perm.id,
+                                    selectedPermissions,
+                                    editingRoleId ? setEditingRolePermissions : setNewRolePermissions,
+                                  )
+                                }
+                                className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                              />
+                              <span className="min-w-0">
+                                <span className="block font-medium text-gray-900 dark:text-white/90">{perm.label}</span>
+                                <span className="block text-xs text-gray-500 dark:text-gray-400">{perm.description}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <div className="flex gap-2">
                       <button type="submit" disabled={busy} className={primaryButtonClasses}>
                         {editingRoleId ? "Update Role" : "Create Role"}
@@ -718,11 +788,7 @@ export default function UserManagementPage() {
                       {editingRoleId && (
                         <button
                           type="button"
-                          onClick={() => {
-                            setEditingRoleId(null);
-                            setEditingRoleName("");
-                            setEditingRoleDescription("");
-                          }}
+                          onClick={resetRoleEditor}
                           className={secondaryButtonClasses}
                         >
                           Cancel
@@ -742,6 +808,7 @@ export default function UserManagementPage() {
                         <tr>
                           <th>Role Name</th>
                           <th>Users Assigned</th>
+                          <th>Permissions</th>
                           <th>Description</th>
                           <th>Actions</th>
                         </tr>
@@ -755,17 +822,32 @@ export default function UserManagementPage() {
                             <tr key={role.id}>
                               <td className="font-mono text-sm font-medium">{role.name}</td>
                               <td className="text-sm">{usersWithRole.length}</td>
+                              <td>
+                                <div className="flex max-w-[360px] flex-wrap gap-1">
+                                  {getSavedRolePermissions(role).length > 0 ? (
+                                    getSavedRolePermissions(role).map((permId) => {
+                                      const perm = AVAILABLE_PERMISSIONS.find((row) => row.id === permId);
+                                      return (
+                                        <span
+                                          key={`${role.id}-${permId}`}
+                                          className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-[11px] font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                        >
+                                          {perm?.label || permId}
+                                        </span>
+                                      );
+                                    })
+                                  ) : (
+                                    <span className="text-xs text-gray-400">No permissions</span>
+                                  )}
+                                </div>
+                              </td>
                               <td className="text-xs text-gray-600 dark:text-gray-400">
                                 {role.description || "—"}
                               </td>
                               <td>
                                 <div className="flex gap-2">
                                   <button
-                                    onClick={() => {
-                                      setEditingRoleId(role.id);
-                                      setEditingRoleName(role.name);
-                                      setEditingRoleDescription(role.description || "");
-                                    }}
+                                    onClick={() => beginRoleEdit(role)}
                                     className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
                                     disabled={busy}
                                   >
@@ -788,7 +870,7 @@ export default function UserManagementPage() {
                         })}
                         {!roles.length ? (
                           <tr>
-                            <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                            <td colSpan={5} className="text-sm text-gray-500 dark:text-gray-400">
                               No roles found.
                             </td>
                           </tr>
@@ -943,32 +1025,21 @@ export default function UserManagementPage() {
                               : "Custom role with limited permissions."}
                           </p>
                           <div className="mt-2 flex flex-wrap gap-1">
-                            {role.name === "admin" && (
-                              <>
-                                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
-                                  Full Access
-                                </span>
-                                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
-                                  User Management
-                                </span>
-                                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800 dark:bg-green-900 dark:text-green-200">
-                                  System Config
-                                </span>
-                              </>
-                            )}
-                            {role.name === "trader" && (
-                              <>
-                                <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                  Run Control
-                                </span>
-                                <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                  Logs & Reports
-                                </span>
-                              </>
-                            )}
-                            {role.name === "viewer" && (
+                            {getSavedRolePermissions(role).length > 0 ? (
+                              getSavedRolePermissions(role).map((permId) => {
+                                const perm = AVAILABLE_PERMISSIONS.find((row) => row.id === permId);
+                                return (
+                                  <span
+                                    key={`${role.id}-summary-${permId}`}
+                                    className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                  >
+                                    {perm?.label || permId}
+                                  </span>
+                                );
+                              })
+                            ) : (
                               <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800 dark:bg-gray-900 dark:text-gray-200">
-                                Read-Only Access
+                                No permissions assigned
                               </span>
                             )}
                           </div>

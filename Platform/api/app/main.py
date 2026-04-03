@@ -9,6 +9,7 @@ from sqlalchemy import select
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import Role, User
+from .permissions import BUILTIN_ROLE_PERMISSIONS
 from .routers import admin, auth, events, health, reports, runs, users, ws
 from .security import hash_password
 
@@ -46,7 +47,15 @@ def bootstrap_identity() -> None:
         for role_name, description in BUILTIN_ROLES.items():
             role = db.execute(select(Role).where(Role.name == role_name)).scalar_one_or_none()
             if not role:
-                db.add(Role(name=role_name, description=description))
+                db.add(
+                    Role(
+                        name=role_name,
+                        description=description,
+                        permissions=BUILTIN_ROLE_PERMISSIONS.get(role_name, []),
+                    )
+                )
+            elif not role.permissions:
+                role.permissions = list(BUILTIN_ROLE_PERMISSIONS.get(role_name, []))
         db.flush()
         admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
 

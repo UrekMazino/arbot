@@ -47,6 +47,7 @@ class Role(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    permissions: Mapped[list[str]] = mapped_column("permissions_json", JSON, default=list, nullable=False)
 
     users: Mapped[list[User]] = relationship("User", secondary="user_roles", back_populates="roles")
 

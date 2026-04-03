@@ -59,6 +59,13 @@ export function getRolePermissionIds(roleName: string): string[] {
   return ROLE_PERMISSIONS[roleName] || [];
 }
 
+export function resolveRolePermissionIds(roleName: string, storedPermissions?: string[] | null): string[] {
+  if (storedPermissions && storedPermissions.length > 0) {
+    return [...storedPermissions];
+  }
+  return getRolePermissionIds(roleName);
+}
+
 /**
  * Find a permission by its ID
  * @param permissionId - The permission ID to find

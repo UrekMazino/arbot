@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from .permissions import normalize_permission_ids
+
 
 class MessageOut(BaseModel):
     message: str
@@ -47,6 +49,7 @@ class RoleOut(BaseModel):
     id: str
     name: str
     description: str | None = None
+    permissions: list[str] = []
 
     model_config = {"from_attributes": True}
 
@@ -54,11 +57,25 @@ class RoleOut(BaseModel):
 class RoleCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=50)
     description: str | None = Field(default=None, max_length=255)
+    permissions: list[str] = Field(default_factory=list)
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, value: list[str]) -> list[str]:
+        return normalize_permission_ids(value)
 
 
 class RoleUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=50)
     description: str | None = Field(default=None, max_length=255)
+    permissions: list[str] | None = None
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return normalize_permission_ids(value)
 
 
 class UserOut(BaseModel):

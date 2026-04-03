@@ -60,7 +60,7 @@ def create_role(
     if exists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role name already exists")
 
-    role = Role(name=role_name, description=body.description)
+    role = Role(name=role_name, description=body.description, permissions=body.permissions)
     db.add(role)
     db.commit()
     db.refresh(role)
@@ -87,6 +87,9 @@ def update_role(
 
     if body.description is not None:
         role.description = body.description
+
+    if body.permissions is not None:
+        role.permissions = body.permissions
 
     db.commit()
     db.refresh(role)

@@ -17,6 +17,7 @@ export type RoleRecord = {
   id: string;
   name: string;
   description: string | null;
+  permissions: string[];
 };
 
 export type UserRecord = {
@@ -400,7 +401,7 @@ export async function deleteUser(token: string, userId: string): Promise<{ messa
 
 export async function createRole(
   token: string,
-  body: { name: string; description?: string },
+  body: { name: string; description?: string; permissions?: string[] },
 ): Promise<RoleRecord> {
   return apiRequest<RoleRecord>(
     "/users/roles",
@@ -409,6 +410,7 @@ export async function createRole(
       body: JSON.stringify({
         name: body.name,
         description: body.description || null,
+        permissions: body.permissions || [],
       }),
     },
     token,
@@ -418,7 +420,7 @@ export async function createRole(
 export async function updateRole(
   token: string,
   roleId: string,
-  body: { name?: string; description?: string },
+  body: { name?: string; description?: string; permissions?: string[] },
 ): Promise<RoleRecord> {
   const encodedRoleId = encodeURIComponent(roleId);
   return apiRequest<RoleRecord>(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, Query
 
-from ..deps import require_superuser
+from ..deps import require_roles
 from ..models import User
 from ..services.bot_control import (
     get_bot_status,
@@ -19,17 +19,17 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.get("/bot/status")
-def admin_bot_status(_: User = Depends(require_superuser)):
+def admin_bot_status(_: User = Depends(require_roles("admin"))):
     return get_bot_status()
 
 
 @router.post("/bot/start")
-def admin_bot_start(user: User = Depends(require_superuser)):
+def admin_bot_start(user: User = Depends(require_roles("admin"))):
     return start_bot(requested_by=user.email)
 
 
 @router.post("/bot/stop")
-def admin_bot_stop(user: User = Depends(require_superuser)):
+def admin_bot_stop(user: User = Depends(require_roles("admin"))):
     return stop_bot(requested_by=user.email)
 
 
@@ -37,7 +37,7 @@ def admin_bot_stop(user: User = Depends(require_superuser)):
 def admin_bot_logs_tail(
     run_key: str | None = Query(default=None),
     lines: int = Query(default=400, ge=10, le=2000),
-    _: User = Depends(require_superuser),
+    _: User = Depends(require_roles("admin")),
 ):
     return tail_run_log(run_key=run_key, lines=lines)
 
@@ -45,7 +45,7 @@ def admin_bot_logs_tail(
 @router.get("/logs/runs")
 def admin_log_runs(
     limit: int = Query(default=100, ge=1, le=500),
-    _: User = Depends(require_superuser),
+    _: User = Depends(require_roles("admin")),
 ):
     return list_log_runs(limit=limit)
 
@@ -53,13 +53,13 @@ def admin_log_runs(
 @router.get("/reports/runs")
 def admin_report_runs(
     limit: int = Query(default=100, ge=1, le=500),
-    _: User = Depends(require_superuser),
+    _: User = Depends(require_roles("admin")),
 ):
     return list_report_runs(limit=limit)
 
 
 @router.get("/settings/env")
-def admin_env_settings(_: User = Depends(require_superuser)):
+def admin_env_settings(_: User = Depends(require_roles("admin"))):
     return {"path": "Execution/.env", "values": read_env_settings()}
 
 
@@ -67,7 +67,7 @@ def admin_env_settings(_: User = Depends(require_superuser)):
 def admin_env_settings_update(
     key: str,
     payload: dict = Body(default_factory=dict),
-    _: User = Depends(require_superuser),
+    _: User = Depends(require_roles("admin")),
 ):
     value = payload.get("value", "")
     result = update_env_setting(key=key, value=str(value))

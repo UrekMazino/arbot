@@ -26,7 +26,7 @@ export const AVAILABLE_PERMISSIONS: Permission[] = [
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: AVAILABLE_PERMISSIONS.map((p) => p.id),
-  editor: ["view_dashboard", "view_logs", "view_reports", "edit_settings"],
+  trader: ["view_dashboard", "view_logs", "manage_bot", "view_reports"],
   viewer: ["view_dashboard", "view_logs", "view_reports"],
 };
 

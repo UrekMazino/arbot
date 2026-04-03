@@ -65,7 +65,6 @@ class UserOut(BaseModel):
     id: str
     email: str
     is_active: bool
-    is_superuser: bool
     roles: list[RoleOut] = []
     created_at: datetime
     updated_at: datetime
@@ -77,12 +76,10 @@ class UserCreateIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
     is_active: bool = True
-    is_superuser: bool = False
 
 
 class UserUpdateIn(BaseModel):
     is_active: bool | None = None
-    is_superuser: bool | None = None
     password: str | None = Field(default=None, min_length=8)
 
 

@@ -12,6 +12,22 @@ from ..security import hash_password
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+def normalize_role_name(raw: str) -> str:
+    return str(raw or "").strip().lower()
+
+
+def validate_role_name(raw: str) -> str:
+    role_name = normalize_role_name(raw)
+    if not role_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role name is required")
+    if role_name == "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use the built-in 'admin' role instead of legacy 'super_admin'.",
+        )
+    return role_name
+
+
 @router.get("/roles", response_model=list[RoleOut])
 def list_roles(
     _: User = Depends(require_roles("admin")),
@@ -39,11 +55,12 @@ def create_role(
     _: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db_session),
 ):
-    exists = db.execute(select(Role).where(Role.name == body.name.lower())).scalar_one_or_none()
+    role_name = validate_role_name(body.name)
+    exists = db.execute(select(Role).where(Role.name == role_name)).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role name already exists")
 
-    role = Role(name=body.name.lower(), description=body.description)
+    role = Role(name=role_name, description=body.description)
     db.add(role)
     db.commit()
     db.refresh(role)
@@ -62,10 +79,11 @@ def update_role(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
     if body.name is not None:
-        exists = db.execute(select(Role).where(Role.name == body.name.lower())).scalar_one_or_none()
+        role_name = validate_role_name(body.name)
+        exists = db.execute(select(Role).where(Role.name == role_name)).scalar_one_or_none()
         if exists and exists.id != role_id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Role name already exists")
-        role.name = body.name.lower()
+        role.name = role_name
 
     if body.description is not None:
         role.description = body.description
@@ -117,8 +135,10 @@ def create_user(
         email=body.email,
         password_hash=hash_password(body.password),
         is_active=body.is_active,
-        is_superuser=body.is_superuser,
     )
+    viewer_role = db.execute(select(Role).where(Role.name == "viewer")).scalar_one_or_none()
+    if viewer_role:
+        user.roles.append(viewer_role)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -138,8 +158,6 @@ def update_user(
 
     if body.is_active is not None:
         user.is_active = body.is_active
-    if body.is_superuser is not None:
-        user.is_superuser = body.is_superuser
     if body.password:
         user.password_hash = hash_password(body.password)
 
@@ -159,7 +177,7 @@ def assign_role(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    role = db.execute(select(Role).where(Role.name == body.role.lower())).scalar_one_or_none()
+    role = db.execute(select(Role).where(Role.name == normalize_role_name(body.role))).scalar_one_or_none()
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
@@ -180,7 +198,7 @@ def remove_role(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    role = db.execute(select(Role).where(Role.name == role_name.lower())).scalar_one_or_none()
+    role = db.execute(select(Role).where(Role.name == normalize_role_name(role_name))).scalar_one_or_none()
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 

@@ -6,11 +6,16 @@ import { useRouter } from "next/navigation";
 
 import { forgotPassword, getMe, login } from "../../lib/api";
 import {
+  clearStoredAdminSession,
   defaultRememberMe,
   getStoredAdminAccessToken,
   persistAdminSession,
   setRememberMePreference,
 } from "../../lib/auth";
+
+function hasAdminRole(roles: Array<{ name: string }>): boolean {
+  return roles.some((role) => role.name.toLowerCase() === "admin");
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -41,9 +46,19 @@ export default function LoginPage() {
 
   useEffect(() => {
     const token = getStoredAdminAccessToken();
-    if (token) {
-      router.replace(nextPath);
-    }
+    if (!token) return;
+    getMe(token)
+      .then((meData) => {
+        if (hasAdminRole(meData.roles)) {
+          router.replace(nextPath);
+          return;
+        }
+        clearStoredAdminSession();
+        setError("Admin role required for this login.");
+      })
+      .catch(() => {
+        clearStoredAdminSession();
+      });
   }, [router, nextPath]);
 
   async function onSubmit(e: FormEvent) {
@@ -52,12 +67,13 @@ export default function LoginPage() {
     setError("");
     try {
       const pair = await login(email, password);
-      const me = await getMe(pair.access_token);
-      if (!me.is_superuser) {
-        setError("This account is not a super admin account.");
+      const meData = await getMe(pair.access_token);
+      if (!hasAdminRole(meData.roles)) {
+        clearStoredAdminSession();
+        setError("Admin role required for this login.");
         return;
       }
-      persistAdminSession(pair.access_token, pair.refresh_token, rememberMe);
+      persistAdminSession(pair.access_token, pair.refresh_token, rememberMe, meData.email);
       router.replace(nextPath);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Sign-in failed";
@@ -99,7 +115,7 @@ export default function LoginPage() {
           <section className="p-6 md:p-10">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-500">ProjectY Trade Bot</p>
             <h1 className="mt-2 text-3xl font-semibold text-gray-900 dark:text-white/90">Sign In</h1>
-            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Use your super admin credentials to access the control plane.</p>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">Use your admin credentials to access the control plane.</p>
 
             <form onSubmit={onSubmit} className="mt-8 grid gap-4">
               <label className="grid gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -220,7 +236,7 @@ export default function LoginPage() {
             ) : null}
 
             <p className="mt-6 text-xs text-gray-500 dark:text-gray-400">
-              Only super admin users are allowed for this login route.
+              Only users with the `admin` role are allowed for this login route.
             </p>
           </section>
 
@@ -232,7 +248,7 @@ export default function LoginPage() {
                   OKXStatBot
                 </span>
                 <h2 className="mt-4 text-3xl font-semibold leading-tight text-white">
-                  Secure Access for Super Admin Control
+                  Secure Access for Admin Control
                 </h2>
                 <p className="mt-3 max-w-sm text-sm text-white/75">
                   Start and stop bots, inspect live logs, and manage users from one secured control console.

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -24,6 +24,10 @@ import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
+function hasAdminRole(user: UserRecord | null): boolean {
+  return Boolean(user?.roles.some((role) => role.name.toLowerCase() === "admin"));
+}
+
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";
   const dt = new Date(value);
@@ -43,7 +47,7 @@ function fmtUnix(value: number | null | undefined): string {
   return new Date(value * 1000).toLocaleString();
 }
 
-export default function SuperAdminPage() {
+export default function AdminConsolePage() {
   const router = useRouter();
   const [token, setToken] = useState<string>("");
   const [status, setStatus] = useState("Signed out");
@@ -77,14 +81,14 @@ export default function SuperAdminPage() {
     () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
     [reportRuns],
   );
+  const isAdmin = hasAdminRole(me);
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
       const meData = await getMe(authToken);
       setMe(meData);
 
-      const hasAdminRole = meData.roles.some((role) => /super_admin|admin/i.test(role.name));
-      if (!hasAdminRole) {
+      if (!hasAdminRole(meData)) {
         setBotStatus(null);
         setLogRuns([]);
         setReportRuns([]);
@@ -146,7 +150,7 @@ export default function SuperAdminPage() {
           return;
         }
         if (isForbiddenError(err)) {
-          setError("Insufficient permissions. Contact admin/super_admin.");
+          setError("Insufficient permissions. Contact an admin.");
           return;
         }
         const msg = err instanceof Error ? err.message : "Failed loading admin data";
@@ -156,7 +160,7 @@ export default function SuperAdminPage() {
   }, [clearAdminSession, loadAdminData, refreshLogTail, router]);
 
   useEffect(() => {
-    if (!token || !me?.roles.some((role) => /super_admin|admin/i.test(role.name))) return;
+    if (!token || !isAdmin) return;
     const timer = window.setInterval(() => {
       refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
@@ -170,11 +174,7 @@ export default function SuperAdminPage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [clearAdminSession, token, me?.roles, selectedRunKey, refreshLogTail]);
-
-  function handleLogout() {
-    clearAdminSession("Signed out", true);
-  }
+  }, [clearAdminSession, token, isAdmin, selectedRunKey, refreshLogTail]);
 
   async function handleStart() {
     if (!token) return;
@@ -267,30 +267,6 @@ export default function SuperAdminPage() {
     return null;
   }
 
-  if (me && !me.roles.some((role) => role.name.toLowerCase() === "admin")) {
-    return (
-      <DashboardShell
-        title="Console"
-        subtitle="Control bot runs and monitor live terminal logs."
-        status={status}
-        activeHref="/admin/console"
-        navItems={[
-          { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
-          { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
-          { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
-          { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-        ]}
-      >
-        <div className="grid gap-4">
-          <section className={sectionCardClasses}>
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Console</h1>
-            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Current account is not superuser.</p>
-          </section>
-        </div>
-      </DashboardShell>
-    );
-  }
-
   return (
     <DashboardShell
       title="Console"
@@ -301,7 +277,7 @@ export default function SuperAdminPage() {
         { href: "/admin/dashboard", label: "Dashboard", hint: "Runs, quality, reports", group: "Monitor", icon: "DB" },
         { href: "/admin/console", label: "Console", hint: "Control plane", group: "Operate", icon: "CM" },
         { href: "/admin/settings", label: "Settings", hint: "Configuration & credentials", group: "Operate", icon: "ST" },
-          { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
+        { href: "/admin/access", label: "Access", hint: "Users, roles, permissions", group: "Operate", icon: "UM" },
       ]}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),

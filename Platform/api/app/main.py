@@ -33,15 +33,38 @@ app.include_router(reports.router, prefix=settings.api_prefix)
 app.include_router(admin.router, prefix=settings.api_prefix)
 app.include_router(ws.router)
 
+BUILTIN_ROLES = {
+    "admin": "admin role",
+    "trader": "trader role",
+    "viewer": "viewer role",
+}
+
 
 def bootstrap_identity() -> None:
     db = SessionLocal()
     try:
-        for role_name in ("admin", "trader", "viewer"):
+        for role_name, description in BUILTIN_ROLES.items():
             role = db.execute(select(Role).where(Role.name == role_name)).scalar_one_or_none()
             if not role:
-                db.add(Role(name=role_name, description=f"{role_name} role"))
+                db.add(Role(name=role_name, description=description))
         db.flush()
+        admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
+
+        legacy_super_admin_role = db.execute(select(Role).where(Role.name == "super_admin")).scalar_one_or_none()
+        if legacy_super_admin_role:
+            migrated_count = 0
+            for user in list(legacy_super_admin_role.users):
+                if admin_role not in user.roles:
+                    user.roles.append(admin_role)
+                if legacy_super_admin_role in user.roles:
+                    user.roles.remove(legacy_super_admin_role)
+                migrated_count += 1
+            db.flush()
+            db.delete(legacy_super_admin_role)
+            logger.info(
+                "Migrated legacy super_admin role to admin for %d user(s) and removed legacy role",
+                migrated_count,
+            )
 
         bootstrap_email = str(settings.bootstrap_admin_email or "").strip().lower()
         bootstrap_password = str(settings.bootstrap_admin_password or "")
@@ -59,11 +82,12 @@ def bootstrap_identity() -> None:
                         email=bootstrap_email,
                         password_hash=hash_password(bootstrap_password),
                         is_active=True,
-                        is_superuser=True,
                     )
-                    admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
                     admin.roles.append(admin_role)
                     db.add(admin)
+            elif admin_role not in admin.roles:
+                admin.roles.append(admin_role)
+                logger.info("Assigned missing admin role to bootstrap user %s", bootstrap_email)
         else:
             logger.info("BOOTSTRAP_ADMIN_EMAIL is empty; skipping bootstrap admin creation")
         db.commit()

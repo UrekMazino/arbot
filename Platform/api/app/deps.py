@@ -66,17 +66,9 @@ def require_roles(*roles: str):
     wanted = {r.lower() for r in roles}
 
     def dependency(user: User = Depends(get_current_user)) -> User:
-        if user.is_superuser:
-            return user
         user_roles = {role.name.lower() for role in user.roles}
         if not user_roles.intersection(wanted):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
         return user
 
     return dependency
-
-
-def require_superuser(user: User = Depends(get_current_user)) -> User:
-    if user.is_superuser:
-        return user
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Superuser required")

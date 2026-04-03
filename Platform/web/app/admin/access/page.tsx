@@ -26,6 +26,10 @@ import { TableFrame } from "../../../components/panels";
 
 type TabType = "users" | "roles" | "permissions";
 
+function hasAdminRole(user: UserRecord | null): boolean {
+  return Boolean(user?.roles.some((role) => role.name.toLowerCase() === "admin"));
+}
+
 export default function UserManagementPage() {
   const router = useRouter();
   const [token, setToken] = useState<string>("");
@@ -41,7 +45,6 @@ export default function UserManagementPage() {
 
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserSuper, setNewUserSuper] = useState(false);
   const [userPermissionsMap, setUserPermissionsMap] = useState<Record<string, string[]>>({});
   const [selectedPermissionUser, setSelectedPermissionUser] = useState("");
 
@@ -74,12 +77,17 @@ export default function UserManagementPage() {
 
   const loadUserManagementData = useCallback(
     async (authToken: string) => {
-      const [meData, usersData, rolesData] = await Promise.all([
-        getMe(authToken),
+      const meData = await getMe(authToken);
+      setMe(meData);
+      if (!hasAdminRole(meData)) {
+        setUsers([]);
+        setRoles([]);
+        return;
+      }
+      const [usersData, rolesData] = await Promise.all([
         listUsers(authToken),
         listRoles(authToken),
       ]);
-      setMe(meData);
       setUsers(usersData);
       setRoles(rolesData);
     },
@@ -118,11 +126,9 @@ export default function UserManagementPage() {
       await createUser(token, {
         email: newUserEmail,
         password: newUserPassword,
-        is_superuser: newUserSuper,
       });
       setNewUserEmail("");
       setNewUserPassword("");
-      setNewUserSuper(false);
       setStatus("User created");
       await loadUserManagementData(token);
     } catch (err) {
@@ -300,8 +306,9 @@ export default function UserManagementPage() {
         userPerms.push(permissionId);
       }
       if (userPerms.length === 0) {
-        const { [userId]: _, ...rest } = prev;
-        return rest;
+        const nextMap = { ...prev };
+        delete nextMap[userId];
+        return nextMap;
       }
       return { ...prev, [userId]: userPerms };
     });
@@ -340,7 +347,7 @@ export default function UserManagementPage() {
     return null;
   }
 
-  if (me && !me.is_superuser) {
+  if (me && !hasAdminRole(me)) {
     return (
       <DashboardShell
         title="User Management"
@@ -357,7 +364,7 @@ export default function UserManagementPage() {
         <div className="grid gap-4">
           <section className={sectionCardClasses}>
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
-            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Current account is not superuser.</p>
+            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Admin role required for access.</p>
           </section>
         </div>
       </DashboardShell>
@@ -442,15 +449,6 @@ export default function UserManagementPage() {
                       required
                       className="rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                     />
-                    <label className="inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                      <input
-                        className="h-4 w-4 min-w-0"
-                        type="checkbox"
-                        checked={newUserSuper}
-                        onChange={(e) => setNewUserSuper(e.target.checked)}
-                      />
-                      superuser
-                    </label>
                     <button type="submit" disabled={busy} className={primaryButtonClasses}>
                       Create User
                     </button>
@@ -698,7 +696,7 @@ export default function UserManagementPage() {
                           ? setEditingRoleName(e.target.value)
                           : setNewRoleName(e.target.value)
                       }
-                      placeholder="Role name (e.g., editor, analyst)"
+                      placeholder="Role name (e.g., analyst, operator)"
                       required
                       className="rounded border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
                     />
@@ -774,7 +772,7 @@ export default function UserManagementPage() {
                                     Edit
                                   </button>
 
-                                  {role.name !== "admin" && role.name !== "editor" && role.name !== "viewer" && (
+                                  {role.name !== "admin" && role.name !== "trader" && role.name !== "viewer" && (
                                     <button
                                       onClick={() => handleDeleteRole(role.id, role.name)}
                                       className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
@@ -938,8 +936,8 @@ export default function UserManagementPage() {
                           <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
                             {role.name === "admin"
                               ? "Full access to all features and settings. Can manage users and system configuration."
-                              : role.name === "editor"
-                              ? "Can create, edit, and manage content. Can view reports and analytics."
+                              : role.name === "trader"
+                              ? "Can monitor the bot, control execution, and review logs and reports."
                               : role.name === "viewer"
                               ? "Read-only access to dashboards and reports. Cannot modify any settings."
                               : "Custom role with limited permissions."}
@@ -958,13 +956,13 @@ export default function UserManagementPage() {
                                 </span>
                               </>
                             )}
-                            {role.name === "editor" && (
+                            {role.name === "trader" && (
                               <>
                                 <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                  Content Management
+                                  Run Control
                                 </span>
                                 <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                                  View Reports
+                                  Logs & Reports
                                 </span>
                               </>
                             )}

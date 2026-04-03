@@ -51,9 +51,39 @@ def _resolve_bot_command() -> list[str]:
         return _default_bot_command()
 
 
+def _parse_iso_timestamp(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _path_mtime(path: Path | None) -> float:
+    if not path:
+        return 0.0
+    try:
+        return float(path.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
+    status_path = Path("/proc") / str(pid) / "status"
+    if status_path.exists():
+        try:
+            for line in status_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith("State:"):
+                    state_code = line.split(":", 1)[1].strip().split()[0].upper()
+                    if state_code == "Z":
+                        return False
+                    break
+        except Exception:
+            pass
     try:
         os.kill(pid, 0)
     except OSError:
@@ -124,6 +154,28 @@ def _resolve_run_log_file(run_key: str | None) -> tuple[str | None, Path | None]
     return selected, logs[-1]
 
 
+def _resolve_live_tail_target(run_key: str | None) -> tuple[str | None, Path | None, str]:
+    selected = str(run_key or "").strip()
+    if selected and selected.lower() != "latest":
+        resolved_run_key, log_file = _resolve_run_log_file(selected)
+        return resolved_run_key, log_file, "requested_run"
+
+    state = _read_state()
+    latest_run_key, latest_log_file = _latest_run_log_file()
+    control_mtime = _path_mtime(CONTROL_LOG_FILE if CONTROL_LOG_FILE.exists() else None)
+    latest_log_mtime = _path_mtime(latest_log_file)
+    started_at = _parse_iso_timestamp(state.get("started_at"))
+    started_ts = started_at.timestamp() if started_at else 0.0
+    should_prefer_control = CONTROL_LOG_FILE.exists() and (
+        not latest_log_file
+        or control_mtime >= latest_log_mtime
+        or (started_ts > 0 and latest_log_mtime < started_ts)
+    )
+    if should_prefer_control:
+        return "__control__", CONTROL_LOG_FILE, "control_log_preferred"
+    return latest_run_key, latest_log_file, "latest_run"
+
+
 def _normalize_status(state: dict) -> dict:
     data = dict(state or {})
     pid = int(data.get("pid") or 0)
@@ -132,7 +184,9 @@ def _normalize_status(state: dict) -> dict:
     data["running"] = running
     if not running and pid > 0:
         data["stopped_at"] = data.get("stopped_at") or _utc_iso_now()
-        data["detail"] = data.get("detail") or "process_not_found"
+        prior_detail = str(data.get("detail") or "").strip().lower()
+        if prior_detail in {"", "started", "already_running"}:
+            data["detail"] = "process_exited"
     run_key, run_log_file = _latest_run_log_file()
     data["latest_run_key"] = run_key
     data["latest_log_file"] = str(run_log_file) if run_log_file else None
@@ -194,6 +248,7 @@ def start_bot(requested_by: str | None = None) -> dict:
             "detail": f"start_failed:{exc}",
             "command": command,
         }
+    log_handle.close()
 
     state = {
         "running": True,
@@ -258,7 +313,7 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
 
 
 def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
-    resolved_run_key, log_file = _resolve_run_log_file(run_key)
+    resolved_run_key, log_file, source = _resolve_live_tail_target(run_key)
     if not log_file:
         if CONTROL_LOG_FILE.exists():
             try:
@@ -305,7 +360,7 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
         "line_count": len(output_lines),
         "lines": output_lines,
         "updated_at": _utc_iso_now(),
-        "detail": "ok",
+        "detail": source,
     }
 
 

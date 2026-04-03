@@ -91,6 +91,7 @@ export default function AdminConsolePage() {
   const canManageBot = hasPermission(me, "manage_bot");
   const canViewReports = hasPermission(me, "view_reports");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
+  const showingControlLog = logTail?.run_key === "__control__";
 
   const loadAdminData = useCallback(
     async (authToken: string) => {
@@ -118,8 +119,10 @@ export default function AdminConsolePage() {
       setLogRuns(logsData);
       setReportRuns(reportsData);
       setLogTail(logTailData);
-      if (logTailData?.run_key) {
+      if (logTailData?.run_key && logTailData.run_key !== "__control__") {
         setSelectedRunKey(logTailData.run_key);
+      } else {
+        setSelectedRunKey("latest");
       }
     },
     [],
@@ -133,8 +136,10 @@ export default function AdminConsolePage() {
       }
       const next = await getAdminBotLogTail(authToken, runKey || "latest", 320);
       setLogTail(next);
-      if (runKey === "latest" && next?.run_key) {
+      if (runKey === "latest" && next?.run_key && next.run_key !== "__control__") {
         setSelectedRunKey(next.run_key);
+      } else if (runKey === "latest") {
+        setSelectedRunKey("latest");
       }
     },
     [canViewLogs],
@@ -379,8 +384,8 @@ export default function AdminConsolePage() {
         />
         <MetricCard
           label="Latest Run Key"
-          value={botStatus?.latest_run_key || "n/a"}
-          hint={`selected ${selectedRunKey}`}
+          value={showingControlLog ? "CONTROL LOG" : botStatus?.latest_run_key || "n/a"}
+          hint={showingControlLog ? "startup / control output" : `selected ${selectedRunKey}`}
           tone="sky"
         />
         <MetricCard
@@ -433,6 +438,11 @@ export default function AdminConsolePage() {
               ))}
             </select>
           </div>
+          {showingControlLog ? (
+            <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+              Showing current startup/control output until a fresh run log is created.
+            </p>
+          ) : null}
           <pre className="custom-scrollbar mt-1 max-h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
             {(logTail?.lines || []).join("\n") || "No log lines yet."}
           </pre>

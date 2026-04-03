@@ -41,7 +41,6 @@ import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
-  hasAdminRole,
   hasPermission,
 } from "../../../lib/admin-access";
 import { UI_CLASSES } from "../../../lib/ui-classes";
@@ -683,14 +682,9 @@ export default function HomePage() {
         getMe(stored)
           .then(async (userData) => {
             setMe(userData);
-            if (!hasAdminRole(userData)) {
-              clearSession("Admin role required.");
-              router.replace("/login?next=/admin/dashboard");
-              return;
-            }
             if (!canAccessAdminPath(userData, "/admin/dashboard")) {
               setStatus("Redirecting");
-              setError("Dashboard access has been removed from your role.");
+              setError("Dashboard access is not enabled for your account.");
               const nextHref = getFirstAccessibleAdminPath(userData);
               if (nextHref && nextHref !== "/admin/dashboard") {
                 router.replace(nextHref);
@@ -713,13 +707,13 @@ export default function HomePage() {
   }, [clearSession, loadRuns, router]);
 
   useEffect(() => {
-    if (!me || !hasAdminRole(me) || canViewDashboard) {
+    if (!me || canViewDashboard) {
       return;
     }
     setReportArtifacts([]);
     if (fallbackHref && fallbackHref !== "/admin/dashboard") {
       setStatus("Redirecting");
-      setError("Dashboard access has been removed from your role.");
+      setError("Dashboard access is not enabled for your account.");
       router.replace(fallbackHref);
     }
   }, [canViewDashboard, fallbackHref, me, router]);
@@ -768,7 +762,7 @@ export default function HomePage() {
   const primaryButtonClasses = UI_CLASSES.primaryButton;
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
 
-  if (me && hasAdminRole(me) && !canViewDashboard && !fallbackHref) {
+  if (me && !canViewDashboard && !fallbackHref) {
     return (
       <DashboardShell
         title="Run Browser + Live Event Stream"
@@ -783,7 +777,7 @@ export default function HomePage() {
       >
         <section className={sectionCardClasses}>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Dashboard</h1>
-          <p className="mt-2 text-sm text-error-600 dark:text-error-400">View Dashboard permission is not enabled for your role.</p>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">View Dashboard permission is not enabled for this account.</p>
         </section>
       </DashboardShell>
     );

@@ -45,10 +45,6 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   },
 ];
 
-export function hasAdminRole(user: UserRecord | null | undefined): boolean {
-  return Boolean(user?.roles.some((role) => role.name.toLowerCase() === "admin"));
-}
-
 export function getUserPermissionIds(user: UserRecord | null | undefined): string[] {
   const permissions = new Set<string>();
   for (const permissionId of user?.permissions || []) {
@@ -90,4 +86,8 @@ export function getAdminNavItems(user: UserRecord | null | undefined): Omit<Admi
 
 export function getFirstAccessibleAdminPath(user: UserRecord | null | undefined): string | null {
   return getAdminNavItems(user)[0]?.href || null;
+}
+
+export function hasAnyAdminAccess(user: UserRecord | null | undefined): boolean {
+  return getFirstAccessibleAdminPath(user) !== null;
 }

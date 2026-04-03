@@ -15,7 +15,6 @@ import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
-  hasAdminRole,
   hasPermission,
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
@@ -75,13 +74,9 @@ export default function SettingsPage() {
     getMe(stored)
       .then(async (userData) => {
         setMe(userData);
-        if (!hasAdminRole(userData)) {
-          clearAdminSession("Admin role required.", true);
-          return;
-        }
         if (!canAccessAdminPath(userData, "/admin/settings")) {
           setStatus("Redirecting");
-          setError("Settings access has been removed from your role.");
+          setError("Settings access is not enabled for your account.");
           const nextHref = getFirstAccessibleAdminPath(userData);
           if (nextHref && nextHref !== "/admin/settings") {
             router.replace(nextHref);
@@ -103,14 +98,14 @@ export default function SettingsPage() {
   }, [clearAdminSession, loadEnvSettings, router]);
 
   useEffect(() => {
-    if (!me || !hasAdminRole(me) || canViewSettings) {
+    if (!me || canViewSettings) {
       return;
     }
     setEnvSettings({ path: "Execution/.env", values: {} });
     setEnvEdits({});
     if (fallbackHref && fallbackHref !== "/admin/settings") {
       setStatus("Redirecting");
-      setError("Settings access has been removed from your role.");
+      setError("Settings access is not enabled for your account.");
       router.replace(fallbackHref);
     }
   }, [canViewSettings, fallbackHref, me, router]);
@@ -218,7 +213,7 @@ export default function SettingsPage() {
     return null;
   }
 
-  if (me && hasAdminRole(me) && !canViewSettings && !fallbackHref) {
+  if (me && !canViewSettings && !fallbackHref) {
     return (
       <DashboardShell
         title="Settings"
@@ -233,7 +228,7 @@ export default function SettingsPage() {
       >
         <section className={sectionCardClasses}>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Settings</h1>
-          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Settings permissions are not enabled for your role.</p>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Settings permissions are not enabled for this account.</p>
         </section>
       </DashboardShell>
     );

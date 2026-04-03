@@ -23,7 +23,6 @@ import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
-  hasAdminRole,
   hasPermission,
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
@@ -86,7 +85,6 @@ export default function AdminConsolePage() {
   );
   const navItems = useMemo(() => getAdminNavItems(me), [me]);
   const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
-  const isAdmin = hasAdminRole(me);
   const canViewLogs = hasPermission(me, "view_logs");
   const canManageBot = hasPermission(me, "manage_bot");
   const canViewReports = hasPermission(me, "view_reports");
@@ -97,7 +95,7 @@ export default function AdminConsolePage() {
       const meData = await getMe(authToken);
       setMe(meData);
 
-      if (!hasAdminRole(meData) || !canAccessAdminPath(meData, "/admin/console")) {
+      if (!canAccessAdminPath(meData, "/admin/console")) {
         setBotStatus(null);
         setLogRuns([]);
         setReportRuns([]);
@@ -177,7 +175,7 @@ export default function AdminConsolePage() {
   }, [canViewLogs, clearAdminSession, loadAdminData, refreshLogTail, router]);
 
   useEffect(() => {
-    if (!me || !isAdmin || canViewConsole) {
+    if (!me || canViewConsole) {
       return;
     }
     setBotStatus(null);
@@ -186,13 +184,13 @@ export default function AdminConsolePage() {
     setLogTail(null);
     if (fallbackHref && fallbackHref !== "/admin/console") {
       setStatus("Redirecting");
-      setError("Console access has been removed from your role.");
+      setError("Console access is not enabled for your account.");
       router.replace(fallbackHref);
     }
-  }, [canViewConsole, fallbackHref, isAdmin, me, router]);
+  }, [canViewConsole, fallbackHref, me, router]);
 
   useEffect(() => {
-    if (!token || !isAdmin || !canViewLogs) return;
+    if (!token || !canViewConsole || !canViewLogs) return;
     const timer = window.setInterval(() => {
       refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
@@ -206,7 +204,7 @@ export default function AdminConsolePage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [canViewLogs, clearAdminSession, token, isAdmin, selectedRunKey, refreshLogTail]);
+  }, [canViewConsole, canViewLogs, clearAdminSession, token, selectedRunKey, refreshLogTail]);
 
   async function handleStart() {
     if (!token || !canManageBot) return;
@@ -301,7 +299,7 @@ export default function AdminConsolePage() {
     return null;
   }
 
-  if (me && isAdmin && !canViewConsole && !fallbackHref) {
+  if (me && !canViewConsole && !fallbackHref) {
     return (
       <DashboardShell
         title="Console"
@@ -316,7 +314,7 @@ export default function AdminConsolePage() {
       >
         <section className={sectionCardClasses}>
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">Console</h1>
-          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Console permissions are not enabled for your role.</p>
+          <p className="mt-2 text-sm text-error-600 dark:text-error-400">Console permissions are not enabled for this account.</p>
         </section>
       </DashboardShell>
     );

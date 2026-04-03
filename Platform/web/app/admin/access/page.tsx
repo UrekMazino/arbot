@@ -23,7 +23,6 @@ import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
-  hasAdminRole,
   hasPermission,
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
@@ -89,7 +88,7 @@ export default function UserManagementPage() {
     async (authToken: string) => {
       const meData = await getMe(authToken);
       setMe(meData);
-      if (!hasAdminRole(meData) || !canAccessAdminPath(meData, "/admin/access")) {
+      if (!canAccessAdminPath(meData, "/admin/access")) {
         setUsers([]);
         setRoles([]);
         return;
@@ -129,14 +128,14 @@ export default function UserManagementPage() {
   }, [clearAdminSession, loadUserManagementData, router]);
 
   useEffect(() => {
-    if (!me || !hasAdminRole(me) || canViewAccess) {
+    if (!me || canViewAccess) {
       return;
     }
     setUsers([]);
     setRoles([]);
     if (fallbackHref && fallbackHref !== "/admin/access") {
       setStatus("Redirecting");
-      setError("Access management permissions have been removed from your role.");
+      setError("Access management permissions are not enabled for your account.");
       router.replace(fallbackHref);
     }
   }, [canViewAccess, fallbackHref, me, router]);
@@ -428,26 +427,7 @@ export default function UserManagementPage() {
     return null;
   }
 
-  if (me && !hasAdminRole(me)) {
-    return (
-      <DashboardShell
-        title="User Management"
-        subtitle="Manage users, roles, and permissions."
-        status={status}
-        activeHref="/admin/access"
-        navItems={navItems}
-      >
-        <div className="grid gap-4">
-          <section className={sectionCardClasses}>
-            <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
-            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Admin role required for access.</p>
-          </section>
-        </div>
-      </DashboardShell>
-    );
-  }
-
-  if (me && hasAdminRole(me) && !canViewAccess && !fallbackHref) {
+  if (me && !canViewAccess && !fallbackHref) {
     return (
       <DashboardShell
         title="User Management"
@@ -463,7 +443,7 @@ export default function UserManagementPage() {
         <div className="grid gap-4">
           <section className={sectionCardClasses}>
             <h1 className="text-2xl font-semibold text-gray-900 dark:text-white/90">User Management</h1>
-            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Access management permissions are not enabled for your role.</p>
+            <p className="mt-2 text-sm text-error-600 dark:text-error-400">Access management permissions are not enabled for this account.</p>
           </section>
         </div>
       </DashboardShell>

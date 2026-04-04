@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okxstatbot-api"
+version = "1.0.0"
+description = "OKXStatBot Platform API - FastAPI backend for trading bot management"
+requires-python = ">=3.10"
+
+[project.scripts]
+okxstatbot-api = "app.main:app"
+
+[tool.setuptools]
+packages = ["app"]

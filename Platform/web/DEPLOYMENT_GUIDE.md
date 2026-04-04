@@ -56,7 +56,7 @@ Deploy backend to Render free tier:
 4. Configure:
    - **Root Directory**: `Platform/api`
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port 8081`
+   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port 8081`
    - **Environment**: Python 3.11
 
 5. Add environment variables (same ones your `.env` file uses)

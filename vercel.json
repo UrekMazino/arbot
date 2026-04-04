@@ -1,0 +1,8 @@
+{
+  "projects": [
+    {
+      "rootDirectory": "Platform/web",
+      "name": "okxstatbot-web"
+    }
+  ]
+}

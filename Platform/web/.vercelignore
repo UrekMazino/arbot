@@ -1,32 +1,20 @@
-# Version control
+# Standard ignores
 .git
 .gitignore
+.DS_Store
 
 # Dependencies
 node_modules
 
-# Logs
-npm-debug.log
-*.log
-
-# Local environment files
+# Local env files
 .env.local
 .env.*.local
 
-# Build artifacts
-.DS_Store
+# Build cache
 .next/cache
 dist
 build
 
-# Exclude backend directories (important!)
-../api/
-../worker/
-api/
-worker/
-requirements.txt
-pyproject.toml
-*.py
-alembic/
-Dockerfile
-docker-compose.yml
+# Logs
+npm-debug.log
+*.log

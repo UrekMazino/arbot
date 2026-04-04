@@ -1,0 +1,34 @@
+# Ignore all Python files and backend directories
+*.py
+*.pyc
+__pycache__
+.pytest_cache
+.venv
+venv
+env
+
+# Backend directories
+api/
+worker/
+Platform/api
+Platform/worker
+Execution/
+Strategy/
+Logs/
+Reports/
+
+# Root-level bot files
+requirements.txt
+start_bot.py
+strategy_scheduler.py
+list_http_methods.py
+
+# Other
+.tmp
+.continue
+*.db
+status.json
+VERSION
+
+# Only deploy Platform/web
+# Everything else is ignored by vercel.json rootDirectory config

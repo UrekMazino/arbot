@@ -7,9 +7,9 @@ name = "okxstatbot-api"
 version = "1.0.0"
 description = "OKXStatBot Platform API - FastAPI backend for trading bot management"
 requires-python = ">=3.10"
-
-[project.scripts]
-okxstatbot-api = "app.main:app"
-
-[tool.setuptools]
-packages = ["app"]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+]

@@ -1,9 +1,32 @@
+# Version control
 .git
 .gitignore
+
+# Dependencies
 node_modules
+
+# Logs
 npm-debug.log
+*.log
+
+# Local environment files
 .env.local
 .env.*.local
-*.log
+
+# Build artifacts
 .DS_Store
 .next/cache
+dist
+build
+
+# Exclude backend directories (important!)
+../api/
+../worker/
+api/
+worker/
+requirements.txt
+pyproject.toml
+*.py
+alembic/
+Dockerfile
+docker-compose.yml

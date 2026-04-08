@@ -14,6 +14,21 @@ import {
   setRememberMePreference,
 } from "../../lib/auth";
 
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function formatAuthError(err: unknown, defaultMessage: string): string {
+  if (!(err instanceof Error)) return defaultMessage;
+  if (/HTTP 401/i.test(err.message) || /Unauthorized/i.test(err.message)) {
+    return "Invalid email or password.";
+  }
+  if (/HTTP 422|HTTP 400/i.test(err.message)) {
+    return "Please check your email and password.";
+  }
+  return err.message || defaultMessage;
+}
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -63,6 +78,11 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError("");
+    if (!isValidEmail(email)) {
+      setError("Please enter a valid email address.");
+      setBusy(false);
+      return;
+    }
     try {
       const pair = await login(email, password);
       const meData = await getMe(pair.access_token);
@@ -75,8 +95,7 @@ export default function LoginPage() {
       persistAdminSession(pair.access_token, pair.refresh_token, rememberMe, meData.email);
       router.replace(redirectPath);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Sign-in failed";
-      setError(msg);
+      setError(formatAuthError(err, "Sign-in failed. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -88,6 +107,11 @@ export default function LoginPage() {
     setForgotError("");
     setForgotMessage("");
     setDevResetToken("");
+    if (!isValidEmail(forgotEmail)) {
+      setForgotError("Please enter a valid email address.");
+      setForgotBusy(false);
+      return;
+    }
     try {
       const response = await forgotPassword(forgotEmail);
       setForgotMessage(response.message || "If this account exists, a reset flow has been started.");
@@ -95,8 +119,7 @@ export default function LoginPage() {
         setDevResetToken(response.reset_token);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to request password reset";
-      setForgotError(msg);
+      setForgotError(formatAuthError(err, "Failed to request password reset."));
     } finally {
       setForgotBusy(false);
     }

@@ -116,6 +116,17 @@ function normalizeSeverity(value: unknown): Exclude<TimelineSeverity, "all"> {
   return "info";
 }
 
+function formatAuthError(err: unknown, defaultMessage: string): string {
+  if (!(err instanceof Error)) return defaultMessage;
+  if (/HTTP 401/i.test(err.message) || /Unauthorized/i.test(err.message)) {
+    return "Invalid email or password.";
+  }
+  if (/HTTP 422|HTTP 400/i.test(err.message)) {
+    return "Please check your email and password.";
+  }
+  return err.message || defaultMessage;
+}
+
 function classifyEventType(eventType: string, severity: Exclude<TimelineSeverity, "all">): TimelineCategory {
   const text = eventType.toLowerCase();
   if (
@@ -626,8 +637,7 @@ export default function HomePage() {
       setStatus("Authenticated");
       await loadRuns(pair.access_token);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Login failed";
-      setError(msg);
+      setError(formatAuthError(err, "Login failed. Please try again."));
       setStatus("Authentication failed");
     } finally {
       setLoading(false);

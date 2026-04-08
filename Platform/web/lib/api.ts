@@ -236,7 +236,9 @@ async function apiRequest<T>(
       const parsed = JSON.parse(text);
       if (parsed && typeof parsed === "object") {
         const parsedRecord = parsed as Record<string, unknown>;
-        if (typeof parsedRecord.detail === "string") {
+        if (response.status === 400 || response.status === 422) {
+          message = "Invalid request. Please check your input and try again.";
+        } else if (typeof parsedRecord.detail === "string") {
           message = parsedRecord.detail;
         } else if (typeof parsedRecord.message === "string") {
           message = parsedRecord.message;

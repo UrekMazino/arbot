@@ -404,25 +404,25 @@ export default function AdminConsolePage() {
         <MetricCard
           label="Bot Runtime"
           value={botStatus?.running ? "RUNNING" : "STOPPED"}
-          hint={botStatus?.pid ? `pid ${botStatus.pid}` : "process not active"}
+          hint={botStatus?.pid ? `PID ${botStatus.pid}` : "process not active"}
           tone={botStatus?.running ? "teal" : "rose"}
         />
         <MetricCard
           label="Latest Run Key"
           value={showingControlLog ? "CONTROL LOG" : botStatus?.latest_run_key || "n/a"}
-          hint={showingControlLog ? "startup / control output" : `selected ${selectedRunKey}`}
+          hint={showingControlLog ? "Startup / Control Output" : `selected ${selectedRunKey}`}
           tone="sky"
         />
         <MetricCard
           label="Log Runs"
           value={String(logRuns.length)}
-          hint={logRuns[0] ? `last update ${fmtUnix(logRuns[0].mtime_ts)}` : "no logs yet"}
+          hint={logRuns[0] ? `Last Update ${fmtUnix(logRuns[0].mtime_ts)}` : "no logs yet"}
           tone="amber"
         />
         <MetricCard
           label="Report Files"
           value={String(reportFileCount)}
-          hint={`${reportRuns.length} report batches`}
+          hint={`${reportRuns.length} Report Batches`}
           tone="violet"
         />
         </section>

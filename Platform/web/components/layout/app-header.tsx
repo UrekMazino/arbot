@@ -33,7 +33,7 @@ export function AppHeader({ title, subtitle, status, actions, auth }: AppHeaderP
   };
 
   return (
-    <header className="sticky top-0 z-30 border-b border-gray-200 bg-white shadow-xs dark:border-gray-800 dark:bg-gray-900">
+    <header className="sticky top-0 z-40 border-b border-gray-200 bg-white shadow-xs dark:border-gray-800 dark:bg-gray-900">
       <div className="flex items-center justify-between gap-4 px-4 py-4 lg:px-8">
         {/* Left: Menu + Page Title */}
         <div className="flex min-w-0 items-center gap-3">

@@ -1,48 +1,54 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 type SidebarContextValue = {
   isExpanded: boolean;
   isMobileOpen: boolean;
-  isHovered: boolean;
   toggleSidebar: () => void;
   toggleMobileSidebar: () => void;
   closeMobileSidebar: () => void;
-  setHovered: (value: boolean) => void;
 };
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
 const SIDEBAR_KEY = "v2_sidebar_collapsed";
 const SIDEBAR_EVENT = "v2_sidebar_change";
 
-function readStoredExpanded(): boolean {
-  if (typeof window === "undefined") return true;
-  try {
-    return localStorage.getItem(SIDEBAR_KEY) !== "1";
-  } catch {
-    return true;
-  }
-}
-
-function subscribeSidebar(onStoreChange: () => void): () => void {
-  if (typeof window === "undefined") return () => undefined;
-  const handler = () => onStoreChange();
-  window.addEventListener("storage", handler);
-  window.addEventListener(SIDEBAR_EVENT, handler);
-  return () => {
-    window.removeEventListener("storage", handler);
-    window.removeEventListener(SIDEBAR_EVENT, handler);
-  };
-}
-
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const isExpanded = useSyncExternalStore<boolean>(subscribeSidebar, readStoredExpanded, () => true);
+  // Check if we're on the client
+  const isClient = typeof window !== "undefined";
+
+  // Read from localStorage on initial render (works on both client and server)
+  const getInitialState = (): boolean => {
+    if (!isClient) return true;
+    try {
+      const stored = localStorage.getItem(SIDEBAR_KEY);
+      return stored === null || stored !== "1";
+    } catch {
+      return true;
+    }
+  };
+
+  const [isExpanded, setIsExpanded] = useState<boolean>(getInitialState);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
+
+  // Listen for storage and custom events to sync state across browser tabs
+  useEffect(() => {
+    const handler = () => {
+      const stored = localStorage.getItem(SIDEBAR_KEY);
+      setIsExpanded(stored === null || stored !== "1");
+    };
+    window.addEventListener("storage", handler);
+    window.addEventListener(SIDEBAR_EVENT, handler);
+    return () => {
+      window.removeEventListener("storage", handler);
+      window.removeEventListener(SIDEBAR_EVENT, handler);
+    };
+  }, []);
 
   const toggleSidebar = useCallback(() => {
     const next = !isExpanded;
+    setIsExpanded(next);
     try {
       localStorage.setItem(SIDEBAR_KEY, next ? "0" : "1");
       window.dispatchEvent(new Event(SIDEBAR_EVENT));
@@ -63,13 +69,11 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     () => ({
       isExpanded,
       isMobileOpen,
-      isHovered,
       toggleSidebar,
       toggleMobileSidebar,
       closeMobileSidebar,
-      setHovered: setIsHovered,
     }),
-    [closeMobileSidebar, isExpanded, isHovered, isMobileOpen, toggleMobileSidebar, toggleSidebar],
+    [closeMobileSidebar, isExpanded, isMobileOpen, toggleMobileSidebar, toggleSidebar],
   );
 
   return <SidebarContext.Provider value={value}>{children}</SidebarContext.Provider>;

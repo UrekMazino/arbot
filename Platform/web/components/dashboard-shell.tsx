@@ -15,6 +15,7 @@ export type DashboardNavItem = {
   hint?: string;
   group?: string;
   icon?: SidebarIconName;
+  children?: DashboardNavItem[];
 };
 
 type AuthInfo = {
@@ -43,8 +44,9 @@ function DashboardFrame({
   auth,
   children,
 }: DashboardShellProps) {
-  const { isExpanded, isHovered, isMobileOpen } = useSidebar();
-  const contentMargin = isMobileOpen ? "ml-0" : isExpanded || isHovered ? "lg:ml-[290px]" : "lg:ml-[90px]";
+  const { isExpanded, isMobileOpen } = useSidebar();
+  // Always match content margin to sidebar state
+  const contentMargin = isMobileOpen ? "ml-0" : isExpanded ? "lg:ml-[290px]" : "lg:ml-[90px]";
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-white/90">
@@ -62,9 +64,7 @@ function DashboardFrame({
 export function DashboardShell(props: DashboardShellProps) {
   return (
     <ThemeProvider>
-      <SidebarProvider>
-        <DashboardFrame {...props} />
-      </SidebarProvider>
+      <DashboardFrame {...props} />
     </ThemeProvider>
   );
 }

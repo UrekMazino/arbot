@@ -425,7 +425,7 @@ export async function updateUserPermissions(
 }
 
 export async function createRole(
-  body: { name: string; description?: string; permissions?: string[] },
+  body: { name: string; description?: string | null; permissions?: string[] },
 ): Promise<RoleRecord> {
   return apiRequest<RoleRecord>(
     "/users/roles",
@@ -442,7 +442,7 @@ export async function createRole(
 
 export async function updateRole(
   roleId: string,
-  body: { name?: string; description?: string; permissions?: string[] },
+  body: { name?: string; description?: string | null; permissions?: string[] },
 ): Promise<RoleRecord> {
   const encodedRoleId = encodeURIComponent(roleId);
   return apiRequest<RoleRecord>(

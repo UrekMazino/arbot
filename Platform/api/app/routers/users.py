@@ -197,6 +197,25 @@ def update_user_permissions(
     return user
 
 
+@router.delete("/{user_id}", response_model=MessageOut)
+def delete_user(
+    user_id: str,
+    _: User = Depends(require_permissions("manage_users")),
+    db: Session = Depends(get_db_session),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Prevent deleting the last admin user
+    if user.email == "admin@local":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete the default admin user")
+
+    db.delete(user)
+    db.commit()
+    return MessageOut(message="User deleted")
+
+
 @router.post("/{user_id}/roles", response_model=MessageOut)
 def assign_role(
     user_id: str,
@@ -233,7 +252,17 @@ def remove_role(
     if not role:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
-    if role in user.roles:
-        user.roles.remove(role)
+    # Remove from user's roles by directly deleting the association
+    from ..models import UserRole
+    association = db.execute(
+        select(UserRole).where(
+            UserRole.user_id == user_id,
+            UserRole.role_id == role.id
+        )
+    ).scalar_one_or_none()
+
+    if association:
+        db.delete(association)
         db.commit()
+
     return MessageOut(message="Role removed")

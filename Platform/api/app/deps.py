@@ -7,10 +7,11 @@ from urllib.parse import urlsplit
 from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from .config import settings
 from .database import get_db
-from .models import User
+from .models import Role, User
 from .security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login", auto_error=False)
@@ -30,6 +31,11 @@ def _load_user_from_token(token: str | None, db: Session) -> User:
     user = db.get(User, user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+
+    # Ensure roles are loaded while session is active
+    # This fixes the 403 error for traders by making role permissions available
+    _ = user.roles
+
     return user
 
 
@@ -124,8 +130,10 @@ def get_user_permission_ids(user: User) -> set[str]:
         normalized = str(permission_id or "").strip().lower()
         if normalized:
             permissions.add(normalized)
+    # Process role permissions
     for role in user.roles:
-        for permission_id in role.permissions or []:
+        role_perms = role.permissions
+        for permission_id in (role_perms or []):
             normalized = str(permission_id or "").strip().lower()
             if normalized:
                 permissions.add(normalized)

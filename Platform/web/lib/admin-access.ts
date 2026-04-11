@@ -9,16 +9,31 @@ export type AdminNavItem = {
   group?: string;
   icon?: SidebarIconName;
   requiredPermissions?: string[];
+  children?: AdminNavItem[];
 };
 
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   {
     href: "/admin/dashboard",
     label: "Dashboard",
-    hint: "Runs, quality, reports",
+    hint: "Analytics & Portfolio",
     group: "Monitor",
     icon: "dashboard",
     requiredPermissions: ["view_dashboard"],
+    children: [
+      {
+        href: "/admin/dashboard/analytics",
+        label: "Analytics",
+        group: "Monitor",
+        requiredPermissions: ["view_analytics"],
+      },
+      {
+        href: "/admin/dashboard/portfolio",
+        label: "Portfolio",
+        group: "Monitor",
+        requiredPermissions: ["view_portfolio"],
+      },
+    ],
   },
   {
     href: "/admin/console",
@@ -72,7 +87,18 @@ export function hasAnyPermission(user: UserRecord | null | undefined, permission
 }
 
 export function canAccessAdminPath(user: UserRecord | null | undefined, href: string): boolean {
-  const navItem = ADMIN_NAV_ITEMS.find((item) => item.href === href);
+  const findItem = (items: AdminNavItem[]): AdminNavItem | undefined => {
+    for (const item of items) {
+      if (item.href === href) return item;
+      if (item.children) {
+        const found = findItem(item.children);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+
+  const navItem = findItem(ADMIN_NAV_ITEMS);
   if (!navItem) {
     return false;
   }
@@ -80,16 +106,62 @@ export function canAccessAdminPath(user: UserRecord | null | undefined, href: st
 }
 
 export function getAdminNavItems(user: UserRecord | null | undefined): Omit<AdminNavItem, "requiredPermissions">[] {
-  return ADMIN_NAV_ITEMS.filter((item) => hasAnyPermission(user, item.requiredPermissions)).map(
-    ({ requiredPermissions, ...item }) => {
-      void requiredPermissions;
-      return item;
-    },
-  );
+  const result: Omit<AdminNavItem, "requiredPermissions">[] = [];
+
+  const processItems = (items: AdminNavItem[]) => {
+    for (const item of items) {
+      const hasPermission = hasAnyPermission(user, item.requiredPermissions);
+      const accessibleChildren = item.children
+        ? item.children.filter((child) => hasAnyPermission(user, child.requiredPermissions))
+        : [];
+
+      // If item has children, only include if it has accessible children
+      // If item has no children, include if user has direct permission
+      if (item.children && item.children.length > 0) {
+        // Parent with children: only show if there are accessible children
+        if (accessibleChildren.length > 0) {
+          const { requiredPermissions, children, ...navItem } = item;
+          result.push({
+            ...navItem,
+            children: accessibleChildren.map(({ requiredPermissions, ...child }) => {
+              void requiredPermissions;
+              return child;
+            }),
+          });
+        }
+      } else {
+        // Item without children: include if user has direct permission
+        if (hasPermission) {
+          const { requiredPermissions, children, ...navItem } = item;
+          result.push(navItem);
+        }
+      }
+    }
+  };
+
+  processItems(ADMIN_NAV_ITEMS);
+  return result;
 }
 
 export function getFirstAccessibleAdminPath(user: UserRecord | null | undefined): string | null {
-  return getAdminNavItems(user)[0]?.href || null;
+  const items = getAdminNavItems(user);
+
+  // If there are nav items, use the first one
+  if (items.length > 0) {
+    const first = items[0];
+    // If the first item has children, return the first child's href
+    if (first.children && first.children.length > 0) {
+      return first.children[0].href || null;
+    }
+    return first.href || null;
+  }
+
+  // No nav items - check if user can access /admin/dashboard directly
+  if (canAccessAdminPath(user, "/admin/dashboard")) {
+    return "/admin/dashboard";
+  }
+
+  return null;
 }
 
 export function hasAnyAdminAccess(user: UserRecord | null | undefined): boolean {

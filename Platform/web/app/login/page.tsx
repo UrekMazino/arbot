@@ -23,6 +23,12 @@ function formatAuthError(err: unknown, defaultMessage: string): string {
   if (/HTTP 401/i.test(err.message) || /Unauthorized/i.test(err.message)) {
     return "Invalid email or password.";
   }
+  if (/HTTP 403/i.test(err.message)) {
+    if (/Contact admin/i.test(err.message) || /No roles or permissions/i.test(err.message)) {
+      return "Your account has no access. Please contact admin to get access.";
+    }
+    return "Access denied.";
+  }
   if (/HTTP 422|HTTP 400/i.test(err.message)) {
     return "Please check your email and password.";
   }

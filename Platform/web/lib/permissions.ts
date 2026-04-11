@@ -11,6 +11,8 @@ export interface Permission {
 
 export const AVAILABLE_PERMISSIONS: Permission[] = [
   { id: "view_dashboard", label: "View Dashboard", description: "Access dashboard and metrics" },
+  { id: "view_analytics", label: "View Analytics", description: "Access analytics, timeline and run details" },
+  { id: "view_portfolio", label: "View Portfolio", description: "Access portfolio and equity curve charts" },
   { id: "view_logs", label: "View Logs", description: "View bot logs and terminal output" },
   { id: "manage_bot", label: "Manage Bot", description: "Start/stop bot and control execution" },
   { id: "view_reports", label: "View Reports", description: "Access generated reports" },
@@ -26,8 +28,8 @@ export const AVAILABLE_PERMISSIONS: Permission[] = [
  */
 export const ROLE_PERMISSIONS: Record<string, string[]> = {
   admin: AVAILABLE_PERMISSIONS.map((p) => p.id),
-  trader: ["view_dashboard", "view_logs", "manage_bot", "view_reports"],
-  viewer: ["view_dashboard", "view_logs", "view_reports"],
+  trader: ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "manage_bot", "view_reports"],
+  viewer: ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "view_reports"],
 };
 
 /**

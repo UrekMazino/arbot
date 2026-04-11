@@ -2,6 +2,8 @@ from __future__ import annotations
 
 AVAILABLE_PERMISSION_IDS = (
     "view_dashboard",
+    "view_analytics",
+    "view_portfolio",
     "view_logs",
     "manage_bot",
     "view_reports",
@@ -13,8 +15,8 @@ AVAILABLE_PERMISSION_IDS = (
 
 BUILTIN_ROLE_PERMISSIONS: dict[str, list[str]] = {
     "admin": list(AVAILABLE_PERMISSION_IDS),
-    "trader": ["view_dashboard", "view_logs", "manage_bot", "view_reports"],
-    "viewer": ["view_dashboard", "view_logs", "view_reports"],
+    "trader": ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "manage_bot", "view_reports"],
+    "viewer": ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "view_reports"],
 }
 
 

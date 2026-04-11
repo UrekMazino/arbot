@@ -31,6 +31,8 @@ import { AVAILABLE_PERMISSIONS, resolveRolePermissionIds } from "../../../lib/pe
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { TableFrame } from "../../../components/panels";
 import { AppModal } from "../../../components/ui/modal";
+import { useConfirmDialog } from "../../../components/ui/confirm-dialog";
+import { useNotification } from "../../../components/ui/notification";
 
 type TabType = "users" | "roles";
 
@@ -67,8 +69,15 @@ export default function UserManagementPage() {
   // Modal states
   const [assignRoleModalUser, setAssignRoleModalUser] = useState<UserRecord | null>(null);
   const [assignRoleModalRoleName, setAssignRoleModalRoleName] = useState("");
-  const [deleteConfirmUser, setDeleteConfirmUser] = useState<UserRecord | null>(null);
   const [permissionEditorUser, setPermissionEditorUser] = useState<UserRecord | null>(null);
+
+  // Confirm dialog for delete operations
+  const { ConfirmDialogComponent: deleteRoleConfirm, confirm: showDeleteRoleConfirm } = useConfirmDialog();
+  const { ConfirmDialogComponent: deleteUserConfirm, confirm: showDeleteUserConfirm } = useConfirmDialog();
+
+  // Alert for success/error feedback
+  const { NotificationComponent: successNotification, showNotification: showSuccess } = useNotification();
+  const { NotificationComponent: errorNotification, showNotification: showError } = useNotification();
 
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
@@ -135,6 +144,12 @@ export default function UserManagementPage() {
           setError("Session expired. Please sign in again.");
           return;
         }
+        // Handle case where user has no roles or permissions
+        if (err instanceof Error && (err.message.includes("HTTP 403") || err.message.includes("No roles or permissions"))) {
+          clearAdminSession("No access. Contact admin to get access.", true);
+          setError("No access. Contact admin to get access.");
+          return;
+        }
         const msg = err instanceof Error ? err.message : "Failed loading user management";
         setError(msg);
       })
@@ -169,6 +184,12 @@ export default function UserManagementPage() {
     e.preventDefault();
     if (!me || !canManageUsers || !newUserEmail || !newUserPassword) return;
 
+    // Validate password minimum length
+    if (newUserPassword.length < 8) {
+      showError({ variant: "danger", title: "Invalid password", message: "Password must be at least 8 characters." });
+      return;
+    }
+
     setBusy(true);
     setError("");
     try {
@@ -178,16 +199,16 @@ export default function UserManagementPage() {
       });
       setNewUserEmail("");
       setNewUserPassword("");
-      setStatus("User created");
+      showSuccess({ variant: "success", title: "User created", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Create user failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to create user", message: msg });
     } finally {
       setBusy(false);
     }
@@ -200,16 +221,16 @@ export default function UserManagementPage() {
     setError("");
     try {
       await removeUserRole(userId, roleNameToRemove);
-      setStatus("Role removed");
+      showSuccess({ variant: "success", title: "Role removed", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Remove role failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to remove role", message: msg });
     } finally {
       setBusy(false);
     }
@@ -222,17 +243,16 @@ export default function UserManagementPage() {
     setError("");
     try {
       await deleteUser(userId);
-      setDeleteConfirmUser(null);
-      setStatus("User deleted");
+      showSuccess({ variant: "success", title: "User deleted", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Delete user failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to delete user", message: msg });
     } finally {
       setBusy(false);
     }
@@ -248,16 +268,16 @@ export default function UserManagementPage() {
       await assignUserRole(assignRoleModalUser.id, assignRoleModalRoleName);
       setAssignRoleModalUser(null);
       setAssignRoleModalRoleName("");
-      setStatus("Role assigned");
+      showSuccess({ variant: "success", title: "Role assigned", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Assign role failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to assign role", message: msg });
     } finally {
       setBusy(false);
     }
@@ -269,25 +289,28 @@ export default function UserManagementPage() {
 
     setBusy(true);
     setError("");
+    console.log("[Role] Creating role:", { name: newRoleName, description: newRoleDescription, permissions: newRolePermissions });
     try {
-      await createRole({
+      const result = await createRole({
         name: newRoleName,
-        description: newRoleDescription,
+        description: newRoleDescription || null,
         permissions: newRolePermissions,
       });
+      console.log("[Role] Created:", result);
       setNewRoleName("");
       setNewRoleDescription("");
       setNewRolePermissions([]);
-      setStatus("Role created");
+      showSuccess({ variant: "success", title: "Role created", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
+      console.error("[Role] Create failed:", err);
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Create role failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to create role", message: msg });
     } finally {
       setBusy(false);
     }
@@ -299,49 +322,57 @@ export default function UserManagementPage() {
 
     setBusy(true);
     setError("");
+    console.log("[Role] Updating role:", { id: editingRoleId, name: editingRoleName, description: editingRoleDescription, permissions: editingRolePermissions });
     try {
-      await updateRole(editingRoleId, {
+      const result = await updateRole(editingRoleId, {
         name: editingRoleName,
-        description: editingRoleDescription,
+        description: editingRoleDescription || null,
         permissions: editingRolePermissions,
       });
+      console.log("[Role] Updated:", result);
       resetRoleEditor();
-      setStatus("Role updated");
+      showSuccess({ variant: "success", title: "Role updated", autoCloseDelay: 2500 });
       await loadUserManagementData();
     } catch (err) {
+      console.error("[Role] Update failed:", err);
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Update role failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to update role", message: msg });
     } finally {
       setBusy(false);
     }
   }
 
   async function handleDeleteRole(roleId: string, roleName: string) {
-    if (!me || !canManageRoles || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
+    if (!me || !canManageRoles) return;
 
-    setBusy(true);
-    setError("");
-    try {
-      await deleteRole(roleId);
-
-      setStatus("Role deleted");
-      await loadUserManagementData();
-    } catch (err) {
-      if (isUnauthorizedError(err)) {
-        clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
-        return;
-      }
-      const msg = err instanceof Error ? err.message : "Delete role failed";
-      setError(msg);
-    } finally {
-      setBusy(false);
-    }
+    showDeleteRoleConfirm({
+      title: "Delete Role",
+      description: `Are you sure you want to delete the role "${roleName}"? This action cannot be undone.`,
+      onConfirm: async () => {
+        setBusy(true);
+        setError("");
+        try {
+          await deleteRole(roleId);
+          showSuccess({ variant: "success", title: "Role deleted", autoCloseDelay: 2500 });
+          await loadUserManagementData();
+        } catch (err) {
+          if (isUnauthorizedError(err)) {
+            clearAdminSession("Session expired. Please sign in again.", true);
+            showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
+            return;
+          }
+          const msg = err instanceof Error ? err.message : "Delete role failed";
+          showError({ variant: "danger", title: "Failed to delete role", message: msg });
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   }
 
   function getUserPermissions(user: UserRecord): string[] {
@@ -364,7 +395,6 @@ export default function UserManagementPage() {
     setUsers((prev) => prev.map((user) => (user.id === updatedUser.id ? updatedUser : user)));
     setMe((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
     setAssignRoleModalUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
-    setDeleteConfirmUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
     setPermissionEditorUser((prev) => (prev?.id === updatedUser.id ? updatedUser : prev));
   }
 
@@ -382,15 +412,15 @@ export default function UserManagementPage() {
     try {
       const updatedUser = await updateUserPermissions(user.id, nextPermissions);
       applyUpdatedUserRecord(updatedUser);
-      setStatus(`Permission ${hasCustomPermission ? "removed" : "added"}`);
+      showSuccess({ variant: "success", title: `Permission ${hasCustomPermission ? "removed" : "added"}`, autoCloseDelay: 2500 });
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
-        setError("Session expired. Please sign in again.");
+        showError({ variant: "danger", title: "Session expired", message: "Please sign in again." });
         return;
       }
       const msg = err instanceof Error ? err.message : "Update user permissions failed";
-      setError(msg);
+      showError({ variant: "danger", title: "Failed to update permissions", message: msg });
     } finally {
       setBusy(false);
     }
@@ -624,7 +654,11 @@ export default function UserManagementPage() {
                                 Assign Role
                               </button>
                               <button
-                                onClick={() => setDeleteConfirmUser(user)}
+                                onClick={() => showDeleteUserConfirm({
+                                  title: "Delete User",
+                                  description: `This will permanently remove ${user.email} from the platform. User roles and custom permissions will be removed together with this account.`,
+                                  onConfirm: () => handleDeleteUser(user.id),
+                                })}
                                 className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                                 disabled={busy}
                               >
@@ -692,41 +726,7 @@ export default function UserManagementPage() {
                   </form>
                 </AppModal>
 
-                <AppModal
-                  open={Boolean(deleteConfirmUser)}
-                  title="Delete User"
-                  description={
-                    deleteConfirmUser
-                      ? `This will permanently remove ${deleteConfirmUser.email} from the platform.`
-                      : "This action cannot be undone."
-                  }
-                  size="sm"
-                  onClose={() => setDeleteConfirmUser(null)}
-                  footer={
-                    <div className="flex justify-end gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmUser(null)}
-                        className={secondaryButtonClasses}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteConfirmUser && handleDeleteUser(deleteConfirmUser.id)}
-                        disabled={busy}
-                        className="inline-flex items-center rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-70 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
-                      >
-                        Delete User
-                      </button>
-                    </div>
-                  }
-                >
-                  <div className="rounded-2xl border border-red-100 bg-red-50/70 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
-                    User roles and custom permissions will be removed together with this account.
-                  </div>
-                </AppModal>
-
+                
                 <AppModal
                   open={Boolean(permissionEditorUser)}
                   title={permissionEditorUser ? `Manage Permissions for ${permissionEditorUser.email}` : "Manage Permissions"}
@@ -1011,6 +1011,10 @@ export default function UserManagementPage() {
           </div>
         </section>
       </div>
+      {deleteRoleConfirm}
+      {deleteUserConfirm}
+      {successNotification}
+      {errorNotification}
     </DashboardShell>
   );
 }

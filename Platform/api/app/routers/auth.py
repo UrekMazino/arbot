@@ -103,6 +103,12 @@ def login(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User inactive")
 
+    # Check if user has any role or direct permissions
+    has_role = len(user.roles) > 0
+    has_permissions = len(user.permissions) > 0
+    if not has_role and not has_permissions:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No roles or permissions. Contact admin to get access.")
+
     access_token = create_access_token(user.id)
     refresh_token, refresh_hash, expires = create_refresh_token()
     token_row = RefreshToken(
@@ -281,4 +287,9 @@ def logout(
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
+    # Check if user has any role or direct permissions - log out if none
+    has_role = len(user.roles) > 0
+    has_permissions = len(user.permissions) > 0
+    if not has_role and not has_permissions:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No roles or permissions. Contact admin to get access.")
     return user

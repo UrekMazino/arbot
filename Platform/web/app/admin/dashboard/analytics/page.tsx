@@ -1,42 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 
 import {
-  ConfigSnapshotResponse,
   DataQualitySummary,
   RunEvent,
-  RunReportArtifact,
   RunSummary,
-  ScorecardCell,
   Trade,
   UserRecord,
-  WalkForwardPoint,
-  apiRootUrl,
   getMe,
-  getRunConfigSnapshot,
   getRunDataQuality,
   getRunEvents,
-  getRunReportArtifacts,
-  getRunScorecard,
   getRunTrades,
-  getRunWalkForward,
   getRuns,
   isUnauthorizedError,
-  wsDashboardUrl,
 } from "../../../../lib/api";
 import { DashboardShell } from "../../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../../components/panels";
 import {
-  clearStoredAdminSession,
   getStoredAdminEmail,
 } from "../../../../lib/auth";
 import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
-  hasPermission,
 } from "../../../../lib/admin-access";
 import { UI_CLASSES } from "../../../../lib/ui-classes";
 
@@ -184,20 +172,6 @@ function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
   };
 }
 
-function qualityClass(status: string | null | undefined): string {
-  const normalized = String(status || "").toLowerCase();
-  if (normalized === "pass") {
-    return "border border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400";
-  }
-  if (normalized === "warning") {
-    return "border border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400";
-  }
-  if (normalized === "fail") {
-    return "border border-danger-200 bg-danger-50 text-danger-700 dark:border-danger-900 dark:bg-danger-950/20 dark:text-danger-400";
-  }
-  return "border border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-700 dark:bg-gray-800/50 dark:text-gray-400";
-}
-
 export default function AnalyticsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -205,20 +179,14 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilterCategory>("all");
   const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const [showLive, setShowLive] = useState(true);
-  const [ws, setWs] = useState<WebSocket | null>(null);
   const [liveEvents, setLiveEvents] = useState<TimelineEvent[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunSummary | null>(null);
-  const [runConfig, setRunConfig] = useState<ConfigSnapshotResponse | null>(null);
   const [runQuality, setRunQuality] = useState<DataQualitySummary | null>(null);
-  const [scorecard, setScorecard] = useState<ScorecardCell[][] | null>(null);
-  const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
   const [runTrades, setRunTrades] = useState<Trade[]>([]);
-  const [runArtifacts, setRunArtifacts] = useState<RunReportArtifact[]>([]);
   const [pnlFilter, setPnlFilter] = useState<RunPnlFilter>("all");
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
@@ -259,12 +227,9 @@ export default function AnalyticsPage() {
   }, [loading, user, pathname, router]);
 
   useEffect(() => {
-    if (!showLive) {
-      ws?.close();
-      setWs(null);
-      return;
-    }
-    const w = new WebSocket(wsDashboardUrl);
+    if (!showLive) return;
+    const wsUrl = `${process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8081"}/ws/dashboard`;
+    const w = new WebSocket(wsUrl);
     w.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data) as LiveMsg;
@@ -273,7 +238,6 @@ export default function AnalyticsPage() {
         console.error("WS parse error", e);
       }
     };
-    setWs(w);
     return () => w.close();
   }, [showLive]);
 
@@ -283,15 +247,27 @@ export default function AnalyticsPage() {
       .catch((e) => setError(isUnauthorizedError(e) ? "Unauthorized" : "Failed to load runs"));
   }, []);
 
+  // Use the selected run or default to the first run
+  const effectiveSelectedRun = selectedRun || runs[0] || null;
+
+  // Fetch run data when effectiveSelectedRun changes
   useEffect(() => {
-    if (selectedRunId === null) {
-      const latest = (runs || [])[0];
-      if (latest) setSelectedRunId(latest.id);
-      return;
-    }
-    const found = (runs || []).find((r) => r.id === selectedRunId);
-    if (found) setSelectedRun(found);
-  }, [selectedRunId, runs]);
+    if (!effectiveSelectedRun) return;
+    (async () => {
+      try {
+        const [qual, trades, evts] = await Promise.all([
+          getRunDataQuality(effectiveSelectedRun.id),
+          getRunTrades(effectiveSelectedRun.id),
+          getRunEvents(effectiveSelectedRun.id),
+        ]);
+        setRunQuality(qual);
+        setRunTrades(trades);
+        setTimelineEvents(evts.map(normalizeHistoryEvent));
+      } catch (e) {
+        console.error("Failed to load run data", e);
+      }
+    })();
+  }, [effectiveSelectedRun]);
 
   const filteredTimeline = useMemo(() => {
     let events = [...timelineEvents];
@@ -305,53 +281,13 @@ export default function AnalyticsPage() {
       .slice(0, 100);
   }, [timelineEvents, liveEvents, showLive, timelineFilter, timelineSeverity]);
 
-  const loadSelectedRunData = useCallback(async () => {
-    if (!selectedRun) return;
-    setRunConfig(null);
-    setRunQuality(null);
-    setScorecard(null);
-    setWalkForward([]);
-    setRunTrades([]);
-    setRunArtifacts([]);
-    setTimelineEvents([]);
-    try {
-      const [cfg, qual, score, wf, trades, arts, evts] = await Promise.all([
-        getRunConfigSnapshot(selectedRun.id),
-        getRunDataQuality(selectedRun.id),
-        getRunScorecard(selectedRun.id),
-        getRunWalkForward(selectedRun.id),
-        getRunTrades(selectedRun.id),
-        getRunReportArtifacts(selectedRun.id),
-        getRunEvents(selectedRun.id),
-      ]);
-      setRunConfig(cfg);
-      setRunQuality(qual);
-      setScorecard(score);
-      setWalkForward(wf);
-      setRunTrades(trades);
-      setRunArtifacts(arts);
-      setTimelineEvents(evts.map(normalizeHistoryEvent));
-    } catch (e) {
-      console.error("Failed to load run data", e);
-    }
-  }, [selectedRun]);
-
-  useEffect(() => {
-    loadSelectedRunData();
-  }, [loadSelectedRunData]);
-
   const filteredRuns = useMemo(() => {
     return (runs || []).filter((r) => {
-      if (pnlFilter === "positive") return (r.realized_pl ?? 0) > 0;
-      if (pnlFilter === "negative") return (r.realized_pl ?? 0) < 0;
+      if (pnlFilter === "positive") return (r.session_pnl ?? 0) > 0;
+      if (pnlFilter === "negative") return (r.session_pnl ?? 0) < 0;
       return true;
     });
   }, [runs, pnlFilter]);
-
-  const handleLogout = useCallback(() => {
-    clearStoredAdminSession();
-    router.replace("/login");
-  }, [router]);
 
   if (loading) {
     return <div className="p-8 text-center text-gray-500">Loading...</div>;
@@ -372,8 +308,11 @@ export default function AnalyticsPage() {
         <div className="flex flex-wrap gap-4">
           <select
             className={UI_CLASSES.input}
-            value={selectedRunId || ""}
-            onChange={(e) => setSelectedRunId(e.target.value)}
+            value={effectiveSelectedRun?.id || ""}
+            onChange={(e) => {
+              const found = runs.find(r => r.id === e.target.value);
+              if (found) setSelectedRun(found);
+            }}
           >
             {filteredRuns.filter(r => r && r.id).map((run) => (
               <option key={run.id} value={run.id}>
@@ -393,10 +332,10 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <MetricCard label="Session PnL" value={fmtSignedNumber(selectedRun?.session_pnl)} unit="USDT" />
-          <MetricCard label="Duration" value={selectedRun ? fmtDuration(selectedRun.start_ts, selectedRun.end_ts) : "n/a"} />
-          <MetricCard label="Start Equity" value={fmtNumber(selectedRun?.start_equity)} unit="USDT" />
-          <MetricCard label="End Equity" value={fmtNumber(selectedRun?.end_equity)} unit="USDT" />
+          <MetricCard label="Session PnL" value={fmtSignedNumber(effectiveSelectedRun?.session_pnl)} unit="USDT" />
+          <MetricCard label="Duration" value={effectiveSelectedRun ? fmtDuration(effectiveSelectedRun.start_ts, effectiveSelectedRun.end_ts) : "n/a"} />
+          <MetricCard label="Start Equity" value={fmtNumber(effectiveSelectedRun?.start_equity)} unit="USDT" />
+          <MetricCard label="End Equity" value={fmtNumber(effectiveSelectedRun?.end_equity)} unit="USDT" />
         </div>
 
         <PanelCard title="Timeline" titleRight={
@@ -452,15 +391,25 @@ export default function AnalyticsPage() {
           </TableFrame>
         </PanelCard>
 
-        {runQuality && runQuality.checks && (
+        {runQuality && (
           <PanelCard title="Data Quality" titleRight={<StatusPill label={runQuality.overall_status} variant={runQuality.overall_status === "pass" ? "success" : "warning"} />}>
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              {runQuality.checks.map((check) => (
-                <div key={check.name} className={`rounded-lg p-3 ${qualityClass(check.status)}`}>
-                  <div className="text-xs font-medium uppercase">{check.name}</div>
-                  <div className="mt-1 text-sm">{check.message || check.status}</div>
-                </div>
-              ))}
+              <div className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800">
+                <div className="text-xs font-medium uppercase text-gray-500">Total Events</div>
+                <div className="mt-1 text-lg font-semibold">{runQuality.event_health?.total ?? 0}</div>
+              </div>
+              <div className="rounded-lg p-3 bg-yellow-50 dark:bg-yellow-900/20">
+                <div className="text-xs font-medium uppercase text-yellow-600">Warnings</div>
+                <div className="mt-1 text-lg font-semibold text-yellow-600">{runQuality.event_health?.warn ?? 0}</div>
+              </div>
+              <div className="rounded-lg p-3 bg-red-50 dark:bg-red-900/20">
+                <div className="text-xs font-medium uppercase text-red-600">Errors</div>
+                <div className="mt-1 text-lg font-semibold text-red-600">{runQuality.event_health?.error ?? 0}</div>
+              </div>
+              <div className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800">
+                <div className="text-xs font-medium uppercase text-gray-500">Trade Status</div>
+                <div className="mt-1 text-sm font-semibold">{runQuality.trade_integrity?.status ?? "unknown"}</div>
+              </div>
             </div>
           </PanelCard>
         )}
@@ -481,13 +430,13 @@ export default function AnalyticsPage() {
                   </thead>
                   <tbody>
                     {runTrades.slice(0, 20).map((trade) => (
-                      <tr key={trade.trade_id} className="border-b border-gray-100 py-2 dark:border-gray-800">
-                        <td className="py-2 font-mono">{trade.pair}</td>
+                      <tr key={trade.id} className="border-b border-gray-100 py-2 dark:border-gray-800">
+                        <td className="py-2 font-mono">{trade.pair_key}</td>
                         <td className="py-2">{trade.side}</td>
-                        <td className="py-2">{fmtNumber(trade.entry_price)}</td>
-                        <td className="py-2">{fmtNumber(trade.exit_price)}</td>
-                        <td className={`py-2 font-mono ${(trade.realized_pnl ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>
-                          {fmtSignedNumber(trade.realized_pnl)}
+                        <td className="py-2">{fmtNumber(trade.entry_z)}</td>
+                        <td className="py-2">{fmtNumber(trade.exit_z)}</td>
+                        <td className={`py-2 font-mono ${(trade.pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>
+                          {fmtSignedNumber(trade.pnl_usdt)}
                         </td>
                       </tr>
                     ))}

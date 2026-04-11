@@ -12,4 +12,8 @@ export const UI_CLASSES = {
 
   // Card/Section styles
   sectionCard: "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900",
+
+  // Input styles
+  input: "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800",
+  inputSmall: "rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800",
 } as const;

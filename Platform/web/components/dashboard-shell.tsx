@@ -2,7 +2,7 @@
 
 import { ReactNode } from "react";
 
-import { SidebarProvider, useSidebar } from "../context/sidebar-context";
+import { useSidebar } from "../context/sidebar-context";
 import { ThemeProvider } from "../context/theme-context";
 import { AppHeader } from "./layout/app-header";
 import { AppSidebar } from "./layout/app-sidebar";

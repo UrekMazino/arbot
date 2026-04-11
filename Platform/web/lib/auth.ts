@@ -1,7 +1,3 @@
-export const ADMIN_ACCESS_TOKEN_KEY = "v2_admin_access_token";
-export const ADMIN_REFRESH_TOKEN_KEY = "v2_admin_refresh_token";
-export const LEGACY_ACCESS_TOKEN_KEY = "v2_access_token";
-export const LEGACY_REFRESH_TOKEN_KEY = "v2_refresh_token";
 export const ADMIN_REMEMBER_ME_KEY = "v2_admin_remember_me";
 export const ADMIN_EMAIL_KEY = "v2_admin_email";
 export const AUTH_STORAGE_EVENT = "v2_auth_storage_change";
@@ -17,39 +13,20 @@ function notifyAuthStorageChange(): void {
   window.dispatchEvent(new Event(AUTH_STORAGE_EVENT));
 }
 
-function readStorageKey(key: string): string {
-  if (!inBrowser()) {
-    return "";
-  }
-  return localStorage.getItem(key) || sessionStorage.getItem(key) || "";
-}
-
-function setTokenPair(target: Storage, accessToken: string, refreshToken: string): void {
-  target.setItem(ADMIN_ACCESS_TOKEN_KEY, accessToken);
-  target.setItem(ADMIN_REFRESH_TOKEN_KEY, refreshToken);
-  target.setItem(LEGACY_ACCESS_TOKEN_KEY, accessToken);
-  target.setItem(LEGACY_REFRESH_TOKEN_KEY, refreshToken);
-}
-
-function clearTokenPair(target: Storage): void {
-  target.removeItem(ADMIN_ACCESS_TOKEN_KEY);
-  target.removeItem(ADMIN_REFRESH_TOKEN_KEY);
-  target.removeItem(LEGACY_ACCESS_TOKEN_KEY);
-  target.removeItem(LEGACY_REFRESH_TOKEN_KEY);
-}
-
-export function persistAdminSession(accessToken: string, refreshToken: string, rememberMe: boolean, email?: string): void {
+export function persistAdminSession(rememberMe: boolean, email?: string): void {
   if (!inBrowser()) {
     return;
   }
-  clearTokenPair(localStorage);
-  clearTokenPair(sessionStorage);
-  const storage = rememberMe ? localStorage : sessionStorage;
-  setTokenPair(storage, accessToken, refreshToken);
-  localStorage.setItem(ADMIN_REMEMBER_ME_KEY, rememberMe ? "1" : "0");
+
   if (email) {
+    const storage = rememberMe ? localStorage : sessionStorage;
     storage.setItem(ADMIN_EMAIL_KEY, email);
+  } else {
+    localStorage.removeItem(ADMIN_EMAIL_KEY);
+    sessionStorage.removeItem(ADMIN_EMAIL_KEY);
   }
+
+  localStorage.setItem(ADMIN_REMEMBER_ME_KEY, rememberMe ? "1" : "0");
   notifyAuthStorageChange();
 }
 
@@ -64,19 +41,9 @@ export function clearStoredAdminSession(): void {
   if (!inBrowser()) {
     return;
   }
-  clearTokenPair(localStorage);
-  clearTokenPair(sessionStorage);
   localStorage.removeItem(ADMIN_EMAIL_KEY);
   sessionStorage.removeItem(ADMIN_EMAIL_KEY);
   notifyAuthStorageChange();
-}
-
-export function getStoredAdminAccessToken(): string {
-  return readStorageKey(ADMIN_ACCESS_TOKEN_KEY) || readStorageKey(LEGACY_ACCESS_TOKEN_KEY);
-}
-
-export function getStoredAdminRefreshToken(): string {
-  return readStorageKey(ADMIN_REFRESH_TOKEN_KEY) || readStorageKey(LEGACY_REFRESH_TOKEN_KEY);
 }
 
 export function defaultRememberMe(): boolean {

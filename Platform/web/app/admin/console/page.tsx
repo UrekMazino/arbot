@@ -25,7 +25,7 @@ import {
   getFirstAccessibleAdminPath,
   hasPermission,
 } from "../../../lib/admin-access";
-import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
+import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
@@ -51,7 +51,6 @@ function fmtUnix(value: number | null | undefined): string {
 
 export default function AdminConsolePage() {
   const router = useRouter();
-  const [token, setToken] = useState<string>("");
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
@@ -71,7 +70,6 @@ export default function AdminConsolePage() {
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
-    setToken("");
     setStatus(reason);
     setError("");
     setProfileResolved(false);
@@ -93,13 +91,11 @@ export default function AdminConsolePage() {
   const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
   const canViewLogs = hasPermission(me, "view_logs");
   const canManageBot = hasPermission(me, "manage_bot");
-  const canViewReports = hasPermission(me, "view_reports");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
   const showingControlLog = logTail?.run_key === "__control__";
 
-  const loadAdminData = useCallback(
-    async (authToken: string) => {
-      const meData = await getMe(authToken);
+  const loadAdminData = useCallback(async () => {
+      const meData = await getMe();
       setMe(meData);
 
       if (!canAccessAdminPath(meData, "/admin/console")) {
@@ -114,10 +110,10 @@ export default function AdminConsolePage() {
       const canLoadLogs = hasPermission(meData, "view_logs");
       const canLoadReports = hasPermission(meData, "view_reports");
       const [statusData, logsData, reportsData, logTailData] = await Promise.all([
-        canLoadStatus ? getAdminBotStatus(authToken) : Promise.resolve(null),
-        canLoadLogs ? getAdminLogRuns(authToken) : Promise.resolve([] as AdminLogRun[]),
-        canLoadReports ? getAdminReportRuns(authToken) : Promise.resolve([] as AdminReportRun[]),
-        canLoadLogs ? getAdminBotLogTail(authToken, "latest", 320) : Promise.resolve(null),
+        canLoadStatus ? getAdminBotStatus() : Promise.resolve(null),
+        canLoadLogs ? getAdminLogRuns() : Promise.resolve([] as AdminLogRun[]),
+        canLoadReports ? getAdminReportRuns() : Promise.resolve([] as AdminReportRun[]),
+        canLoadLogs ? getAdminBotLogTail("latest", 320) : Promise.resolve(null),
       ]);
       setBotStatus(statusData);
       setLogRuns(logsData);
@@ -133,12 +129,12 @@ export default function AdminConsolePage() {
   );
 
   const refreshLogTail = useCallback(
-    async (authToken: string, runKey: string) => {
+    async (runKey: string) => {
       if (!canViewLogs) {
         setLogTail(null);
         return;
       }
-      const next = await getAdminBotLogTail(authToken, runKey || "latest", 320);
+      const next = await getAdminBotLogTail(runKey || "latest", 320);
       setLogTail(next);
       if (runKey === "latest" && next?.run_key && next.run_key !== "__control__") {
         setSelectedRunKey(next.run_key);
@@ -150,18 +146,7 @@ export default function AdminConsolePage() {
   );
 
   useEffect(() => {
-    const stored = getStoredAdminAccessToken();
     const storedEmail = getStoredAdminEmail();
-    if (!stored) {
-      setAuthChecked(true);
-      router.replace("/login?next=/admin/console");
-      return;
-    }
-    setToken(stored);
-    setStatus("Loading console...");
-    setAuthChecked(true);
-    setProfileResolved(false);
-    // Set stored email as fallback while API data loads
     if (storedEmail) {
       const fallbackMe: UserRecord = {
         id: "",
@@ -174,7 +159,11 @@ export default function AdminConsolePage() {
       };
       setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
-    loadAdminData(stored)
+
+    setStatus("Loading console...");
+    setAuthChecked(true);
+    setProfileResolved(false);
+    loadAdminData()
       .then(() => {
         setStatus("Session restored");
       })
@@ -210,9 +199,9 @@ export default function AdminConsolePage() {
   }, [canViewConsole, fallbackHref, me, profileResolved, router]);
 
   useEffect(() => {
-    if (!token || !canViewConsole || !canViewLogs) return;
+    if (!canViewConsole || !canViewLogs) return;
     const timer = window.setInterval(() => {
-      refreshLogTail(token, selectedRunKey || "latest").catch((err: unknown) => {
+      refreshLogTail(selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
           clearAdminSession("Session expired. Please sign in again.", true);
           setError("Session expired. Please sign in again.");
@@ -224,14 +213,14 @@ export default function AdminConsolePage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [canViewConsole, canViewLogs, clearAdminSession, token, selectedRunKey, refreshLogTail]);
+  }, [canViewConsole, canViewLogs, clearAdminSession, selectedRunKey, refreshLogTail]);
 
   async function handleStart() {
-    if (!token || !canManageBot) return;
+    if (!me || !canManageBot) return;
     setBusy(true);
     setError("");
     try {
-      const next = await startAdminBot(token);
+      const next = await startAdminBot();
       setBotStatus(next);
       setStatus("Bot start requested");
     } catch (err) {
@@ -252,11 +241,11 @@ export default function AdminConsolePage() {
   }
 
   async function handleStop() {
-    if (!token || !canManageBot) return;
+    if (!me || !canManageBot) return;
     setBusy(true);
     setError("");
     try {
-      const next = await stopAdminBot(token);
+      const next = await stopAdminBot();
       setBotStatus(next);
       setStatus("Bot stop requested");
     } catch (err) {
@@ -277,13 +266,13 @@ export default function AdminConsolePage() {
   }
 
   async function handleRefreshAll() {
-    if (!token) return;
+    if (!me) return;
     setBusy(true);
     setError("");
     try {
-      await loadAdminData(token);
+      await loadAdminData();
       if (canViewLogs) {
-        await refreshLogTail(token, selectedRunKey || "latest");
+        await refreshLogTail(selectedRunKey || "latest");
       }
       setStatus("Refreshed");
     } catch (err) {
@@ -305,7 +294,6 @@ export default function AdminConsolePage() {
 
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
-  const secondaryButtonClasses = UI_CLASSES.secondaryButton;
 
   const handleTerminalDragStart = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
@@ -336,10 +324,6 @@ export default function AdminConsolePage() {
     );
   }
 
-  if (!token) {
-    return null;
-  }
-
   if (profileResolved && me && !canViewConsole && !fallbackHref) {
     return (
       <DashboardShell
@@ -350,7 +334,7 @@ export default function AdminConsolePage() {
         navItems={navItems}
         auth={{
           email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <section className={sectionCardClasses}>
@@ -370,7 +354,7 @@ export default function AdminConsolePage() {
       navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-        hasToken: Boolean(token),
+        hasToken: Boolean(me),
       }}
     >
       <div className="grid gap-2">

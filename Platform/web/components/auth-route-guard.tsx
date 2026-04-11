@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { AUTH_STORAGE_EVENT, getStoredAdminAccessToken } from "../lib/auth";
+import { AUTH_STORAGE_EVENT, getStoredAdminEmail } from "../lib/auth";
 
 const PUBLIC_PATHS = new Set<string>(["/login", "/reset-password"]);
 
@@ -19,7 +19,7 @@ function subscribeTokenStore(onStoreChange: () => void): () => void {
 }
 
 function readTokenSnapshot(): boolean {
-  return Boolean(getStoredAdminAccessToken());
+  return Boolean(getStoredAdminEmail());
 }
 
 function readHydratedSnapshot(): boolean {

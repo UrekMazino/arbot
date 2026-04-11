@@ -17,7 +17,7 @@ import {
   getFirstAccessibleAdminPath,
   hasPermission,
 } from "../../../lib/admin-access";
-import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
+import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 
@@ -25,7 +25,6 @@ type TabType = "bot" | "api";
 
 export default function SettingsPage() {
   const router = useRouter();
-  const [token, setToken] = useState<string>("");
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
@@ -47,7 +46,6 @@ export default function SettingsPage() {
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
-    setToken("");
     setStatus(reason);
     setError("");
     setProfileResolved(false);
@@ -57,8 +55,8 @@ export default function SettingsPage() {
     }
   }, [router]);
 
-  const loadEnvSettings = useCallback(async (authToken: string) => {
-    const envData = await getAdminEnvSettings(authToken);
+  const loadEnvSettings = useCallback(async () => {
+    const envData = await getAdminEnvSettings();
     setEnvSettings(envData);
     if (envData?.values) {
       setEnvEdits(envData.values);
@@ -66,17 +64,7 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    const stored = getStoredAdminAccessToken();
-    if (!stored) {
-      setAuthChecked(true);
-      router.replace("/login?next=/admin/settings");
-      return;
-    }
     const storedEmail = getStoredAdminEmail();
-    setToken(stored);
-    setStatus("Loading settings...");
-    setAuthChecked(true);
-    setProfileResolved(false);
     if (storedEmail) {
       const fallbackMe: UserRecord = {
         id: "",
@@ -89,7 +77,11 @@ export default function SettingsPage() {
       };
       setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
-    getMe(stored)
+
+    setStatus("Loading settings...");
+    setAuthChecked(true);
+    setProfileResolved(false);
+    getMe()
       .then(async (userData) => {
         setMe(userData);
         if (!canAccessAdminPath(userData, "/admin/settings")) {
@@ -101,7 +93,7 @@ export default function SettingsPage() {
           }
           return;
         }
-        await loadEnvSettings(stored);
+        await loadEnvSettings();
         setStatus("Session restored");
       })
       .catch((err: unknown) => {
@@ -177,12 +169,12 @@ export default function SettingsPage() {
   }, [botEnvKeys, apiEnvKeys, activeTab, searchTerm]);
 
   async function saveEnvKey(key: string) {
-    if (!token) return;
+    if (!me) return;
     const value = envEdits[key] ?? "";
     setBusy(true);
     setError("");
     try {
-      const next = await updateAdminEnvSetting(token, key, value);
+      const next = await updateAdminEnvSetting(key, value);
       setEnvSettings(next);
       setEnvEdits(next.values || {});
       setStatus(`Saved ${key}`);
@@ -228,10 +220,6 @@ export default function SettingsPage() {
     );
   }
 
-  if (!token) {
-    return null;
-  }
-
   if (profileResolved && me && !canViewSettings && !fallbackHref) {
     return (
       <DashboardShell
@@ -242,7 +230,7 @@ export default function SettingsPage() {
         navItems={navItems}
         auth={{
           email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <section className={sectionCardClasses}>
@@ -253,7 +241,7 @@ export default function SettingsPage() {
     );
   }
 
-  if (token && !profileResolved) {
+  if (!profileResolved) {
     return (
       <DashboardShell
         title="Settings"
@@ -263,7 +251,7 @@ export default function SettingsPage() {
         navItems={navItems}
         auth={{
           email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <section className={sectionCardClasses}>
@@ -292,7 +280,7 @@ export default function SettingsPage() {
       navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-        hasToken: Boolean(token),
+        hasToken: Boolean(me),
       }}
     >
       <div className="grid gap-4">

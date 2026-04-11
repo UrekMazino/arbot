@@ -12,15 +12,10 @@ class MessageOut(BaseModel):
     message: str
 
 
-class TokenPairOut(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    refresh_token: str
-
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+    remember_me: bool = True
 
 
 class ForgotPasswordIn(BaseModel):
@@ -38,11 +33,11 @@ class ResetPasswordIn(BaseModel):
 
 
 class RefreshIn(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class LogoutIn(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 class RoleOut(BaseModel):

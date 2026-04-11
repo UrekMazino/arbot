@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { clearStoredAdminSession } from "../../lib/auth";
+import { logout } from "../../lib/api";
 
 type ProfileMenuProps = {
   email?: string;
@@ -13,7 +14,12 @@ export function ProfileMenu({ email }: ProfileMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // ignore errors during sign out and clear local state anyway
+    }
     clearStoredAdminSession();
     setIsOpen(false);
     router.push("/login");

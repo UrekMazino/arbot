@@ -9,7 +9,7 @@ import { canAccessAdminPath, getFirstAccessibleAdminPath } from "../../lib/admin
 import {
   clearStoredAdminSession,
   defaultRememberMe,
-  getStoredAdminAccessToken,
+  getStoredAdminEmail,
   persistAdminSession,
   setRememberMePreference,
 } from "../../lib/auth";
@@ -57,9 +57,11 @@ export default function LoginPage() {
   }, []);
 
   useEffect(() => {
-    const token = getStoredAdminAccessToken();
-    if (!token) return;
-    getMe(token)
+    const storedEmail = getStoredAdminEmail();
+    if (storedEmail) {
+      setEmail(storedEmail);
+    }
+    getMe()
       .then((meData) => {
         const redirectPath = canAccessAdminPath(meData, nextPath) ? nextPath : getFirstAccessibleAdminPath(meData);
         if (redirectPath) {
@@ -70,7 +72,7 @@ export default function LoginPage() {
         setError("This account has no enabled app permissions.");
       })
       .catch(() => {
-        clearStoredAdminSession();
+        // No existing session or session expired.
       });
   }, [router, nextPath]);
 
@@ -84,15 +86,15 @@ export default function LoginPage() {
       return;
     }
     try {
-      const pair = await login(email, password);
-      const meData = await getMe(pair.access_token);
+      await login(email, password, rememberMe);
+      const meData = await getMe();
       const redirectPath = canAccessAdminPath(meData, nextPath) ? nextPath : getFirstAccessibleAdminPath(meData);
       if (!redirectPath) {
         clearStoredAdminSession();
         setError("This account has no enabled app permissions.");
         return;
       }
-      persistAdminSession(pair.access_token, pair.refresh_token, rememberMe, meData.email);
+      persistAdminSession(rememberMe, meData.email);
       router.replace(redirectPath);
     } catch (err) {
       setError(formatAuthError(err, "Sign-in failed. Please try again."));

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from functools import wraps
+from urllib.parse import urlsplit
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from .models import User
 from .security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.api_prefix}/auth/login", auto_error=False)
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def get_db_session() -> Generator[Session, None, None]:
@@ -31,10 +33,52 @@ def _load_user_from_token(token: str | None, db: Session) -> User:
     return user
 
 
+def _normalize_origin(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = urlsplit(text)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def validate_browser_request_origin(request: Request) -> None:
+    if request.method.upper() in SAFE_METHODS:
+        return
+
+    sec_fetch_site = str(request.headers.get("sec-fetch-site") or "").strip().lower()
+    if sec_fetch_site and sec_fetch_site not in {"same-origin", "same-site", "none"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-site request blocked")
+
+    allowed_origins = {
+        origin
+        for origin in (_normalize_origin(item) for item in settings.cors_origin_list())
+        if origin
+    }
+    if not allowed_origins:
+        return
+
+    origin = _normalize_origin(request.headers.get("origin"))
+    if origin:
+        if origin not in allowed_origins:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-site request blocked")
+        return
+
+    referer_origin = _normalize_origin(request.headers.get("referer"))
+    if referer_origin and referer_origin not in allowed_origins:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-site request blocked")
+
+
 def get_current_user(
+    request: Request,
     token: str | None = Depends(oauth2_scheme),
     db: Session = Depends(get_db_session),
 ) -> User:
+    if not token:
+        token = request.cookies.get("okxstatbot_access_token")
+        if token:
+            validate_browser_request_origin(request)
     return _load_user_from_token(token, db)
 
 

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..deps import get_current_user, get_db_session
+from ..deps import get_current_user, get_db_session, validate_browser_request_origin
 from ..models import PasswordResetToken, RefreshToken, User
 from ..schemas import (
     ForgotPasswordIn,
@@ -17,7 +17,6 @@ from ..schemas import (
     MessageOut,
     RefreshIn,
     ResetPasswordIn,
-    TokenPairOut,
     UserOut,
 )
 from ..security import (
@@ -33,13 +32,70 @@ from ..services.email_delivery import build_password_reset_link, send_password_r
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+ACCESS_TOKEN_COOKIE_NAME = "okxstatbot_access_token"
+REFRESH_TOKEN_COOKIE_NAME = "okxstatbot_refresh_token"
+COOKIE_PATH = "/"
 
-@router.post("/login", response_model=TokenPairOut)
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def set_auth_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+    request: Request,
+    persistent: bool,
+) -> None:
+    secure_cookie = settings.app_env.lower() == "production" or request.url.scheme == "https"
+    same_site = "lax"
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite=same_site,
+        path=COOKIE_PATH,
+    )
+
+    refresh_cookie_kwargs = {
+        "key": REFRESH_TOKEN_COOKIE_NAME,
+        "value": refresh_token,
+        "httponly": True,
+        "secure": secure_cookie,
+        "samesite": same_site,
+        "path": COOKIE_PATH,
+    }
+    if persistent:
+        refresh_cookie_kwargs["max_age"] = settings.refresh_token_days * 24 * 60 * 60
+        refresh_cookie_kwargs["expires"] = settings.refresh_token_days * 24 * 60 * 60
+
+    response.set_cookie(**refresh_cookie_kwargs)
+
+
+def clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE_NAME, path=COOKIE_PATH)
+    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path=COOKIE_PATH)
+
+
+def get_request_refresh_token(body: RefreshIn | LogoutIn | None, request: Request) -> tuple[str | None, bool]:
+    if body and body.refresh_token:
+        return body.refresh_token.strip() or None, False
+    return request.cookies.get(REFRESH_TOKEN_COOKIE_NAME), True
+
+
+@router.post("/login", response_model=MessageOut)
 def login(
     body: LoginIn,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db_session),
 ):
+    validate_browser_request_origin(request)
+
     stmt = select(User).where(User.email == body.email)
     user = db.execute(stmt).scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):
@@ -53,13 +109,15 @@ def login(
         user_id=user.id,
         token_hash=refresh_hash,
         expires_at=expires,
+        is_persistent=body.remember_me,
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
     db.add(token_row)
     db.commit()
+    set_auth_cookies(response, access_token, refresh_token, request, persistent=body.remember_me)
 
-    return TokenPairOut(access_token=access_token, refresh_token=refresh_token)
+    return MessageOut(message="Signed in")
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordOut)
@@ -131,7 +189,7 @@ def reset_password(
     now = datetime.now(timezone.utc)
     token_hash = hash_password_reset_token(token_value)
     token_row = db.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)).scalar_one_or_none()
-    if not token_row or token_row.used_at is not None or token_row.expires_at < now:
+    if not token_row or token_row.used_at is not None or _as_utc(token_row.expires_at) < now:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
 
     user = db.get(User, token_row.user_id)
@@ -153,20 +211,27 @@ def reset_password(
     return MessageOut(message="Password reset successful. Please sign in with your new password.")
 
 
-@router.post("/refresh", response_model=TokenPairOut)
+@router.post("/refresh", response_model=MessageOut)
 def refresh(
-    body: RefreshIn,
     request: Request,
+    response: Response,
+    body: RefreshIn | None = None,
     db: Session = Depends(get_db_session),
 ):
-    token_hash = hash_refresh_token(body.refresh_token)
+    refresh_token_value, used_cookie = get_request_refresh_token(body, request)
+    if used_cookie:
+        validate_browser_request_origin(request)
+    if not refresh_token_value:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+
+    token_hash = hash_refresh_token(refresh_token_value)
     stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
     token_row = db.execute(stmt).scalar_one_or_none()
     if not token_row:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
     if token_row.revoked_at is not None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token revoked")
-    if token_row.expires_at < datetime.now(timezone.utc):
+    if _as_utc(token_row.expires_at) < datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired")
 
     user = db.get(User, token_row.user_id)
@@ -180,26 +245,37 @@ def refresh(
         user_id=user.id,
         token_hash=refresh_hash,
         expires_at=expires,
+        is_persistent=bool(token_row.is_persistent),
         ip=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
     db.add(new_row)
     db.commit()
+    set_auth_cookies(response, access_token, refresh_token, request, persistent=bool(token_row.is_persistent))
 
-    return TokenPairOut(access_token=access_token, refresh_token=refresh_token)
+    return MessageOut(message="Session refreshed")
 
 
 @router.post("/logout", response_model=MessageOut)
 def logout(
-    body: LogoutIn,
+    request: Request,
+    response: Response,
+    body: LogoutIn | None = None,
     db: Session = Depends(get_db_session),
 ):
-    token_hash = hash_refresh_token(body.refresh_token)
-    stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
-    token_row = db.execute(stmt).scalar_one_or_none()
-    if token_row and token_row.revoked_at is None:
-        token_row.revoked_at = datetime.now(timezone.utc)
-        db.commit()
+    refresh_token_value, used_cookie = get_request_refresh_token(body, request)
+    if used_cookie:
+        validate_browser_request_origin(request)
+
+    if refresh_token_value:
+        token_hash = hash_refresh_token(refresh_token_value)
+        stmt = select(RefreshToken).where(RefreshToken.token_hash == token_hash)
+        token_row = db.execute(stmt).scalar_one_or_none()
+        if token_row and token_row.revoked_at is None:
+            token_row.revoked_at = datetime.now(timezone.utc)
+            db.commit()
+
+    clear_auth_cookies(response)
     return MessageOut(message="Logged out")
 
 

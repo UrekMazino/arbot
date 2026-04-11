@@ -25,7 +25,7 @@ import {
   getFirstAccessibleAdminPath,
   hasPermission,
 } from "../../../lib/admin-access";
-import { clearStoredAdminSession, getStoredAdminAccessToken, getStoredAdminEmail } from "../../../lib/auth";
+import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { AVAILABLE_PERMISSIONS, resolveRolePermissionIds } from "../../../lib/permissions";
 import { DashboardShell } from "../../../components/dashboard-shell";
@@ -36,7 +36,6 @@ type TabType = "users" | "roles";
 
 export default function UserManagementPage() {
   const router = useRouter();
-  const [token, setToken] = useState<string>("");
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
@@ -74,7 +73,6 @@ export default function UserManagementPage() {
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
-    setToken("");
     setStatus(reason);
     setError("");
     setProfileResolved(false);
@@ -86,39 +84,26 @@ export default function UserManagementPage() {
     }
   }, [router]);
 
-  const loadUserManagementData = useCallback(
-    async (authToken: string) => {
-      const meData = await getMe(authToken);
-      setMe(meData);
-      if (!canAccessAdminPath(meData, "/admin/access")) {
-        setUsers([]);
-        setRoles([]);
-        return;
-      }
-      const canLoadUsers = hasPermission(meData, "manage_users");
-      const canLoadRoles = canLoadUsers || hasPermission(meData, "manage_roles");
-      const [usersData, rolesData] = await Promise.all([
-        canLoadUsers ? listUsers(authToken) : Promise.resolve([] as UserRecord[]),
-        canLoadRoles ? listRoles(authToken) : Promise.resolve([] as RoleRecord[]),
-      ]);
-      setUsers(usersData);
-      setRoles(rolesData);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const stored = getStoredAdminAccessToken();
-    if (!stored) {
-      setAuthChecked(true);
-      router.replace("/login?next=/admin/access");
+  const loadUserManagementData = useCallback(async () => {
+    const meData = await getMe();
+    setMe(meData);
+    if (!canAccessAdminPath(meData, "/admin/access")) {
+      setUsers([]);
+      setRoles([]);
       return;
     }
+    const canLoadUsers = hasPermission(meData, "manage_users");
+    const canLoadRoles = canLoadUsers || hasPermission(meData, "manage_roles");
+    const [usersData, rolesData] = await Promise.all([
+      canLoadUsers ? listUsers() : Promise.resolve([] as UserRecord[]),
+      canLoadRoles ? listRoles() : Promise.resolve([] as RoleRecord[]),
+    ]);
+    setUsers(usersData);
+    setRoles(rolesData);
+  }, []);
+
+  useEffect(() => {
     const storedEmail = getStoredAdminEmail();
-    setToken(stored);
-    setStatus("Loading access...");
-    setAuthChecked(true);
-    setProfileResolved(false);
     if (storedEmail) {
       const fallbackMe: UserRecord = {
         id: "",
@@ -131,8 +116,17 @@ export default function UserManagementPage() {
       };
       setMe((prev) => (prev ? { ...prev, email: storedEmail } : fallbackMe));
     }
-    loadUserManagementData(stored)
-      .then(() => {
+
+    setStatus("Loading access...");
+    setAuthChecked(true);
+    setProfileResolved(false);
+    getMe()
+      .then(async (meData) => {
+        setMe(meData);
+        await loadUserManagementData();
+        setStatus("Session restored");
+      })
+      .catch(() => {
         setStatus("Session restored");
       })
       .catch((err: unknown) => {
@@ -173,19 +167,19 @@ export default function UserManagementPage() {
 
   async function handleCreateUser(e: FormEvent) {
     e.preventDefault();
-    if (!token || !canManageUsers || !newUserEmail || !newUserPassword) return;
+    if (!me || !canManageUsers || !newUserEmail || !newUserPassword) return;
 
     setBusy(true);
     setError("");
     try {
-      await createUser(token, {
+      await createUser({
         email: newUserEmail,
         password: newUserPassword,
       });
       setNewUserEmail("");
       setNewUserPassword("");
       setStatus("User created");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -200,14 +194,14 @@ export default function UserManagementPage() {
   }
 
   async function handleRemoveRole(userId: string, roleNameToRemove: string) {
-    if (!token || (!canManageUsers && !canManageRoles)) return;
+    if (!me || (!canManageUsers && !canManageRoles)) return;
 
     setBusy(true);
     setError("");
     try {
-      await removeUserRole(token, userId, roleNameToRemove);
+      await removeUserRole(userId, roleNameToRemove);
       setStatus("Role removed");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -222,15 +216,15 @@ export default function UserManagementPage() {
   }
 
   async function handleDeleteUser(userId: string) {
-    if (!token || !canManageUsers) return;
+    if (!me || !canManageUsers) return;
 
     setBusy(true);
     setError("");
     try {
-      await deleteUser(token, userId);
+      await deleteUser(userId);
       setDeleteConfirmUser(null);
       setStatus("User deleted");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -246,16 +240,16 @@ export default function UserManagementPage() {
 
   async function handleAssignRoleFromModal(e: FormEvent) {
     e.preventDefault();
-    if (!token || (!canManageUsers && !canManageRoles) || !assignRoleModalUser || !assignRoleModalRoleName) return;
+    if (!me || (!canManageUsers && !canManageRoles) || !assignRoleModalUser || !assignRoleModalRoleName) return;
 
     setBusy(true);
     setError("");
     try {
-      await assignUserRole(token, assignRoleModalUser.id, assignRoleModalRoleName);
+      await assignUserRole(assignRoleModalUser.id, assignRoleModalRoleName);
       setAssignRoleModalUser(null);
       setAssignRoleModalRoleName("");
       setStatus("Role assigned");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -271,12 +265,12 @@ export default function UserManagementPage() {
 
   async function handleCreateRole(e: FormEvent) {
     e.preventDefault();
-    if (!token || !canManageRoles || !newRoleName) return;
+    if (!me || !canManageRoles || !newRoleName) return;
 
     setBusy(true);
     setError("");
     try {
-      await createRole(token, {
+      await createRole({
         name: newRoleName,
         description: newRoleDescription,
         permissions: newRolePermissions,
@@ -285,7 +279,7 @@ export default function UserManagementPage() {
       setNewRoleDescription("");
       setNewRolePermissions([]);
       setStatus("Role created");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -301,19 +295,19 @@ export default function UserManagementPage() {
 
   async function handleUpdateRole(e: FormEvent) {
     e.preventDefault();
-    if (!token || !canManageRoles || !editingRoleId || !editingRoleName) return;
+    if (!me || !canManageRoles || !editingRoleId || !editingRoleName) return;
 
     setBusy(true);
     setError("");
     try {
-      await updateRole(token, editingRoleId, {
+      await updateRole(editingRoleId, {
         name: editingRoleName,
         description: editingRoleDescription,
         permissions: editingRolePermissions,
       });
       resetRoleEditor();
       setStatus("Role updated");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -328,15 +322,15 @@ export default function UserManagementPage() {
   }
 
   async function handleDeleteRole(roleId: string, roleName: string) {
-    if (!token || !canManageRoles || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
+    if (!me || !canManageRoles || !confirm(`Are you sure you want to delete the role "${roleName}"?`)) return;
 
     setBusy(true);
     setError("");
     try {
-      await deleteRole(token, roleId);
+      await deleteRole(roleId);
 
       setStatus("Role deleted");
-      await loadUserManagementData(token);
+      await loadUserManagementData();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -375,7 +369,7 @@ export default function UserManagementPage() {
   }
 
   async function handleToggleUserPermission(user: UserRecord, permissionId: string) {
-    if (!token || !canManageUsers) return;
+    if (!me || !canManageUsers) return;
 
     const currentPermissions = getUserPermissions(user);
     const hasCustomPermission = currentPermissions.includes(permissionId);
@@ -386,7 +380,7 @@ export default function UserManagementPage() {
     setBusy(true);
     setError("");
     try {
-      const updatedUser = await updateUserPermissions(token, user.id, nextPermissions);
+      const updatedUser = await updateUserPermissions(user.id, nextPermissions);
       applyUpdatedUserRecord(updatedUser);
       setStatus(`Permission ${hasCustomPermission ? "removed" : "added"}`);
     } catch (err) {
@@ -443,10 +437,6 @@ export default function UserManagementPage() {
     );
   }
 
-  if (!token) {
-    return null;
-  }
-
   if (profileResolved && me && !canViewAccess && !fallbackHref) {
     return (
       <DashboardShell
@@ -457,7 +447,7 @@ export default function UserManagementPage() {
         navItems={navItems}
         auth={{
           email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <div className="grid gap-4">
@@ -470,7 +460,7 @@ export default function UserManagementPage() {
     );
   }
 
-  if (token && !profileResolved) {
+  if (!profileResolved) {
     return (
       <DashboardShell
         title="User Management"
@@ -480,7 +470,7 @@ export default function UserManagementPage() {
         navItems={navItems}
         auth={{
           email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <div className="grid gap-4">
@@ -511,7 +501,7 @@ export default function UserManagementPage() {
       navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-        hasToken: Boolean(token),
+        hasToken: Boolean(me),
       }}
     >
       <div className="grid gap-4">

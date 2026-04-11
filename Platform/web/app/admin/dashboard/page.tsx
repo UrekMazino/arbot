@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -13,7 +13,6 @@ import {
   Trade,
   UserRecord,
   WalkForwardPoint,
-  apiBaseUrl,
   apiRootUrl,
   getMe,
   getRunConfigSnapshot,
@@ -25,17 +24,13 @@ import {
   getRunWalkForward,
   getRuns,
   isUnauthorizedError,
-  login,
   wsDashboardUrl,
 } from "../../../lib/api";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 import {
   clearStoredAdminSession,
-  getStoredAdminAccessToken,
-  getStoredAdminRefreshToken,
   getStoredAdminEmail,
-  persistAdminSession,
 } from "../../../lib/auth";
 import {
   canAccessAdminPath,
@@ -114,17 +109,6 @@ function normalizeSeverity(value: unknown): Exclude<TimelineSeverity, "all"> {
   if (normalized === "error") return "error";
   if (normalized === "critical") return "critical";
   return "info";
-}
-
-function formatAuthError(err: unknown, defaultMessage: string): string {
-  if (!(err instanceof Error)) return defaultMessage;
-  if (/HTTP 401/i.test(err.message) || /Unauthorized/i.test(err.message)) {
-    return "Invalid email or password.";
-  }
-  if (/HTTP 422|HTTP 400/i.test(err.message)) {
-    return "Please check your email and password.";
-  }
-  return err.message || defaultMessage;
 }
 
 function classifyEventType(eventType: string, severity: Exclude<TimelineSeverity, "all">): TimelineCategory {
@@ -361,11 +345,8 @@ function AttributionTable({ scorecard }: { scorecard: ScorecardCell[] }) {
 
 export default function HomePage() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const [, setEmail] = useState("");
   const [me, setMe] = useState<UserRecord | null>(null);
-  const [password, setPassword] = useState("");
-  const [token, setToken] = useState<string>("");
-  const [refreshToken, setRefreshToken] = useState<string>("");
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -385,12 +366,9 @@ export default function HomePage() {
   const [runPnlFilter, setRunPnlFilter] = useState<RunPnlFilter>("all");
   const [chartWindow, setChartWindow] = useState<ChartWindow>("80");
   const [status, setStatus] = useState<string>("Signed out");
-  const [error, setError] = useState<string>("");
-  const [loading, setLoading] = useState(false);
+  const [, setError] = useState<string>("");
 
   const clearSession = useCallback((reason = "Signed out") => {
-    setToken("");
-    setRefreshToken("");
     setEmail("");
     setMe(null);
     setRuns([]);
@@ -458,24 +436,24 @@ export default function HomePage() {
   const canViewDashboard = hasPermission(me, "view_dashboard");
   const canViewReports = hasPermission(me, "view_reports");
 
-  const loadRuns = useCallback(async (authToken: string) => {
-    const nextRuns = await getRuns(authToken);
+  const loadRuns = useCallback(async () => {
+    const nextRuns = await getRuns();
     setRuns(nextRuns);
     if (nextRuns.length && !selectedRunId) {
       setSelectedRunId(nextRuns[0].id);
     }
   }, [selectedRunId]);
 
-  const refreshRunDetails = useCallback(async (authToken: string, runId: string) => {
+  const refreshRunDetails = useCallback(async (runId: string) => {
     if (!runId) return;
     const [runEvents, runTrades, runWalkForward, runScorecard, runQuality, runConfigSnapshot, runReportArtifacts] = await Promise.all([
-      getRunEvents(authToken, runId),
-      getRunTrades(authToken, runId),
-      getRunWalkForward(authToken, runId),
-      getRunScorecard(authToken, runId),
-      getRunDataQuality(authToken, runId),
-      getRunConfigSnapshot(authToken, runId),
-      canViewReports ? getRunReportArtifacts(authToken, runId) : Promise.resolve([] as RunReportArtifact[]),
+      getRunEvents(runId),
+      getRunTrades(runId),
+      getRunWalkForward(runId),
+      getRunScorecard(runId),
+      getRunDataQuality(runId),
+      getRunConfigSnapshot(runId),
+      canViewReports ? getRunReportArtifacts(runId) : Promise.resolve([] as RunReportArtifact[]),
     ]);
     setEvents(runEvents);
     setTrades(runTrades);
@@ -586,7 +564,7 @@ export default function HomePage() {
 
   const downloadArtifactFile = useCallback(
     async (downloadUrl: string, fileName: string, fileId: string) => {
-      if (!token) {
+      if (!me) {
         setError("You must be signed in to download report files.");
         return;
       }
@@ -595,10 +573,8 @@ export default function HomePage() {
       try {
         const response = await fetch(`${apiRootUrl()}${downloadUrl}`, {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
           cache: "no-store",
+          credentials: "include",
         });
         if (!response.ok) {
           const text = await response.text();
@@ -620,39 +596,12 @@ export default function HomePage() {
         setDownloadingFileId("");
       }
     },
-    [token],
+    [me],
   );
 
-  async function onLoginSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const pair = await login(email, password);
-      setToken(pair.access_token);
-      setRefreshToken(pair.refresh_token);
-      persistAdminSession(pair.access_token, pair.refresh_token, true, email);
-      const userData = await getMe(pair.access_token);
-      setMe(userData);
-      setStatus("Authenticated");
-      await loadRuns(pair.access_token);
-    } catch (err) {
-      setError(formatAuthError(err, "Login failed. Please try again."));
-      setStatus("Authentication failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function onLogout() {
-    clearSession("Signed out");
-    router.replace("/login?next=/");
-  }
-
   async function handleRefreshRuns() {
-    if (!token) return;
     try {
-      await loadRuns(token);
+      await loadRuns();
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearSession("Session expired. Please sign in again.");
@@ -665,9 +614,9 @@ export default function HomePage() {
   }
 
   async function handleRefreshDetail() {
-    if (!token || !selectedRunId) return;
+    if (!selectedRunId) return;
     try {
-      await refreshRunDetails(token, selectedRunId);
+      await refreshRunDetails(selectedRunId);
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearSession("Session expired. Please sign in again.");
@@ -680,40 +629,35 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    const stored = getStoredAdminAccessToken();
-    const storedRefresh = getStoredAdminRefreshToken();
     const storedEmail = getStoredAdminEmail();
-    if (stored || storedEmail) {
-      setToken(stored);
-      setRefreshToken(storedRefresh);
+    if (storedEmail) {
       setEmail(storedEmail);
       setStatus("Session restored");
-      if (stored) {
-        getMe(stored)
-          .then(async (userData) => {
-            setMe(userData);
-            if (!canAccessAdminPath(userData, "/admin/dashboard")) {
-              setStatus("Redirecting");
-              setError("Dashboard access is not enabled for your account.");
-              const nextHref = getFirstAccessibleAdminPath(userData);
-              if (nextHref && nextHref !== "/admin/dashboard") {
-                router.replace(nextHref);
-              }
-              return;
-            }
-            await loadRuns(stored);
-          })
-          .catch((err: unknown) => {
-            if (isUnauthorizedError(err)) {
-              clearSession("Session expired. Please sign in again.");
-              setError("Session expired. Please sign in again.");
-              return;
-            }
-            const msg = err instanceof Error ? err.message : "Failed to restore admin session";
-            setError(msg);
-          });
-      }
     }
+
+    getMe()
+      .then(async (userData) => {
+        setMe(userData);
+        if (!canAccessAdminPath(userData, "/admin/dashboard")) {
+          setStatus("Redirecting");
+          setError("Dashboard access is not enabled for your account.");
+          const nextHref = getFirstAccessibleAdminPath(userData);
+          if (nextHref && nextHref !== "/admin/dashboard") {
+            router.replace(nextHref);
+          }
+          return;
+        }
+        await loadRuns();
+      })
+      .catch((err: unknown) => {
+        if (isUnauthorizedError(err)) {
+          clearSession("Session expired. Please sign in again.");
+          setError("Session expired. Please sign in again.");
+          return;
+        }
+        const msg = err instanceof Error ? err.message : "Failed to restore admin session";
+        setError(msg);
+      });
   }, [clearSession, loadRuns, router]);
 
   useEffect(() => {
@@ -730,8 +674,8 @@ export default function HomePage() {
 
 
   useEffect(() => {
-    if (!token || !selectedRunId || !canViewDashboard) return;
-    refreshRunDetails(token, selectedRunId).catch((err: unknown) => {
+    if (!selectedRunId || !canViewDashboard) return;
+    refreshRunDetails(selectedRunId).catch((err: unknown) => {
       if (isUnauthorizedError(err)) {
         clearSession("Session expired. Please sign in again.");
         setError("Session expired. Please sign in again.");
@@ -740,7 +684,7 @@ export default function HomePage() {
       const msg = err instanceof Error ? err.message : "Failed to load run detail";
       setError(msg);
     });
-  }, [canViewDashboard, clearSession, token, selectedRunId, refreshRunDetails]);
+  }, [canViewDashboard, clearSession, selectedRunId, refreshRunDetails]);
 
   useEffect(() => {
     if (!canViewDashboard || !selectedRun?.bot_instance_id) return;
@@ -782,7 +726,7 @@ export default function HomePage() {
         navItems={navItems}
         auth={{
           email: me.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-          hasToken: Boolean(token),
+          hasToken: Boolean(me),
         }}
       >
         <section className={sectionCardClasses}>
@@ -802,7 +746,7 @@ export default function HomePage() {
       navItems={navItems}
       auth={{
         email: me?.email || (typeof window !== "undefined" ? getStoredAdminEmail() : ""),
-        hasToken: Boolean(token),
+        hasToken: Boolean(me),
       }}
     >
       <div className="grid gap-4">
@@ -813,7 +757,7 @@ export default function HomePage() {
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Monitor strategy performance, quality checks, and execution reports in real-time.</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {token ? (
+              {me ? (
                 <>
                   <button
                     onClick={handleRefreshRuns}
@@ -1391,7 +1335,7 @@ export default function HomePage() {
                                   <button
                                     type="button"
                                     className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                                    disabled={!token || downloadingFileId === file.id}
+                                    disabled={!me || downloadingFileId === file.id}
                                     onClick={() => downloadArtifactFile(file.download_url, file.name, file.id)}
                                   >
                                     {downloadingFileId === file.id ? "Downloading..." : "Download"}

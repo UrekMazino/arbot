@@ -1,9 +1,3 @@
-export type TokenPair = {
-  access_token: string;
-  token_type: string;
-  refresh_token: string;
-};
-
 export type MessageResponse = {
   message: string;
 };
@@ -210,7 +204,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/
 async function apiRequest<T>(
   path: string,
   options: RequestInit,
-  token?: string,
+  retry = false,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -219,17 +213,28 @@ async function apiRequest<T>(
     Object.assign(headers, options.headers as Record<string, string>);
   }
 
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
     cache: "no-store",
+    credentials: "include",
   });
 
   if (!response.ok) {
+    if (
+      response.status === 401 &&
+      !retry &&
+      !path.startsWith("/auth/login") &&
+      !path.startsWith("/auth/refresh")
+    ) {
+      try {
+        await refreshSession();
+        return apiRequest<T>(path, options, true);
+      } catch {
+        // ignore refresh failure and return original error
+      }
+    }
+
     const text = await response.text();
     let message = text;
     try {
@@ -253,11 +258,19 @@ async function apiRequest<T>(
   return (await response.json()) as T;
 }
 
-export async function login(email: string, password: string): Promise<TokenPair> {
-  return apiRequest<TokenPair>("/auth/login", {
+export async function login(email: string, password: string, rememberMe = true): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, remember_me: rememberMe }),
   });
+}
+
+export async function refreshSession(): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/refresh", { method: "POST" });
+}
+
+export async function logout(): Promise<MessageResponse> {
+  return apiRequest<MessageResponse>("/auth/logout", { method: "POST" });
 }
 
 export async function forgotPassword(email: string): Promise<ForgotPasswordResponse> {
@@ -274,76 +287,75 @@ export async function resetPassword(resetToken: string, password: string): Promi
   });
 }
 
-export async function getMe(token: string): Promise<UserRecord> {
-  return apiRequest<UserRecord>("/auth/me", { method: "GET" }, token);
+export async function getMe(): Promise<UserRecord> {
+  return apiRequest<UserRecord>("/auth/me", { method: "GET" });
 }
 
-export async function getRuns(token: string): Promise<RunSummary[]> {
-  return apiRequest<RunSummary[]>("/runs?limit=100", { method: "GET" }, token);
+export async function getRuns(): Promise<RunSummary[]> {
+  return apiRequest<RunSummary[]>("/runs?limit=100", { method: "GET" });
 }
 
-export async function getRunEvents(token: string, runId: string): Promise<RunEvent[]> {
-  return apiRequest<RunEvent[]>(`/runs/${runId}/events?limit=200`, { method: "GET" }, token);
+export async function getRunEvents(runId: string): Promise<RunEvent[]> {
+  return apiRequest<RunEvent[]>(`/runs/${runId}/events?limit=200`, { method: "GET" });
 }
 
-export async function getRunTrades(token: string, runId: string): Promise<Trade[]> {
-  return apiRequest<Trade[]>(`/runs/${runId}/trades?limit=300`, { method: "GET" }, token);
+export async function getRunTrades(runId: string): Promise<Trade[]> {
+  return apiRequest<Trade[]>(`/runs/${runId}/trades?limit=300`, { method: "GET" });
 }
 
-export async function getRunWalkForward(token: string, runId: string): Promise<WalkForwardPoint[]> {
-  return apiRequest<WalkForwardPoint[]>(`/runs/${runId}/analytics/walk-forward`, { method: "GET" }, token);
+export async function getRunWalkForward(runId: string): Promise<WalkForwardPoint[]> {
+  return apiRequest<WalkForwardPoint[]>(`/runs/${runId}/analytics/walk-forward`, { method: "GET" });
 }
 
-export async function getRunScorecard(token: string, runId: string): Promise<ScorecardCell[]> {
-  return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" }, token);
+export async function getRunScorecard(runId: string): Promise<ScorecardCell[]> {
+  return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" });
 }
 
-export async function getRunDataQuality(token: string, runId: string): Promise<DataQualitySummary> {
-  return apiRequest<DataQualitySummary>(`/runs/${runId}/analytics/data-quality`, { method: "GET" }, token);
+export async function getRunDataQuality(runId: string): Promise<DataQualitySummary> {
+  return apiRequest<DataQualitySummary>(`/runs/${runId}/analytics/data-quality`, { method: "GET" });
 }
 
-export async function getRunConfigSnapshot(token: string, runId: string): Promise<ConfigSnapshotResponse> {
-  return apiRequest<ConfigSnapshotResponse>(`/runs/${runId}/config-snapshot`, { method: "GET" }, token);
+export async function getRunConfigSnapshot(runId: string): Promise<ConfigSnapshotResponse> {
+  return apiRequest<ConfigSnapshotResponse>(`/runs/${runId}/config-snapshot`, { method: "GET" });
 }
 
-export async function getRunReportArtifacts(token: string, runId: string): Promise<RunReportArtifact[]> {
-  return apiRequest<RunReportArtifact[]>(`/runs/${runId}/report-artifacts?limit=10`, { method: "GET" }, token);
+export async function getRunReportArtifacts(runId: string): Promise<RunReportArtifact[]> {
+  return apiRequest<RunReportArtifact[]>(`/runs/${runId}/report-artifacts?limit=10`, { method: "GET" });
 }
 
-export async function getAdminBotStatus(token: string): Promise<AdminBotStatus> {
-  return apiRequest<AdminBotStatus>("/admin/bot/status", { method: "GET" }, token);
+export async function getAdminBotStatus(): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/status", { method: "GET" });
 }
 
-export async function startAdminBot(token: string): Promise<AdminBotStatus> {
-  return apiRequest<AdminBotStatus>("/admin/bot/start", { method: "POST", body: JSON.stringify({}) }, token);
+export async function startAdminBot(): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/start", { method: "POST", body: JSON.stringify({}) });
 }
 
-export async function stopAdminBot(token: string): Promise<AdminBotStatus> {
-  return apiRequest<AdminBotStatus>("/admin/bot/stop", { method: "POST", body: JSON.stringify({}) }, token);
+export async function stopAdminBot(): Promise<AdminBotStatus> {
+  return apiRequest<AdminBotStatus>("/admin/bot/stop", { method: "POST", body: JSON.stringify({}) });
 }
 
 export async function getAdminBotLogTail(
-  token: string,
   runKey: string,
   lines = 300,
 ): Promise<AdminLogTail> {
   const key = encodeURIComponent(runKey || "latest");
-  return apiRequest<AdminLogTail>(`/admin/bot/logs/tail?run_key=${key}&lines=${lines}`, { method: "GET" }, token);
+  return apiRequest<AdminLogTail>(`/admin/bot/logs/tail?run_key=${key}&lines=${lines}`, { method: "GET" });
 }
 
-export async function getAdminLogRuns(token: string, limit = 100): Promise<AdminLogRun[]> {
-  return apiRequest<AdminLogRun[]>(`/admin/logs/runs?limit=${limit}`, { method: "GET" }, token);
+export async function getAdminLogRuns(limit = 100): Promise<AdminLogRun[]> {
+  return apiRequest<AdminLogRun[]>(`/admin/logs/runs?limit=${limit}`, { method: "GET" });
 }
 
-export async function getAdminReportRuns(token: string, limit = 100): Promise<AdminReportRun[]> {
-  return apiRequest<AdminReportRun[]>(`/admin/reports/runs?limit=${limit}`, { method: "GET" }, token);
+export async function getAdminReportRuns(limit = 100): Promise<AdminReportRun[]> {
+  return apiRequest<AdminReportRun[]>(`/admin/reports/runs?limit=${limit}`, { method: "GET" });
 }
 
-export async function getAdminEnvSettings(token: string): Promise<AdminEnvSettings> {
-  return apiRequest<AdminEnvSettings>("/admin/settings/env", { method: "GET" }, token);
+export async function getAdminEnvSettings(): Promise<AdminEnvSettings> {
+  return apiRequest<AdminEnvSettings>("/admin/settings/env", { method: "GET" });
 }
 
-export async function updateAdminEnvSetting(token: string, key: string, value: string): Promise<AdminEnvSettings> {
+export async function updateAdminEnvSetting(key: string, value: string): Promise<AdminEnvSettings> {
   const encodedKey = encodeURIComponent(key);
   const res = await apiRequest<{ values: Record<string, string> }>(
     `/admin/settings/env/${encodedKey}`,
@@ -351,21 +363,19 @@ export async function updateAdminEnvSetting(token: string, key: string, value: s
       method: "PUT",
       body: JSON.stringify({ value }),
     },
-    token,
   );
   return { path: "Execution/.env", values: res.values || {} };
 }
 
-export async function listUsers(token: string): Promise<UserRecord[]> {
-  return apiRequest<UserRecord[]>("/users", { method: "GET" }, token);
+export async function listUsers(): Promise<UserRecord[]> {
+  return apiRequest<UserRecord[]>("/users", { method: "GET" });
 }
 
-export async function listRoles(token: string): Promise<RoleRecord[]> {
-  return apiRequest<RoleRecord[]>("/users/roles", { method: "GET" }, token);
+export async function listRoles(): Promise<RoleRecord[]> {
+  return apiRequest<RoleRecord[]>("/users/roles", { method: "GET" });
 }
 
 export async function createUser(
-  token: string,
   body: { email: string; password: string; is_active?: boolean },
 ): Promise<UserRecord> {
   return apiRequest<UserRecord>(
@@ -378,32 +388,29 @@ export async function createUser(
         is_active: body.is_active ?? true,
       }),
     },
-    token,
   );
 }
 
-export async function assignUserRole(token: string, userId: string, role: string): Promise<{ message: string }> {
+export async function assignUserRole(userId: string, role: string): Promise<{ message: string }> {
   const encodedUser = encodeURIComponent(userId);
   return apiRequest<{ message: string }>(
     `/users/${encodedUser}/roles`,
     { method: "POST", body: JSON.stringify({ role }) },
-    token,
   );
 }
 
-export async function removeUserRole(token: string, userId: string, role: string): Promise<{ message: string }> {
+export async function removeUserRole(userId: string, role: string): Promise<{ message: string }> {
   const encodedUser = encodeURIComponent(userId);
   const encodedRole = encodeURIComponent(role);
-  return apiRequest<{ message: string }>(`/users/${encodedUser}/roles/${encodedRole}`, { method: "DELETE" }, token);
+  return apiRequest<{ message: string }>(`/users/${encodedUser}/roles/${encodedRole}`, { method: "DELETE" });
 }
 
-export async function deleteUser(token: string, userId: string): Promise<{ message: string }> {
+export async function deleteUser(userId: string): Promise<{ message: string }> {
   const encodedUser = encodeURIComponent(userId);
-  return apiRequest<{ message: string }>(`/users/${encodedUser}`, { method: "DELETE" }, token);
+  return apiRequest<{ message: string }>(`/users/${encodedUser}`, { method: "DELETE" });
 }
 
 export async function updateUserPermissions(
-  token: string,
   userId: string,
   permissions: string[],
 ): Promise<UserRecord> {
@@ -414,12 +421,10 @@ export async function updateUserPermissions(
       method: "PUT",
       body: JSON.stringify({ permissions }),
     },
-    token,
   );
 }
 
 export async function createRole(
-  token: string,
   body: { name: string; description?: string; permissions?: string[] },
 ): Promise<RoleRecord> {
   return apiRequest<RoleRecord>(
@@ -432,12 +437,10 @@ export async function createRole(
         permissions: body.permissions || [],
       }),
     },
-    token,
   );
 }
 
 export async function updateRole(
-  token: string,
   roleId: string,
   body: { name?: string; description?: string; permissions?: string[] },
 ): Promise<RoleRecord> {
@@ -448,13 +451,12 @@ export async function updateRole(
       method: "PUT",
       body: JSON.stringify(body),
     },
-    token,
   );
 }
 
-export async function deleteRole(token: string, roleId: string): Promise<{ message: string }> {
+export async function deleteRole(roleId: string): Promise<{ message: string }> {
   const encodedRoleId = encodeURIComponent(roleId);
-  return apiRequest<{ message: string }>(`/users/roles/${encodedRoleId}`, { method: "DELETE" }, token);
+  return apiRequest<{ message: string }>(`/users/roles/${encodedRoleId}`, { method: "DELETE" });
 }
 
 export function apiBaseUrl(): string {

@@ -86,3 +86,4 @@ node_modules/
 Platform/web/.env.local
 !Platform/web/lib/
 !Platform/web/lib/**
+Platform/web/next-env.d.ts

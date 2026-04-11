@@ -81,7 +81,10 @@ export function canAccessAdminPath(user: UserRecord | null | undefined, href: st
 
 export function getAdminNavItems(user: UserRecord | null | undefined): Omit<AdminNavItem, "requiredPermissions">[] {
   return ADMIN_NAV_ITEMS.filter((item) => hasAnyPermission(user, item.requiredPermissions)).map(
-    ({ requiredPermissions: _requiredPermissions, ...item }) => item,
+    ({ requiredPermissions, ...item }) => {
+      void requiredPermissions;
+      return item;
+    },
   );
 }
 

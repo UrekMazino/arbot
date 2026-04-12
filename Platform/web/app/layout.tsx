@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Fraunces } from "next/font/google";
 import { AuthRouteGuard } from "../components/auth-route-guard";
+import { FloatingTerminalProvider } from "../context/floating-terminal-context";
 import "./globals.css";
 
 const bodyFont = Space_Grotesk({
@@ -24,7 +25,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${bodyFont.variable} ${titleFont.variable}`}>
-        <AuthRouteGuard>{children}</AuthRouteGuard>
+        <FloatingTerminalProvider>
+          <AuthRouteGuard>{children}</AuthRouteGuard>
+        </FloatingTerminalProvider>
       </body>
     </html>
   );

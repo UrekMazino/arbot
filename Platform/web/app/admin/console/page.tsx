@@ -27,6 +27,7 @@ import {
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
+import { useFloatingTerminal } from "../../../context/floating-terminal-context";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
@@ -51,6 +52,7 @@ function fmtUnix(value: number | null | undefined): string {
 
 export default function AdminConsolePage() {
   const router = useRouter();
+  const { isFloating, setFloating } = useFloatingTerminal();
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
@@ -65,7 +67,6 @@ export default function AdminConsolePage() {
   const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
   const [busy, setBusy] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
-  const [terminalPosition, setTerminalPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
@@ -81,10 +82,11 @@ export default function AdminConsolePage() {
     setLogRuns([]);
     setReportRuns([]);
     setLogTail(null);
+    setFloating(false);
     if (redirectToLogin) {
       router.replace("/login?next=/admin/console");
     }
-  }, [router]);
+  }, [router, setFloating]);
 
   const reportFileCount = useMemo(
     () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
@@ -373,27 +375,6 @@ export default function AdminConsolePage() {
         : "border-b-2 border-transparent text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-300"
     }`;
 
-  const handleTerminalDragStart = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
-    setIsDragging(true);
-    setDragOffset({
-      x: e.clientX - terminalPosition.x,
-      y: e.clientY - terminalPosition.y,
-    });
-  };
-
-  const handleTerminalDragMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setTerminalPosition({
-      x: e.clientX - dragOffset.x,
-      y: e.clientY - dragOffset.y,
-    });
-  };
-
-  const handleTerminalDragEnd = () => {
-    setIsDragging(false);
-  };
-
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -476,12 +457,20 @@ export default function AdminConsolePage() {
               <PanelCard
                 title="Terminal"
                 actions={
-                  <button
-                    onClick={() => setTerminalFullscreen(true)}
-                    className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-                  >
-                    ⛶ Fullscreen
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setFloating(!isFloating)}
+                      className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                    >
+                      {isFloating ? "⬜ Dock" : "⬛ Float"}
+                    </button>
+                    <button
+                      onClick={() => setTerminalFullscreen(true)}
+                      className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                    >
+                      ⛶ Fullscreen
+                    </button>
+                  </div>
                 }
               >
                 {waitingForRun ? (
@@ -563,24 +552,18 @@ export default function AdminConsolePage() {
               </PanelCard>
             </section>
 
-            {/* Fullscreen Terminal Modal */}
+            {/* Fullscreen Terminal Modal - simplified without drag */}
             {terminalFullscreen ? (
           <div
             className="fixed inset-0 z-50 flex flex-col bg-gray-900"
-            onMouseMove={handleTerminalDragMove}
-            onMouseUp={handleTerminalDragEnd}
-            onMouseLeave={handleTerminalDragEnd}
           >
             <div
-              className="flex items-center justify-between border-b border-gray-700 bg-gray-800 px-4 py-3 cursor-move"
-              onMouseDown={handleTerminalDragStart}
-              data-no-drag="false"
+              className="flex items-center justify-between border-b border-gray-700 bg-gray-800 px-4 py-3"
             >
               <h3 className="text-lg font-semibold text-white">Terminal</h3>
               <button
                 onClick={() => setTerminalFullscreen(false)}
                 className="rounded px-3 py-1 text-sm font-medium text-gray-300 hover:bg-gray-700"
-                data-no-drag="true"
               >
                 Exit Fullscreen
               </button>

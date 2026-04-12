@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { getMe } from "../lib/api";
 import { clearStoredAdminSession } from "../lib/auth";
+import { FloatingTerminal } from "./floating-terminal";
 
 const PUBLIC_PATHS = new Set<string>(["/login", "/reset-password"]);
 
@@ -70,5 +71,10 @@ export function AuthRouteGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <FloatingTerminal />
+    </>
+  );
 }

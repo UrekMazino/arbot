@@ -28,7 +28,7 @@ import {
 import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
-import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../components/panels";
+import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";
@@ -68,6 +68,8 @@ export default function AdminConsolePage() {
   const [terminalPosition, setTerminalPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [waitingForRun, setWaitingForRun] = useState(false);
+  const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -110,20 +112,38 @@ export default function AdminConsolePage() {
       const canLoadStatus = hasPermission(meData, "manage_bot") || hasPermission(meData, "view_logs");
       const canLoadLogs = hasPermission(meData, "view_logs");
       const canLoadReports = hasPermission(meData, "view_reports");
-      const [statusData, logsData, reportsData, logTailData] = await Promise.all([
+
+      // First load status and log runs to determine which run to load
+      const [statusData, logsData, reportsData] = await Promise.all([
         canLoadStatus ? getAdminBotStatus() : Promise.resolve(null),
         canLoadLogs ? getAdminLogRuns() : Promise.resolve([] as AdminLogRun[]),
         canLoadReports ? getAdminReportRuns() : Promise.resolve([] as AdminReportRun[]),
-        canLoadLogs ? getAdminBotLogTail("latest", 320) : Promise.resolve(null),
       ]);
+
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
-      setLogTail(logTailData);
-      if (logTailData?.run_key && logTailData.run_key !== "__control__") {
-        setSelectedRunKey(logTailData.run_key);
-      } else {
-        setSelectedRunKey("latest");
+
+      // Determine which run key to load:
+      // 1. If bot is running, use the latest_run_key from status
+      // 2. Otherwise use the first log run (latest)
+      // 3. If no runs, show control log
+      let runKeyToLoad = "latest";
+      if (statusData?.running && statusData?.latest_run_key) {
+        runKeyToLoad = statusData.latest_run_key;
+      } else if (logsData.length > 0) {
+        runKeyToLoad = logsData[0].run_key;
+      }
+
+      // Load the log tail for the determined run key
+      if (canLoadLogs) {
+        const logTailData = await getAdminBotLogTail(runKeyToLoad, 320);
+        setLogTail(logTailData);
+        if (logTailData?.run_key && logTailData.run_key !== "__control__") {
+          setSelectedRunKey(logTailData.run_key);
+        } else {
+          setSelectedRunKey(runKeyToLoad);
+        }
       }
     },
     [],
@@ -137,14 +157,60 @@ export default function AdminConsolePage() {
       }
       const next = await getAdminBotLogTail(runKey || "latest", 320);
       setLogTail(next);
+
+      // Check if a new run was created (when waiting for run)
+      if (waitingForRun && next?.run_key && next.run_key !== "__control__") {
+        const newRunKey = next.run_key;
+        // If we have a last known run key and it's different, a new run was created
+        if (lastKnownRunKey && newRunKey !== lastKnownRunKey) {
+          setWaitingForRun(false);
+          setLastKnownRunKey(null);
+          setSelectedRunKey(newRunKey);
+        } else if (!lastKnownRunKey) {
+          // No previous run key, so this is a new run
+          setWaitingForRun(false);
+          setLastKnownRunKey(null);
+          setSelectedRunKey(newRunKey);
+        }
+      }
+
       if (runKey === "latest" && next?.run_key && next.run_key !== "__control__") {
         setSelectedRunKey(next.run_key);
       } else if (runKey === "latest") {
         setSelectedRunKey("latest");
       }
     },
-    [canViewLogs],
+    [canViewLogs, waitingForRun, lastKnownRunKey],
   );
+
+  // Effect to poll for new run when bot is starting
+  useEffect(() => {
+    if (!waitingForRun || !canViewLogs || !lastKnownRunKey) return;
+
+    const timer = window.setInterval(async () => {
+      // Fetch the log runs to check if a new one exists
+      const runs = await getAdminLogRuns();
+      setLogRuns(runs);
+
+      // Check if there's a new run that's different from what we had
+      if (runs.length > 0) {
+        const latestRunKey = runs[0]?.run_key;
+        if (latestRunKey && latestRunKey !== lastKnownRunKey && latestRunKey !== "__control__") {
+          // New run detected! Fetch its log tail
+          const tail = await getAdminBotLogTail(latestRunKey, 320);
+          setLogTail(tail);
+          // Also update the bot status to get latest_run_key updated
+          const statusData = await getAdminBotStatus();
+          setBotStatus(statusData);
+          setSelectedRunKey(latestRunKey);
+          setWaitingForRun(false);
+          setLastKnownRunKey(null);
+        }
+      }
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [waitingForRun, canViewLogs, lastKnownRunKey]);
 
   useEffect(() => {
     const storedEmail = getStoredAdminEmail();
@@ -221,10 +287,14 @@ export default function AdminConsolePage() {
     setBusy(true);
     setError("");
     try {
+      // Record current latest run key before starting
+      setLastKnownRunKey(botStatus?.latest_run_key || null);
+      setWaitingForRun(true);
       const next = await startAdminBot();
       setBotStatus(next);
       setStatus("Bot start requested");
     } catch (err) {
+      setWaitingForRun(false);
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
         setError("Session expired. Please sign in again.");
@@ -376,16 +446,6 @@ export default function AdminConsolePage() {
               <button onClick={handleRefreshAll} disabled={busy} className={primaryButtonClasses}>
                 Refresh
               </button>
-              {canManageBot ? (
-                <>
-                  <button onClick={handleStart} disabled={busy || Boolean(botStatus?.running)} className={primaryButtonClasses}>
-                    Start Bot
-                  </button>
-                  <button className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700" onClick={handleStop} disabled={busy || !botStatus?.running}>
-                    Stop Bot
-                  </button>
-                </>
-              ) : null}
             </div>
           </div>
         </section>
@@ -410,52 +470,101 @@ export default function AdminConsolePage() {
 
         {activeTab === "control" && (
           <>
-            <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <MetricCard
-                label="Bot Runtime"
-                value={botStatus?.running ? "RUNNING" : "STOPPED"}
-                hint={botStatus?.pid ? `PID ${botStatus.pid}` : "process not active"}
-                tone={botStatus?.running ? "teal" : "rose"}
-              />
-              <MetricCard
-                label="Latest Run Key"
-                value={showingControlLog ? "CONTROL LOG" : botStatus?.latest_run_key || "n/a"}
-                hint={showingControlLog ? "Startup / Control Output" : `selected ${selectedRunKey}`}
-                tone="sky"
-              />
+            {/* Terminal and Bot Control side by side */}
+            <section className="grid gap-2 lg:grid-cols-2">
+              {/* Terminal - Left side */}
+              <PanelCard
+                title="Terminal"
+                actions={
+                  <button
+                    onClick={() => setTerminalFullscreen(true)}
+                    className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                  >
+                    ⛶ Fullscreen
+                  </button>
+                }
+              >
+                {waitingForRun ? (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+                    Waiting for new run to start...
+                  </p>
+                ) : showingControlLog ? (
+                  <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                    Showing current startup/control output until a fresh run log is created.
+                  </p>
+                ) : null}
+                <pre className="custom-scrollbar mt-2 h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
+                  {(logTail?.lines || []).join("\n") || "No log lines yet."}
+                </pre>
+              </PanelCard>
+
+              {/* Bot Control - Right side */}
+              <PanelCard
+                title="Bot Control"
+                subtitle="Process status and run context."
+                actions={
+                  canManageBot ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleStart}
+                        disabled={busy || Boolean(botStatus?.running)}
+                        className={primaryButtonClasses}
+                      >
+                        Start Bot
+                      </button>
+                      <button
+                        className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+                        onClick={handleStop}
+                        disabled={busy || !botStatus?.running}
+                      >
+                        Stop Bot
+                      </button>
+                    </div>
+                  ) : null
+                }
+              >
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
+                    <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
+                  </div>
+                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">PID</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.pid || "n/a"}</p>
+                  </div>
+                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
+                    <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
+                  </div>
+                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Detail</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.detail || "n/a"}</p>
+                  </div>
+                  <div className="pt-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
+                    <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
+                  </div>
+                  <div className="pt-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
+                    <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Select Run</p>
+                    <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
+                      <option value="latest">latest</option>
+                      {logRuns.map((row) => (
+                        <option key={row.run_key} value={row.run_key}>
+                          {row.run_key}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </PanelCard>
             </section>
 
-            <section className="grid gap-2">
-            <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
-            <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
-          </div>
-          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">PID</p>
-            <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.pid || "n/a"}</p>
-          </div>
-          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
-            <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
-          </div>
-          <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Detail</p>
-            <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.detail || "n/a"}</p>
-          </div>
-          <div className="pt-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
-            <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
-          </div>
-          <div className="pt-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
-            <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
-          </div>
-          </div>
-        </PanelCard>
-
-        {terminalFullscreen ? (
+            {/* Fullscreen Terminal Modal */}
+            {terminalFullscreen ? (
           <div
             className="fixed inset-0 z-50 flex flex-col bg-gray-900"
             onMouseMove={handleTerminalDragMove}
@@ -467,7 +576,7 @@ export default function AdminConsolePage() {
               onMouseDown={handleTerminalDragStart}
               data-no-drag="false"
             >
-              <h3 className="text-lg font-semibold text-white">Live Terminal</h3>
+              <h3 className="text-lg font-semibold text-white">Terminal</h3>
               <button
                 onClick={() => setTerminalFullscreen(false)}
                 className="rounded px-3 py-1 text-sm font-medium text-gray-300 hover:bg-gray-700"
@@ -477,17 +586,11 @@ export default function AdminConsolePage() {
               </button>
             </div>
             <div className="flex flex-1 flex-col overflow-hidden p-4">
-              <div className="mb-3 flex items-center justify-between gap-2" data-no-drag="true">
-                <select className="min-w-[180px] rounded border border-gray-600 bg-gray-700 px-2 py-1 text-sm text-white" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
-                  <option value="latest">latest</option>
-                  {logRuns.map((row) => (
-                    <option key={row.run_key} value={row.run_key}>
-                      {row.run_key}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {showingControlLog ? (
+              {waitingForRun ? (
+                <p className="mb-2 text-xs text-amber-400">
+                  Waiting for new run to start...
+                </p>
+              ) : showingControlLog ? (
                 <p className="mb-2 text-xs text-gray-400">
                   Showing current startup/control output until a fresh run log is created.
                 </p>
@@ -498,34 +601,7 @@ export default function AdminConsolePage() {
             </div>
           </div>
         ) : null}
-        <PanelCard title="Live Terminal" className="grid min-h-[560px] grid-rows-[auto_1fr]">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <select className="min-w-[180px]" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
-              <option value="latest">latest</option>
-              {logRuns.map((row) => (
-                <option key={row.run_key} value={row.run_key}>
-                  {row.run_key}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => setTerminalFullscreen(true)}
-              className="rounded border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
-            >
-              ⛶ Fullscreen
-            </button>
-          </div>
-          {showingControlLog ? (
-            <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-              Showing current startup/control output until a fresh run log is created.
-            </p>
-          ) : null}
-          <pre className="custom-scrollbar mt-1 max-h-[620px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
-            {(logTail?.lines || []).join("\n") || "No log lines yet."}
-          </pre>
-        </PanelCard>
-        </section>
-          </>
+        </>
         )}
 
         {activeTab === "logs" && (

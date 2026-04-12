@@ -56,10 +56,9 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
 
   return (
     <aside
-      className={`app-shell-shift fixed top-0 left-0 z-40 h-screen border-r border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900 ${widthClass} ${
-        // Mobile: hide when closed, Desktop: always visible (expand/collapse just changes width)
-        isMobileOpen ? "translate-x-0" : "translate-x-0"
-      }`}
+      className={`app-shell-shift fixed top-0 left-0 z-40 h-screen border-r border-gray-200 bg-white transition-transform duration-300 dark:border-gray-800 dark:bg-gray-900 ${
+        isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      } ${widthClass}`}
     >
       <div
         className={`flex items-center border-b border-gray-200 px-4 py-6 dark:border-gray-800 ${
@@ -70,7 +69,7 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-500 text-xs font-bold text-white">
             OS
           </span>
-          {showLabel ? <span className="text-base font-semibold text-gray-800 dark:text-white/90">OKX StatBot</span> : null}
+          {showLabel ? <span className="text-base font-semibold text-gray-800 dark:text-white/90">Project Y</span> : null}
         </Link>
       </div>
 

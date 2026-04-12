@@ -16,8 +16,8 @@ const titleFont = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "OKXStatBot V2 Console",
-  description: "Realtime monitoring and run analytics for OKXStatBot.",
+  title: "Project Y",
+  description: "Realtime monitoring and run analytics for Project Y.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

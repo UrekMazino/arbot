@@ -52,7 +52,7 @@ function fmtUnix(value: number | null | undefined): string {
 
 export default function AdminConsolePage() {
   const router = useRouter();
-  const { isFloating, setFloating } = useFloatingTerminal();
+  const { isFloating, setFloating, logTail: sharedLogTail, setLogTail: setSharedLogTail } = useFloatingTerminal();
   const [status, setStatus] = useState("Signed out");
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
@@ -64,7 +64,7 @@ export default function AdminConsolePage() {
   const [logRuns, setLogRuns] = useState<AdminLogRun[]>([]);
   const [reportRuns, setReportRuns] = useState<AdminReportRun[]>([]);
   const [selectedRunKey, setSelectedRunKey] = useState("latest");
-  const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
+  const [localLogTail, setLocalLogTail] = useState<AdminLogTail | null>(null);
   const [busy, setBusy] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -81,7 +81,8 @@ export default function AdminConsolePage() {
     setBotStatus(null);
     setLogRuns([]);
     setReportRuns([]);
-    setLogTail(null);
+    setLocalLogTail(null);
+    if (isFloating) setSharedLogTail(null);
     setFloating(false);
     if (redirectToLogin) {
       router.replace("/login?next=/admin/console");
@@ -97,7 +98,9 @@ export default function AdminConsolePage() {
   const canViewLogs = hasPermission(me, "view_logs");
   const canManageBot = hasPermission(me, "manage_bot");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
-  const showingControlLog = logTail?.run_key === "__control__";
+  // Use shared logTail from context when floating, otherwise use local state
+  const displayLogTail = isFloating ? sharedLogTail : localLogTail;
+  const showingControlLog = displayLogTail?.run_key === "__control__";
 
   const loadAdminData = useCallback(async () => {
       const meData = await getMe();
@@ -107,7 +110,7 @@ export default function AdminConsolePage() {
         setBotStatus(null);
         setLogRuns([]);
         setReportRuns([]);
-        setLogTail(null);
+        setLocalLogTail(null);
         return;
       }
 
@@ -139,10 +142,10 @@ export default function AdminConsolePage() {
 
       // Load the log tail for the determined run key
       if (canLoadLogs) {
-        const logTailData = await getAdminBotLogTail(runKeyToLoad, 320);
-        setLogTail(logTailData);
-        if (logTailData?.run_key && logTailData.run_key !== "__control__") {
-          setSelectedRunKey(logTailData.run_key);
+        const displayLogTailData = await getAdminBotLogTail(runKeyToLoad, 320);
+        setLocalLogTail(displayLogTailData);
+        if (displayLogTailData?.run_key && displayLogTailData.run_key !== "__control__") {
+          setSelectedRunKey(displayLogTailData.run_key);
         } else {
           setSelectedRunKey(runKeyToLoad);
         }
@@ -154,11 +157,14 @@ export default function AdminConsolePage() {
   const refreshLogTail = useCallback(
     async (runKey: string) => {
       if (!canViewLogs) {
-        setLogTail(null);
+        setLocalLogTail(null);
+        if (isFloating) setSharedLogTail(null);
         return;
       }
       const next = await getAdminBotLogTail(runKey || "latest", 320);
-      setLogTail(next);
+      setLocalLogTail(next);
+      // Also update shared context when floating
+      if (isFloating) setSharedLogTail(next);
 
       // Check if a new run was created (when waiting for run)
       if (waitingForRun && next?.run_key && next.run_key !== "__control__") {
@@ -200,7 +206,7 @@ export default function AdminConsolePage() {
         if (latestRunKey && latestRunKey !== lastKnownRunKey && latestRunKey !== "__control__") {
           // New run detected! Fetch its log tail
           const tail = await getAdminBotLogTail(latestRunKey, 320);
-          setLogTail(tail);
+          setLocalLogTail(tail);
           // Also update the bot status to get latest_run_key updated
           const statusData = await getAdminBotStatus();
           setBotStatus(statusData);
@@ -259,7 +265,7 @@ export default function AdminConsolePage() {
     setBotStatus(null);
     setLogRuns([]);
     setReportRuns([]);
-    setLogTail(null);
+    setLocalLogTail(null);
     if (fallbackHref && fallbackHref !== "/admin/console") {
       setStatus("Redirecting");
       setError("Console access is not enabled for your account.");
@@ -268,7 +274,8 @@ export default function AdminConsolePage() {
   }, [canViewConsole, fallbackHref, me, profileResolved, router]);
 
   useEffect(() => {
-    if (!canViewConsole || !canViewLogs) return;
+    // Only poll when floating terminal is NOT active (floating terminal handles its own polling)
+    if (!canViewConsole || !canViewLogs || isFloating) return;
     const timer = window.setInterval(() => {
       refreshLogTail(selectedRunKey || "latest").catch((err: unknown) => {
         if (isUnauthorizedError(err)) {
@@ -282,7 +289,7 @@ export default function AdminConsolePage() {
       });
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [canViewConsole, canViewLogs, clearAdminSession, selectedRunKey, refreshLogTail]);
+  }, [canViewConsole, canViewLogs, clearAdminSession, selectedRunKey, refreshLogTail, isFloating]);
 
   async function handleStart() {
     if (!me || !canManageBot) return;
@@ -483,7 +490,7 @@ export default function AdminConsolePage() {
                   </p>
                 ) : null}
                 <pre className="custom-scrollbar mt-2 h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
-                  {(logTail?.lines || []).join("\n") || "No log lines yet."}
+                  {(displayLogTail?.lines || []).join("\n") || "No log lines yet."}
                 </pre>
               </PanelCard>
 
@@ -579,7 +586,7 @@ export default function AdminConsolePage() {
                 </p>
               ) : null}
               <pre className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
-                {(logTail?.lines || []).join("\n") || "No log lines yet."}
+                {(displayLogTail?.lines || []).join("\n") || "No log lines yet."}
               </pre>
             </div>
           </div>

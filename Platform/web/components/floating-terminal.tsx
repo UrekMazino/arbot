@@ -2,12 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFloatingTerminal } from "../context/floating-terminal-context";
-import { getAdminBotLogTail, getAdminBotStatus, getAdminLogRuns, AdminLogTail, AdminBotStatus } from "../lib/api";
+import { getAdminBotLogTail, getAdminBotStatus, getAdminLogRuns, AdminBotStatus } from "../lib/api";
 
 export function FloatingTerminal() {
-  const { isFloating, position, size, selectedRunKey, setFloating, setPosition, setSize, setSelectedRunKey } = useFloatingTerminal();
+  const { isFloating, position, size, selectedRunKey, logTail, setFloating, setPosition, setSize, setSelectedRunKey, setLogTail } = useFloatingTerminal();
 
-  const [logTail, setLogTail] = useState<AdminLogTail | null>(null);
   const [logRuns, setLogRuns] = useState<{ run_key: string }[]>([]);
 
   // Use refs for drag state to avoid stale closures
@@ -36,7 +35,7 @@ export function FloatingTerminal() {
     } catch (err) {
       console.error("Failed to load log tail:", err);
     }
-  }, [setSelectedRunKey]);
+  }, [setSelectedRunKey, setLogTail]);
 
   // Determine which run key to load (same logic as console page)
   const getInitialRunKey = (status: AdminBotStatus | null, runs: { run_key: string }[]): string => {

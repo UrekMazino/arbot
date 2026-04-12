@@ -536,29 +536,35 @@ export default function UserManagementPage() {
     >
       <div className="grid gap-4">
         <section className={sectionCardClasses}>
-          <div className="border-b border-gray-200 dark:border-gray-700">
-            <div className="flex gap-8">
-              {canManageUsers ? (
-                <button
-                  onClick={() => setActiveTab("users")}
-                  className={tabButtonClass(activeTab === "users")}
-                >
-                  Users
-                </button>
-              ) : null}
-              {canManageRoles ? (
-                <button
-                  onClick={() => setActiveTab("roles")}
-                  className={tabButtonClass(activeTab === "roles")}
-                >
-                  Roles
-                </button>
-                ) : null}
-            </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Access</p>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
           </div>
+        </section>
 
-          {error ? <p className="mt-4 text-sm text-error-600 dark:text-error-400">{error}</p> : null}
+        {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
+        {/* Tabs */}
+        <div className="flex flex-wrap gap-8 border-b border-gray-200 dark:border-gray-700">
+            {canManageUsers ? (
+              <button
+                onClick={() => setActiveTab("users")}
+                className={tabButtonClass(activeTab === "users")}
+              >
+                Users
+              </button>
+            ) : null}
+            {canManageRoles ? (
+              <button
+                onClick={() => setActiveTab("roles")}
+                className={tabButtonClass(activeTab === "roles")}
+              >
+                Roles
+              </button>
+              ) : null}
+        </div>
+
+        <section className={sectionCardClasses}>
           <div className="mt-6">
             {activeTab === "users" && canManageUsers && (
               <div>

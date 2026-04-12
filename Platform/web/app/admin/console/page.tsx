@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 
 import {
   AdminBotStatus,
-  AdminLogRun,
   AdminLogTail,
+  AdminLogRun,
   AdminReportRun,
   UserRecord,
   getAdminBotLogTail,
@@ -55,6 +55,7 @@ export default function AdminConsolePage() {
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
   const [profileResolved, setProfileResolved] = useState(false);
+  const [activeTab, setActiveTab] = useState<"control" | "logs">("control");
 
   const [me, setMe] = useState<UserRecord | null>(null);
   const [botStatus, setBotStatus] = useState<AdminBotStatus | null>(null);
@@ -295,6 +296,13 @@ export default function AdminConsolePage() {
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
 
+  const tabButtonClass = (isActive: boolean) =>
+    `px-4 py-2 font-medium text-sm ${
+      isActive
+        ? "border-b-2 border-brand-500 text-brand-600 dark:text-brand-400"
+        : "border-b-2 border-transparent text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-300"
+    }`;
+
   const handleTerminalDragStart = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
     setIsDragging(true);
@@ -361,7 +369,7 @@ export default function AdminConsolePage() {
         <section className={sectionCardClasses}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Control Panel</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Console</p>
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -384,35 +392,41 @@ export default function AdminConsolePage() {
 
         {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
-        <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          label="Bot Runtime"
-          value={botStatus?.running ? "RUNNING" : "STOPPED"}
-          hint={botStatus?.pid ? `PID ${botStatus.pid}` : "process not active"}
-          tone={botStatus?.running ? "teal" : "rose"}
-        />
-        <MetricCard
-          label="Latest Run Key"
-          value={showingControlLog ? "CONTROL LOG" : botStatus?.latest_run_key || "n/a"}
-          hint={showingControlLog ? "Startup / Control Output" : `selected ${selectedRunKey}`}
-          tone="sky"
-        />
-        <MetricCard
-          label="Log Runs"
-          value={String(logRuns.length)}
-          hint={logRuns[0] ? `Last Update ${fmtUnix(logRuns[0].mtime_ts)}` : "no logs yet"}
-          tone="amber"
-        />
-        <MetricCard
-          label="Report Files"
-          value={String(reportFileCount)}
-          hint={`${reportRuns.length} Report Batches`}
-          tone="violet"
-        />
-        </section>
+        {/* Tabs */}
+        <div className="flex flex-wrap gap-8 border-b border-gray-200 dark:border-gray-700">
+          <button
+            onClick={() => setActiveTab("control")}
+            className={tabButtonClass(activeTab === "control")}
+          >
+            Control Panel
+          </button>
+          <button
+            onClick={() => setActiveTab("logs")}
+            className={tabButtonClass(activeTab === "logs")}
+          >
+            Logs & Reports
+          </button>
+        </div>
 
-        <section className="grid gap-2">
-        <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
+        {activeTab === "control" && (
+          <>
+            <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricCard
+                label="Bot Runtime"
+                value={botStatus?.running ? "RUNNING" : "STOPPED"}
+                hint={botStatus?.pid ? `PID ${botStatus.pid}` : "process not active"}
+                tone={botStatus?.running ? "teal" : "rose"}
+              />
+              <MetricCard
+                label="Latest Run Key"
+                value={showingControlLog ? "CONTROL LOG" : botStatus?.latest_run_key || "n/a"}
+                hint={showingControlLog ? "Startup / Control Output" : `selected ${selectedRunKey}`}
+                tone="sky"
+              />
+            </section>
+
+            <section className="grid gap-2">
+            <PanelCard title="Bot Control" subtitle="Live process status and active run context.">
           <div className="grid grid-cols-2 gap-x-6 gap-y-4">
           <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
@@ -511,72 +525,76 @@ export default function AdminConsolePage() {
           </pre>
         </PanelCard>
         </section>
+          </>
+        )}
 
-        <section className="grid gap-2 xl:grid-cols-2">
-        <PanelCard title="All Logs">
-          <TableFrame compact>
-            <table>
-              <thead>
-                <tr>
-                  <th>Run</th>
-                  <th>Size</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logRuns.map((row) => (
-                  <tr key={row.run_key}>
-                    <td>{row.run_key}</td>
-                    <td>{fmtBytes(row.size_bytes)}</td>
-                    <td>{fmtUnix(row.mtime_ts)}</td>
-                  </tr>
-                ))}
-                {!logRuns.length ? (
-                  <tr>
-                    <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
-                      No log runs found.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </TableFrame>
-        </PanelCard>
+        {activeTab === "logs" && (
+          <section className="grid gap-2 xl:grid-cols-2">
+            <PanelCard title="All Logs">
+              <TableFrame compact>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Run</th>
+                      <th>Size</th>
+                      <th>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logRuns.map((row) => (
+                      <tr key={row.run_key}>
+                        <td>{row.run_key}</td>
+                        <td>{fmtBytes(row.size_bytes)}</td>
+                        <td>{fmtUnix(row.mtime_ts)}</td>
+                      </tr>
+                    ))}
+                    {!logRuns.length ? (
+                      <tr>
+                        <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
+                          No log runs found.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </TableFrame>
+            </PanelCard>
 
-        <PanelCard title="All Reports">
-          <TableFrame compact>
-            <table>
-              <thead>
-                <tr>
-                  <th>Run</th>
-                  <th>Files</th>
-                  <th>Summary</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reportRuns.map((row) => (
-                  <tr key={row.run_key}>
-                    <td>{row.run_key}</td>
-                    <td>{row.file_count}</td>
-                    <td>
-                      <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
-                    </td>
-                    <td>{fmtUnix(row.mtime_ts)}</td>
-                  </tr>
-                ))}
-                {!reportRuns.length ? (
-                  <tr>
-                    <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
-                      No report runs found.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </TableFrame>
-        </PanelCard>
-        </section>
+            <PanelCard title="All Reports">
+              <TableFrame compact>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Run</th>
+                      <th>Files</th>
+                      <th>Summary</th>
+                      <th>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportRuns.map((row) => (
+                      <tr key={row.run_key}>
+                        <td>{row.run_key}</td>
+                        <td>{row.file_count}</td>
+                        <td>
+                          <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
+                        </td>
+                        <td>{fmtUnix(row.mtime_ts)}</td>
+                      </tr>
+                    ))}
+                    {!reportRuns.length ? (
+                      <tr>
+                        <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                          No report runs found.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </TableFrame>
+            </PanelCard>
+          </section>
+        )}
       </div>
     </DashboardShell>
   );

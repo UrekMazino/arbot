@@ -295,28 +295,27 @@ export default function SettingsPage() {
 
         {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
-        <section className={sectionCardClasses}>
-          <div className="border-b border-gray-200 dark:border-gray-700">
-            <div className="flex gap-8">
-              {canEditSettings ? (
-                <button
-                  onClick={() => setActiveTab("bot")}
-                  className={tabButtonClass(activeTab === "bot")}
-                >
-                  Bot Settings
-                </button>
-              ) : null}
-              {canManageApi ? (
-                <button
-                  onClick={() => setActiveTab("api")}
-                  className={tabButtonClass(activeTab === "api")}
-                >
-                  API Credentials
-                </button>
-              ) : null}
-            </div>
-          </div>
+        {/* Tabs */}
+        <div className="flex flex-wrap gap-8 border-b border-gray-200 dark:border-gray-700">
+            {canEditSettings ? (
+              <button
+                onClick={() => setActiveTab("bot")}
+                className={tabButtonClass(activeTab === "bot")}
+              >
+                Bot Settings
+              </button>
+            ) : null}
+            {canManageApi ? (
+              <button
+                onClick={() => setActiveTab("api")}
+                className={tabButtonClass(activeTab === "api")}
+              >
+                API Credentials
+              </button>
+            ) : null}
+        </div>
 
+        <section className={sectionCardClasses}>
           <div className="mt-6">
             {activeTab === "bot" && canEditSettings && (
               <div>

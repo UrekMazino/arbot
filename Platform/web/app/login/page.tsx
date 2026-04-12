@@ -275,7 +275,7 @@ export default function LoginPage() {
             <div className="relative flex h-full w-full flex-col justify-between p-10">
               <div>
                 <span className="inline-flex rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-white/90">
-                  OKXStatBot
+                  Project Y
                 </span>
                 <h2 className="mt-4 text-3xl font-semibold leading-tight text-white">
                   Secure Access for Operations

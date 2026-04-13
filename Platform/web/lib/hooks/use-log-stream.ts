@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 type LogStreamMessage = {
   lines?: string[];
@@ -69,13 +69,10 @@ export function useLogStream(runKey: string = "latest") {
     setIsStreaming(false);
   }, []);
 
-  // Auto-start stream on mount
-  useEffect(() => {
-    startStream();
-    return () => {
-      stopStream();
-    };
-  }, [runKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Clear accumulated log lines
+  const clearLogLines = useCallback(() => {
+    setLogLines([]);
+  }, []);
 
   return {
     logLines,
@@ -83,5 +80,6 @@ export function useLogStream(runKey: string = "latest") {
     error,
     startStream,
     stopStream,
+    clearLogLines,
   };
 }

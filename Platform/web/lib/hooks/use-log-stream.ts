@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { apiBaseUrl } from "../../lib/api";
 
 type LogStreamMessage = {
   lines?: string[];
@@ -30,12 +31,14 @@ export function useLogStream(defaultKey: string = "latest") {
     setIsStreaming(true);
 
     const streamKey = key ?? defaultKey;
+    const baseUrl = apiBaseUrl();
+    const streamUrl = `${baseUrl}/admin/bot/logs/stream?run_key=${encodeURIComponent(streamKey)}`;
+    console.log("[SSE] Connecting to:", streamUrl);
 
-    const eventSource = new EventSource(
-      `/api/admin/bot/logs/stream?run_key=${encodeURIComponent(streamKey)}`
-    );
+    const eventSource = new EventSource(streamUrl);
 
     eventSource.onmessage = (event) => {
+      console.log("[SSE] Received:", event.data);
       try {
         const data = JSON.parse(event.data) as LogStreamMessage;
 
@@ -49,6 +52,7 @@ export function useLogStream(defaultKey: string = "latest") {
           const newLines = data.lines.filter(
             (line): line is string => typeof line === "string"
           );
+          console.log("[SSE] New lines:", newLines.length);
           setLogLines((prev) => [...prev.slice(-500), ...newLines]);
         }
       } catch {
@@ -56,7 +60,8 @@ export function useLogStream(defaultKey: string = "latest") {
       }
     };
 
-    eventSource.onerror = () => {
+    eventSource.onerror = (e) => {
+      console.log("[SSE] Error:", e);
       setIsStreaming(false);
       eventSource.close();
     };

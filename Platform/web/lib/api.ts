@@ -177,6 +177,12 @@ export type AdminLogTail = {
   lines: string[];
   updated_at: string;
   detail: string;
+  equity: number | null;
+  session_pnl: number | null;
+  session_pnl_pct: number | null;
+  run_start_time: number | null;
+  pair_history: Array<{ pair: string; duration_seconds: number }>;
+  pair_count: number;
 };
 
 export type AdminLogRun = {
@@ -197,6 +203,24 @@ export type AdminReportRun = {
 export type AdminEnvSettings = {
   path: string;
   values: Record<string, string>;
+};
+
+export type PairHealthEntry = {
+  pair: string;
+  reason: string;
+  added_at: number;
+  cooldown_seconds?: number;
+  elapsed_seconds?: number;
+  remaining_seconds?: number;
+  is_ready?: boolean;
+  visits?: number;
+  ttl_days?: number | null;
+};
+
+export type AdminPairsHealth = {
+  hospital: PairHealthEntry[];
+  graveyard: PairHealthEntry[];
+  active_pair: Record<string, unknown> | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
@@ -365,6 +389,21 @@ export async function updateAdminEnvSetting(key: string, value: string): Promise
     },
   );
   return { path: "Execution/.env", values: res.values || {} };
+}
+
+export async function getAdminPairsHealth(): Promise<AdminPairsHealth> {
+  return apiRequest<AdminPairsHealth>("/admin/pairs/health", { method: "GET" });
+}
+
+export interface ClearLogsResult {
+  deleted_logs: number;
+  deleted_reports: number;
+  kept_latest: boolean;
+  errors: string[];
+}
+
+export async function clearAdminLogs(keepLatest = true): Promise<ClearLogsResult> {
+  return apiRequest<ClearLogsResult>(`/admin/logs/clear?keep_latest=${keepLatest}`, { method: "POST" });
 }
 
 export async function listUsers(): Promise<UserRecord[]> {

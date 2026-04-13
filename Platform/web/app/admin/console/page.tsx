@@ -1,17 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
   AdminBotStatus,
   AdminLogTail,
   AdminLogRun,
+  AdminPairsHealth,
   AdminReportRun,
   UserRecord,
+  clearAdminLogs,
   getAdminBotLogTail,
   getAdminBotStatus,
   getAdminLogRuns,
+  getAdminPairsHealth,
   getAdminReportRuns,
   getMe,
   isUnauthorizedError,
@@ -50,6 +53,46 @@ function fmtUnix(value: number | null | undefined): string {
   return new Date(value * 1000).toLocaleString();
 }
 
+function fmtUptime(startTime: number | null, isCurrentRun: boolean, isRunning: boolean, lastUpdateAt: string | null | undefined): string {
+  if (!startTime || Number.isNaN(startTime)) return "n/a";
+
+  // Determine if we should use live or frozen time
+  // Use live time if:
+  // 1. This is the current run AND bot is running (live tracking)
+  // 2. OR if we don't have a valid lastUpdateAt and bot is running (use current time)
+  const useLiveTime = (isCurrentRun && isRunning) || (!lastUpdateAt && isRunning);
+
+  // Use lastUpdateAt if available and we're not using live time
+  // Otherwise use startTime as fallback (shows 0 duration if no update time)
+  const endTime = useLiveTime
+    ? (Date.now() / 1000)
+    : (lastUpdateAt ? new Date(lastUpdateAt).getTime() / 1000 : startTime);
+
+  const diff = endTime - startTime;
+  if (diff < 0) return "n/a";
+  const hours = Math.floor(diff / 3600);
+  const minutes = Math.floor((diff % 3600) / 60);
+  const seconds = Math.floor(diff % 60);
+  if (hours > 0) {
+    return useLiveTime ? `${hours}h ${minutes}m` : `${hours}h ${minutes}m (stopped)`;
+  }
+  return useLiveTime ? `${minutes}m ${seconds}s` : `${minutes}m ${seconds}s (stopped)`;
+}
+
+function fmtDuration(seconds: number): string {
+  if (!seconds || Number.isNaN(seconds)) return "0s";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) {
+    return `${h}h ${m}m`;
+  }
+  if (m > 0) {
+    return `${m}m ${s}s`;
+  }
+  return `${s}s`;
+}
+
 export default function AdminConsolePage() {
   const router = useRouter();
   const { isFloating, setFloating, logTail: sharedLogTail, setLogTail: setSharedLogTail } = useFloatingTerminal();
@@ -57,7 +100,7 @@ export default function AdminConsolePage() {
   const [error, setError] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
   const [profileResolved, setProfileResolved] = useState(false);
-  const [activeTab, setActiveTab] = useState<"control" | "logs">("control");
+  const [activeTab, setActiveTab] = useState<"control" | "logs" | "pairs">("control");
 
   const [me, setMe] = useState<UserRecord | null>(null);
   const [botStatus, setBotStatus] = useState<AdminBotStatus | null>(null);
@@ -65,12 +108,19 @@ export default function AdminConsolePage() {
   const [reportRuns, setReportRuns] = useState<AdminReportRun[]>([]);
   const [selectedRunKey, setSelectedRunKey] = useState("latest");
   const [localLogTail, setLocalLogTail] = useState<AdminLogTail | null>(null);
+  const [pairsHealth, setPairsHealth] = useState<AdminPairsHealth | null>(null);
   const [busy, setBusy] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
+  const [startingEquity, setStartingEquity] = useState<number | null>(null);
+  const [runningEquity, setRunningEquity] = useState<number | null>(null);
+  const [sessionPnl, setSessionPnl] = useState<{ amount: number; pct: number } | null>(null);
+  const [runUptime, setRunUptime] = useState<number | null>(null);
+  const [pairHistory, setPairHistory] = useState<Array<{ pair: string; duration_seconds: number }>>([]);
+  const [pairCount, setPairCount] = useState<number>(0);
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -82,6 +132,7 @@ export default function AdminConsolePage() {
     setLogRuns([]);
     setReportRuns([]);
     setLocalLogTail(null);
+    setPairsHealth(null);
     if (isFloating) setSharedLogTail(null);
     setFloating(false);
     if (redirectToLogin) {
@@ -102,6 +153,16 @@ export default function AdminConsolePage() {
   const displayLogTail = isFloating ? sharedLogTail : localLogTail;
   const showingControlLog = displayLogTail?.run_key === "__control__";
 
+  // Memoize run key options for dropdown to prevent recalculation
+  const runKeyOptions = useMemo(
+    () => logRuns.map((row) => (
+      <option key={row.run_key} value={row.run_key}>
+        {row.run_key}
+      </option>
+    )),
+    [logRuns],
+  );
+
   const loadAdminData = useCallback(async () => {
       const meData = await getMe();
       setMe(meData);
@@ -111,6 +172,7 @@ export default function AdminConsolePage() {
         setLogRuns([]);
         setReportRuns([]);
         setLocalLogTail(null);
+        setPairsHealth(null);
         return;
       }
 
@@ -119,15 +181,17 @@ export default function AdminConsolePage() {
       const canLoadReports = hasPermission(meData, "view_reports");
 
       // First load status and log runs to determine which run to load
-      const [statusData, logsData, reportsData] = await Promise.all([
+      const [statusData, logsData, reportsData, healthData] = await Promise.all([
         canLoadStatus ? getAdminBotStatus() : Promise.resolve(null),
         canLoadLogs ? getAdminLogRuns() : Promise.resolve([] as AdminLogRun[]),
         canLoadReports ? getAdminReportRuns() : Promise.resolve([] as AdminReportRun[]),
+        canLoadStatus ? getAdminPairsHealth() : Promise.resolve(null),
       ]);
 
       setBotStatus(statusData);
       setLogRuns(logsData);
       setReportRuns(reportsData);
+      setPairsHealth(healthData);
 
       // Determine which run key to load:
       // 1. If bot is running, use the latest_run_key from status
@@ -144,6 +208,22 @@ export default function AdminConsolePage() {
       if (canLoadLogs) {
         const displayLogTailData = await getAdminBotLogTail(runKeyToLoad, 320);
         setLocalLogTail(displayLogTailData);
+        // Set equity data on initial load
+        if (displayLogTailData?.equity !== null) {
+          setStartingEquity(displayLogTailData.equity);
+          setRunningEquity(displayLogTailData.equity);
+        }
+        if (displayLogTailData?.session_pnl !== null && displayLogTailData?.session_pnl_pct !== null) {
+          setSessionPnl({ amount: displayLogTailData.session_pnl, pct: displayLogTailData.session_pnl_pct });
+        }
+        // Set uptime and pair history
+        if (displayLogTailData?.run_start_time !== null) {
+          setRunUptime(displayLogTailData.run_start_time);
+        }
+        if (displayLogTailData?.pair_history) {
+          setPairHistory(displayLogTailData.pair_history);
+          setPairCount(displayLogTailData.pair_count || 0);
+        }
         if (displayLogTailData?.run_key && displayLogTailData.run_key !== "__control__") {
           setSelectedRunKey(displayLogTailData.run_key);
         } else {
@@ -163,6 +243,21 @@ export default function AdminConsolePage() {
       }
       const next = await getAdminBotLogTail(runKey || "latest", 320);
       setLocalLogTail(next);
+      // Update equity data from log tail
+      if (next?.equity !== null) {
+        setRunningEquity(next.equity);
+      }
+      if (next?.session_pnl !== null && next?.session_pnl_pct !== null) {
+        setSessionPnl({ amount: next.session_pnl, pct: next.session_pnl_pct });
+      }
+      // Update uptime and pair history
+      if (next?.run_start_time !== null) {
+        setRunUptime(next.run_start_time);
+      }
+      if (next?.pair_history) {
+        setPairHistory(next.pair_history);
+        setPairCount(next.pair_count || 0);
+      }
       // Also update shared context when floating
       if (isFloating) setSharedLogTail(next);
 
@@ -207,6 +302,25 @@ export default function AdminConsolePage() {
           // New run detected! Fetch its log tail
           const tail = await getAdminBotLogTail(latestRunKey, 320);
           setLocalLogTail(tail);
+          // Update equity data from log tail
+          if (tail?.equity !== null) {
+            setRunningEquity(tail.equity);
+            // Set starting equity when switching to a new run
+            if (selectedRunKey !== latestRunKey) {
+              setStartingEquity(tail.equity);
+            }
+          }
+          if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
+            setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
+          }
+          // Update uptime and pair history
+          if (tail?.run_start_time !== null) {
+            setRunUptime(tail.run_start_time);
+          }
+          if (tail?.pair_history) {
+            setPairHistory(tail.pair_history);
+            setPairCount(tail.pair_count || 0);
+          }
           // Also update the bot status to get latest_run_key updated
           const statusData = await getAdminBotStatus();
           setBotStatus(statusData);
@@ -290,6 +404,22 @@ export default function AdminConsolePage() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [canViewConsole, canViewLogs, clearAdminSession, selectedRunKey, refreshLogTail, isFloating]);
+
+  // Poll pairs health data
+  useEffect(() => {
+    if (!canViewConsole) return;
+    const timer = window.setInterval(async () => {
+      if (canManageBot || canViewLogs) {
+        try {
+          const health = await getAdminPairsHealth();
+          setPairsHealth(health);
+        } catch {
+          // Ignore errors for health polling
+        }
+      }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [canViewConsole, canManageBot, canViewLogs]);
 
   async function handleStart() {
     if (!me || !canManageBot) return;
@@ -454,6 +584,12 @@ export default function AdminConsolePage() {
           >
             Logs & Reports
           </button>
+          <button
+            onClick={() => setActiveTab("pairs")}
+            className={tabButtonClass(activeTab === "pairs")}
+          >
+            Pairs Health
+          </button>
         </div>
 
         {activeTab === "control" && (
@@ -525,16 +661,31 @@ export default function AdminConsolePage() {
                     <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
                   </div>
                   <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">PID</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.pid || "n/a"}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{startingEquity !== null ? `${startingEquity.toFixed(2)} USDT` : "n/a"}</p>
                   </div>
                   <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
                     <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
                   </div>
                   <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Detail</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.detail || "n/a"}</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Running Equity</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">
+                      {runningEquity !== null ? `${runningEquity.toFixed(2)} USDT` : "n/a"}
+                      {sessionPnl && (
+                        <span className={`ml-2 text-xs ${sessionPnl.amount >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                          ({sessionPnl.amount >= 0 ? "+" : ""}{sessionPnl.amount.toFixed(2)} / {sessionPnl.pct.toFixed(2)}%)
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="pt-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Run Uptime</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{fmtUptime(runUptime, Boolean(selectedRunKey === "latest" || selectedRunKey === botStatus?.latest_run_key), Boolean(botStatus?.running), localLogTail?.updated_at)}</p>
+                  </div>
+                  <div className="pt-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pairs Used</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{pairCount > 0 ? pairCount : "n/a"}</p>
                   </div>
                   <div className="pt-1">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
@@ -546,17 +697,77 @@ export default function AdminConsolePage() {
                   </div>
                   <div className="col-span-2">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Select Run</p>
-                    <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={(e) => setSelectedRunKey(e.target.value)}>
+                    <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={async (e) => {
+                      const newKey = e.target.value;
+                      setSelectedRunKey(newKey);
+                      // Fetch equity for newly selected run
+                      if (newKey !== "latest") {
+                        const tail = await getAdminBotLogTail(newKey, 320);
+                        if (tail?.equity !== null) {
+                          setStartingEquity(tail.equity);
+                          setRunningEquity(tail.equity);
+                        }
+                        if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
+                          setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
+                        } else {
+                          setSessionPnl(null);
+                        }
+                        // Update uptime and pair history
+                        if (tail?.run_start_time !== null) {
+                          setRunUptime(tail.run_start_time);
+                        }
+                        if (tail?.pair_history) {
+                          setPairHistory(tail.pair_history);
+                          setPairCount(tail.pair_count || 0);
+                        } else {
+                          setPairHistory([]);
+                          setPairCount(0);
+                        }
+                      }
+                    }}>
                       <option value="latest">latest</option>
-                      {logRuns.map((row) => (
-                        <option key={row.run_key} value={row.run_key}>
-                          {row.run_key}
-                        </option>
-                      ))}
+                      {runKeyOptions}
                     </select>
                   </div>
                 </div>
               </PanelCard>
+
+              {/* Pair History Table */}
+              {pairHistory.length > 0 && (
+                <PanelCard title="Pair History" subtitle={`${pairHistory.length} pairs used in this run`}>
+                  <TableFrame>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Pair</th>
+                          <th>Uptime</th>
+                          <th>Duration</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pairHistory.map((entry, idx) => {
+                          // Calculate total run duration consistently
+                          const totalDuration = runUptime && localLogTail?.updated_at
+                            ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
+                            : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
+                          const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
+                          return (
+                            <tr key={entry.pair}>
+                              <td className="text-xs text-gray-500">{idx + 1}</td>
+                              <td className="font-mono text-xs">{entry.pair}</td>
+                              <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>
+                              <td className="text-xs text-gray-500">
+                                {entry.duration_seconds > 0 ? `${pct.toFixed(1)}%` : "0%"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </PanelCard>
+              )}
             </section>
 
             {/* Fullscreen Terminal Modal - simplified without drag */}
@@ -595,8 +806,34 @@ export default function AdminConsolePage() {
         )}
 
         {activeTab === "logs" && (
-          <section className="grid gap-2 xl:grid-cols-2">
-            <PanelCard title="All Logs">
+          <section className="grid gap-2">
+            <div className="flex justify-end">
+              <button
+                className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
+                onClick={async () => {
+                  if (!confirm("Clear old logs and reports? The most recent run will be kept.")) return;
+                  setBusy(true);
+                  try {
+                    const result = await clearAdminLogs(true);
+                    alert(`Cleared ${result.deleted_logs} logs and ${result.deleted_reports} reports.`);
+                    // Refresh the log runs list
+                    const logs = await getAdminLogRuns();
+                    setLogRuns(logs);
+                    const reports = await getAdminReportRuns();
+                    setReportRuns(reports);
+                  } catch (err) {
+                    alert("Failed to clear logs: " + (err instanceof Error ? err.message : "Unknown error"));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                disabled={busy}
+              >
+                Clear Old Logs
+              </button>
+            </div>
+            <div className="grid gap-2 xl:grid-cols-2">
+              <PanelCard title="All Logs">
               <TableFrame compact>
                 <table>
                   <thead>
@@ -652,6 +889,124 @@ export default function AdminConsolePage() {
                       <tr>
                         <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
                           No report runs found.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </TableFrame>
+            </PanelCard>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "pairs" && (
+          <section className="grid gap-4">
+            {/* Active Pair */}
+            <PanelCard title="Active Pair">
+              {pairsHealth?.active_pair ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Symbol 1</p>
+                    <p className="mt-1 font-mono text-sm text-gray-900 dark:text-white/90">
+                      {(pairsHealth.active_pair as Record<string, unknown>)?.ticker_1 as string || "n/a"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Symbol 2</p>
+                    <p className="mt-1 font-mono text-sm text-gray-900 dark:text-white/90">
+                      {(pairsHealth.active_pair as Record<string, unknown>)?.ticker_2 as string || "n/a"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">No active pair</p>
+              )}
+            </PanelCard>
+
+            {/* Hospital - Pairs on Cooldown */}
+            <PanelCard
+              title="Hospital (Cooldown)"
+              subtitle={`${pairsHealth?.hospital?.length || 0} pairs on cooldown`}
+            >
+              <TableFrame>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pair</th>
+                      <th>Reason</th>
+                      <th>Cooldown</th>
+                      <th>Remaining</th>
+                      <th>Status</th>
+                      <th>Visits</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pairsHealth?.hospital?.map((entry) => (
+                      <tr key={entry.pair}>
+                        <td className="font-mono text-xs">{entry.pair}</td>
+                        <td className="text-xs">{entry.reason}</td>
+                        <td className="text-xs">{entry.cooldown_seconds}s</td>
+                        <td className="text-xs">
+                          {entry.is_ready ? (
+                            <span className="text-green-600 dark:text-green-400">Ready</span>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-400">
+                              {Math.round((entry.remaining_seconds ?? 0) / 60)}m
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <StatusPill
+                            label={entry.is_ready ? "Ready" : "Cooldown"}
+                            tone={entry.is_ready ? "success" : "warn"}
+                          />
+                        </td>
+                        <td className="text-xs">{entry.visits}</td>
+                      </tr>
+                    ))}
+                    {!pairsHealth?.hospital?.length ? (
+                      <tr>
+                        <td colSpan={6} className="text-sm text-gray-500 dark:text-gray-400">
+                          No pairs in hospital
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </TableFrame>
+            </PanelCard>
+
+            {/* Graveyard - Failed Pairs */}
+            <PanelCard
+              title="Graveyard (Failed)"
+              subtitle={`${pairsHealth?.graveyard?.length || 0} permanently excluded pairs`}
+            >
+              <TableFrame>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pair</th>
+                      <th>Reason</th>
+                      <th>TTL Days</th>
+                      <th>Added</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pairsHealth?.graveyard?.map((entry) => (
+                      <tr key={entry.pair}>
+                        <td className="font-mono text-xs">{entry.pair}</td>
+                        <td className="text-xs">{entry.reason}</td>
+                        <td className="text-xs">{entry.ttl_days ?? "Permanent"}</td>
+                        <td className="text-xs">
+                          {entry.added_at ? new Date(entry.added_at * 1000).toLocaleDateString() : "n/a"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!pairsHealth?.graveyard?.length ? (
+                      <tr>
+                        <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                          No pairs in graveyard
                         </td>
                       </tr>
                     ) : null}

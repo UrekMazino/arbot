@@ -30,7 +30,7 @@ import {
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
-import { useBotStatus, useLogRuns } from "../../../lib/hooks";
+import { useBotStatus, useLogRuns, useDashboardWebSocket } from "../../../lib/hooks";
 import { useFloatingTerminal } from "../../../context/floating-terminal-context";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";
@@ -127,6 +127,9 @@ export default function AdminConsolePage() {
     pairHistory, setPairHistory,
     pairCount, setPairCount,
   } = useLogRuns();
+
+  // WebSocket for real-time terminal updates
+  const { logLines: wsLogLines, isConnected: wsConnected } = useDashboardWebSocket();
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();

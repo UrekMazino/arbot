@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from ..deps import get_current_user, get_user_permission_ids, require_permissions
 from ..models import User
@@ -61,6 +62,60 @@ def admin_bot_logs_tail(
     _: User = Depends(require_permissions("view_logs")),
 ):
     return tail_run_log(run_key=run_key, lines=lines)
+
+
+@router.get("/bot/logs/stream")
+async def admin_bot_logs_stream(
+    run_key: str | None = Query(default=None),
+    _: User = Depends(require_permissions("view_logs")),
+):
+    """Server-Sent Events endpoint for streaming log updates."""
+
+    async def event_generator():
+        import asyncio
+        import os
+        from pathlib import Path
+
+        log_dir = Path("Logs")
+        if run_key and run_key != "latest":
+            log_file = log_dir / f"{run_key}.log"
+        else:
+            # Find latest log file
+            log_files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+            log_file = log_files[0] if log_files else None
+
+        if not log_file or not log_file.exists():
+            yield "data: {\"error\": \"no log file\"}\n\n"
+            return
+
+        # Start from end of file
+        last_pos = log_file.stat().st_size
+
+        while True:
+            await asyncio.sleep(2)  # Poll every 2 seconds
+
+            try:
+                current_size = log_file.stat().st_size
+                if current_size > last_pos:
+                    # Read new content
+                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                        f.seek(last_pos)
+                        new_lines = f.readlines()
+
+                    if new_lines:
+                        # Send last 10 lines as update
+                        tail_lines = new_lines[-10:] if len(new_lines) > 10 else new_lines
+                        payload = {"lines": [line.rstrip("\n") for line in tail_lines]}
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        last_pos = f.tell()
+
+                elif current_size < last_pos:
+                    # File was truncated (new run), start from beginning
+                    last_pos = 0
+            except Exception:
+                break
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/logs/runs")

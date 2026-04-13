@@ -1,3 +1,4 @@
 export { useBotStatus } from "./use-bot-status";
 export { useLogRuns } from "./use-log-runs";
 export { useDashboardWebSocket } from "./use-websocket";
+export { useLogStream } from "./use-log-stream";

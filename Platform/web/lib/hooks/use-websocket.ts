@@ -21,17 +21,33 @@ export function useDashboardWebSocket(botInstanceId?: string) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectAttempts = useRef(0);
+
+  // Cleanup existing connection
+  const cleanup = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setConnectionState("disconnected");
+  }, []);
 
   // Connect to WebSocket
   const connect = useCallback(() => {
+    // Already connected
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
     }
 
+    // Cleanup any existing connection first
+    cleanup();
+
     setConnectionState("connecting");
 
-    // Build WebSocket URL (use same host/protocol as current page)
+    // Build WebSocket URL
     const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws/dashboard${botInstanceId ? `?bot_instance_id=${botInstanceId}` : ""}`;
 
     try {
@@ -39,8 +55,6 @@ export function useDashboardWebSocket(botInstanceId?: string) {
 
       ws.onopen = () => {
         setConnectionState("connected");
-        setConnectionState("connected");
-        reconnectAttempts.current = 0;
       };
 
       ws.onmessage = (event) => {
@@ -63,50 +77,30 @@ export function useDashboardWebSocket(botInstanceId?: string) {
       ws.onclose = () => {
         setConnectionState("disconnected");
         wsRef.current = null;
-
-        // Auto-reconnect with backoff (max 5 attempts)
-        if (reconnectAttempts.current < 5) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
-          reconnectTimeoutRef.current = setTimeout(() => {
-            reconnectAttempts.current++;
-            connect();
-          }, delay);
-        }
       };
 
       wsRef.current = ws;
     } catch {
       setConnectionState("error");
     }
-  }, [botInstanceId]);
+  }, [botInstanceId, cleanup]);
 
   // Disconnect
   const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+    cleanup();
+  }, [cleanup]);
 
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-
-    setConnectionState("disconnected");
-  }, []);
-
-  // Connect on mount, disconnect on unmount
+  // Connect on mount, auto-reconnect on disconnect via effect
   useEffect(() => {
     connect();
 
     return () => {
-      disconnect();
+      cleanup();
     };
-  }, [connect, disconnect]);
+  }, [connect, cleanup]);
 
   /**
    * Extract log lines from WebSocket messages
-   * Looks for messages with payload containing lines
    */
   const logLines = lastMessage?.payload
     ? (lastMessage.payload as { lines?: string[] })?.lines ?? []

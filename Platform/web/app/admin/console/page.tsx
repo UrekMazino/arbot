@@ -104,24 +104,29 @@ export default function AdminConsolePage() {
   const [activeTab, setActiveTab] = useState<"control" | "logs" | "pairs">("control");
 
   const [me, setMe] = useState<UserRecord | null>(null);
-  const [botStatus, setBotStatus] = useState<AdminBotStatus | null>(null);
-  const [logRuns, setLogRuns] = useState<AdminLogRun[]>([]);
-  const [reportRuns, setReportRuns] = useState<AdminReportRun[]>([]);
-  const [selectedRunKey, setSelectedRunKey] = useState("latest");
-  const [localLogTail, setLocalLogTail] = useState<AdminLogTail | null>(null);
-  const [pairsHealth, setPairsHealth] = useState<AdminPairsHealth | null>(null);
   const [busy, setBusy] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
-  const [startingEquity, setStartingEquity] = useState<number | null>(null);
-  const [runningEquity, setRunningEquity] = useState<number | null>(null);
-  const [sessionPnl, setSessionPnl] = useState<{ amount: number; pct: number } | null>(null);
-  const [runUptime, setRunUptime] = useState<number | null>(null);
-  const [pairHistory, setPairHistory] = useState<Array<{ pair: string; duration_seconds: number }>>([]);
-  const [pairCount, setPairCount] = useState<number>(0);
+
+  // Use custom hooks for bot and log management
+  const {
+    botStatus, setBotStatus,
+    pairsHealth, setPairsHealth,
+    startingEquity, runningEquity, sessionPnl, runUptime,
+    setStartingEquity, setRunningEquity, setSessionPnl, setRunUptime,
+  } = useBotStatus();
+
+  const {
+    logRuns, setLogRuns,
+    reportRuns, setReportRuns,
+    selectedRunKey, setSelectedRunKey,
+    localLogTail, setLocalLogTail,
+    pairHistory, setPairHistory,
+    pairCount, setPairCount,
+  } = useLogRuns();
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();

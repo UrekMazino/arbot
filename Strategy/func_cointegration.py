@@ -11,6 +11,8 @@ from config_strategy_api import (
     liquidity_window,
     min_avg_quote_volume,
     liquidity_pct,
+    min_orderbook_depth_usdt,
+    min_orderbook_levels,
     fast_path_enabled,
     corr_min_filter,
     corr_lookback,
@@ -427,6 +429,8 @@ def get_cointegrated_pairs(
 
     # Load graveyard to exclude failed pairs
     graveyard_pairs = set()
+    # Load hospital pairs with expired cooldowns to include in discovery
+    hospital_pairs = set()
     try:
         execution_state_path = Path(__file__).resolve().parent.parent / "Execution" / "state" / "pair_strategy_state.json"
         if execution_state_path.exists():
@@ -440,8 +444,26 @@ def get_cointegrated_pairs(
                     if len(parts) == 2:
                         graveyard_pairs.add(f"{parts[1]}/{parts[0]}")
                 logger.info(f"Loaded {len(graveyard)} pairs from graveyard (will exclude from discovery)")
+
+                # Load hospital pairs with expired cooldowns (ready to be re-discovered)
+                hospital = exec_state.get("hospital", {})
+                now = time.time()
+                for pair_key, entry in hospital.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    ts = entry.get("ts", 0)
+                    cooldown = entry.get("cooldown", 3600)
+                    elapsed = now - ts
+                    if elapsed >= cooldown:
+                        # Cooldown expired, include this pair in discovery
+                        hospital_pairs.add(pair_key)
+                        parts = pair_key.split('/')
+                        if len(parts) == 2:
+                            hospital_pairs.add(f"{parts[1]}/{parts[0]}")
+                if hospital_pairs:
+                    logger.info(f"Loaded {len(hospital_pairs)} hospital pairs with expired cooldowns (will include in discovery)")
     except Exception as e:
-        logger.warning(f"Could not load graveyard: {e}")
+        logger.warning(f"Could not load graveyard/hospital: {e}")
 
     filtered_breakdown = {}
 
@@ -485,8 +507,6 @@ def get_cointegrated_pairs(
                 pairs_with_crossings += 1
 
             # Orderbook depth check - ensure sufficient USDT liquidity
-            MIN_ORDERBOOK_DEPTH_USDT = 5000.0  # Minimum liquidity in USDT per side
-            MIN_ORDERBOOK_LEVELS = 10  # Minimum price levels (secondary check)
             orderbook_check_passed = True
 
             for ticker in [sym_1, sym_2]:
@@ -499,7 +519,7 @@ def get_cointegrated_pairs(
                             asks = data[0].get("asks", [])
 
                             # Check minimum levels first (quick sanity check)
-                            if len(bids) < MIN_ORDERBOOK_LEVELS or len(asks) < MIN_ORDERBOOK_LEVELS:
+                            if len(bids) < min_orderbook_levels or len(asks) < min_orderbook_levels:
                                 logger.info(f"Skipping thin orderbook: {ticker} (bids={len(bids)}, asks={len(asks)} levels)")
                                 filtered_breakdown["orderbook_levels"] = filtered_breakdown.get("orderbook_levels", 0) + 1
                                 orderbook_check_passed = False
@@ -510,8 +530,8 @@ def get_cointegrated_pairs(
                                 bid_depth_usdt = sum(float(bid[0]) * float(bid[1]) for bid in bids)
                                 ask_depth_usdt = sum(float(ask[0]) * float(ask[1]) for ask in asks)
 
-                                if bid_depth_usdt < MIN_ORDERBOOK_DEPTH_USDT or ask_depth_usdt < MIN_ORDERBOOK_DEPTH_USDT:
-                                    logger.info(f"Skipping low liquidity: {ticker} (bid_depth={bid_depth_usdt:.0f} USDT, ask_depth={ask_depth_usdt:.0f} USDT, min={MIN_ORDERBOOK_DEPTH_USDT:.0f} USDT)")
+                                if bid_depth_usdt < min_orderbook_depth_usdt or ask_depth_usdt < min_orderbook_depth_usdt:
+                                    logger.info(f"Skipping low liquidity: {ticker} (bid_depth={bid_depth_usdt:.0f} USDT, ask_depth={ask_depth_usdt:.0f} USDT, min={min_orderbook_depth_usdt:.0f} USDT)")
                                     filtered_breakdown["orderbook_depth"] = filtered_breakdown.get("orderbook_depth", 0) + 1
                                     orderbook_check_passed = False
                                     break

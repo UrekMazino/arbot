@@ -173,15 +173,15 @@ def store_price_history(symbols):
 
     total_symbols = len(symbols)
     bar_len = 24
-    cache_enabled = _bool_env("STATBOT_STRATEGY_CACHE_KLINES", True)
-    max_gap_bars = _int_env("STATBOT_STRATEGY_CACHE_MAX_GAP_BARS", 120)
-    refresh_bars = _int_env("STATBOT_STRATEGY_CACHE_REFRESH_BARS", 100)
-    cache_sleep = _float_env("STATBOT_STRATEGY_CACHE_SLEEP", 0.05)
-    request_sleep = _float_env("STATBOT_STRATEGY_KLINE_SLEEP", 0.0)
-    max_workers = _int_env("STATBOT_STRATEGY_KLINE_WORKERS", 3)
-    retry_count = _int_env("STATBOT_STRATEGY_KLINE_RETRIES", 2)
-    retry_sleep = _float_env("STATBOT_STRATEGY_KLINE_RETRY_SLEEP", 0.25)
-    max_stale_bars = _int_env("STATBOT_STRATEGY_CACHE_MAX_STALE_BARS", 2)
+    cache_enabled = _bool_env("STATBOT_STRATEGY_INTERNAL_CACHE_KLINES", True)
+    max_gap_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_MAX_GAP_BARS", 120)
+    refresh_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_REFRESH_BARS", 100)
+    cache_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_CACHE_SLEEP", 0.05)
+    request_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_KLINE_SLEEP", 0.0)
+    max_workers = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_WORKERS", 3)
+    retry_count = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRIES", 2)
+    retry_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRY_SLEEP", 0.25)
+    max_stale_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_MAX_STALE_BARS", 2)
     if max_stale_bars < 0:
         max_stale_bars = 0
     if max_workers < 1:

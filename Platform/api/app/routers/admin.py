@@ -5,7 +5,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from ..deps import get_current_user, get_user_permission_ids, require_permissions
 from ..models import User
 from ..services.bot_control import (
+    clear_logs_and_reports,
     get_bot_status,
+    get_pair_health_data,
     list_log_runs,
     list_report_runs,
     read_env_settings,
@@ -101,3 +103,17 @@ def admin_env_settings_update(
     result = update_env_setting(key=key, value=str(value))
     result["values"] = _filter_env_settings(read_env_settings(), user_permissions)
     return result
+
+
+@router.get("/pairs/health")
+def admin_pairs_health(_: User = Depends(require_permissions("view_logs", "manage_bot"))):
+    return get_pair_health_data()
+
+
+@router.post("/logs/clear")
+def admin_logs_clear(
+    keep_latest: bool = Query(default=True),
+    user: User = Depends(require_permissions("manage_bot")),
+):
+    """Clear old log and report directories."""
+    return clear_logs_and_reports(keep_latest=keep_latest)

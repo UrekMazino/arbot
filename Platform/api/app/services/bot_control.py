@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -10,6 +11,12 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..database import SessionLocal
+from ..models import BotInstance, Run
 
 
 def _utc_iso_now() -> str:
@@ -231,6 +238,24 @@ def start_bot(requested_by: str | None = None) -> dict:
     env["STATBOT_MANAGED"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
 
+    # Compute the run_key that the execution script will use
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_seq = 1
+    if LOGS_ROOT.exists():
+        max_seq = 0
+        for entry in LOGS_ROOT.iterdir():
+            if entry.is_dir() and entry.name.startswith("run_"):
+                parts = entry.name.split("_")
+                if len(parts) >= 3:
+                    try:
+                        seq = int(parts[1])
+                        if seq > max_seq:
+                            max_seq = seq
+                    except (ValueError, IndexError):
+                        pass
+        run_seq = max_seq + 1
+    run_key = f"run_{run_seq:02d}_{run_id}"
+
     try:
         proc = subprocess.Popen(
             command,
@@ -260,9 +285,45 @@ def start_bot(requested_by: str | None = None) -> dict:
         "cwd": str(WORKSPACE_ROOT),
         "requested_by": requested_by or "",
         "control_log_file": str(CONTROL_LOG_FILE),
+        "run_key": run_key,
     }
     _write_state(state)
+
+    # Save run to database
+    _save_run_to_database(run_key, requested_by)
+
     return _normalize_status(state)
+
+
+def _save_run_to_database(run_key: str, requested_by: str | None = None) -> dict:
+    """Save a new run to the database when bot starts."""
+    try:
+        db: Session = SessionLocal()
+        try:
+            # Get or create default bot instance
+            bot_instance = db.execute(
+                select(BotInstance).where(BotInstance.name == "default")
+            ).scalar_one_or_none()
+
+            if not bot_instance:
+                bot_instance = BotInstance(name="default", environment="demo")
+                db.add(bot_instance)
+                db.flush()
+
+            # Create new run record
+            run = Run(
+                bot_instance_id=bot_instance.id,
+                run_key=run_key,
+                status="running",
+                start_ts=datetime.now(timezone.utc),
+            )
+            db.add(run)
+            db.commit()
+            return {"saved": True, "run_id": run.id, "run_key": run.run_key}
+        finally:
+            db.close()
+    except Exception as e:
+        return {"saved": False, "error": str(e)}
 
 
 def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
@@ -326,6 +387,9 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
                     "lines": [],
                     "updated_at": _utc_iso_now(),
                     "detail": f"control_log_read_failed:{exc}",
+                    "equity": None,
+                    "session_pnl": None,
+                    "session_pnl_pct": None,
                 }
             return {
                 "run_key": "__control__",
@@ -334,6 +398,9 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
                 "lines": output_lines,
                 "updated_at": _utc_iso_now(),
                 "detail": "control_log_fallback",
+                "equity": None,
+                "session_pnl": None,
+                "session_pnl_pct": None,
             }
         return {
             "run_key": resolved_run_key,
@@ -342,6 +409,9 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             "lines": [],
             "updated_at": _utc_iso_now(),
             "detail": "log_not_found",
+            "equity": None,
+            "session_pnl": None,
+            "session_pnl_pct": None,
         }
     try:
         output_lines = _tail_lines(log_file, lines)
@@ -353,14 +423,114 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             "lines": [],
             "updated_at": _utc_iso_now(),
             "detail": f"log_read_failed:{exc}",
+            "equity": None,
+            "session_pnl": None,
+            "session_pnl_pct": None,
         }
+
+    # Extract equity info from last PnL line
+    equity = None
+    session_pnl = None
+    session_pnl_pct = None
+    run_start_time = None
+    last_update_time = None  # Track most recent timestamp
+    pair_history: list[dict] = []
+    current_pair = None
+    current_pair_start_ts = None
+
+    # First pass: find run_start_time (earliest timestamp) and last_update_time (most recent)
+    for line in output_lines:
+        ts_match = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
+        if ts_match:
+            try:
+                line_ts = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+                if run_start_time is None:
+                    run_start_time = line_ts
+                last_update_time = line_ts
+            except Exception:
+                pass
+
+    # Second pass: process equity and pair history (can still use reverse iteration)
+    for line in reversed(output_lines):
+        # Extract equity from PnL line
+        if "PnL:" in line and "Equity:" in line:
+            try:
+                equity_match = re.search(r"Equity:\s*([\d.]+)\s*USDT", line)
+                session_match = re.search(r"Session:\s*([+-]?[\d.]+)\s*USDT\s*\(([+-]?[\d.]+)%\)", line)
+                if equity_match:
+                    equity = float(equity_match.group(1))
+                if session_match:
+                    session_pnl = float(session_match.group(1))
+                    session_pnl_pct = float(session_match.group(2))
+            except Exception:
+                pass
+
+        # Parse timestamp from log line - only for pair tracking, NOT for run_start_time
+        ts_match = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
+        if ts_match:
+            try:
+                line_ts = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+                # Don't set run_start_time here - it was already set in first pass
+
+                # Track pair switches
+                if "Current pair:" in line:
+                    pair_match = re.search(r"Current pair: ([A-Z]+-USDT-SWAP/[A-Z]+-USDT-SWAP)", line)
+                    if pair_match:
+                        new_pair = pair_match.group(1)
+                        if current_pair and current_pair != new_pair:
+                            # Record previous pair's duration
+                            duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
+                            pair_history.append({
+                                "pair": current_pair,
+                                "duration_seconds": duration,
+                            })
+                        current_pair = new_pair
+                        current_pair_start_ts = line_ts
+                elif "Switching from" in line:
+                    from_match = re.search(r"Switching from ([A-Z]+-USDT-SWAP/[A-Z]+-USDT-SWAP) to", line)
+                    if from_match:
+                        switched_pair = from_match.group(1)
+                        if current_pair == switched_pair:
+                            # Pair was switched away
+                            duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
+                            pair_history.append({
+                                "pair": current_pair,
+                                "duration_seconds": duration,
+                            })
+                            current_pair = None
+                            current_pair_start_ts = None
+            except Exception:
+                pass
+
+    # Add the last active pair if still active - use last_update_time for duration
+    if current_pair and current_pair_start_ts and last_update_time:
+        duration = last_update_time - current_pair_start_ts
+        pair_history.append({
+            "pair": current_pair,
+            "duration_seconds": duration,
+        })
+
+    # If run_start_time wasn't set, use last_update_time as fallback (for runs with timestamps)
+    if run_start_time is None and last_update_time is not None:
+        run_start_time = last_update_time
+
+    # Format last log time as ISO for frontend
+    last_log_iso = datetime.fromtimestamp(last_update_time).isoformat() if last_update_time else None
+
     return {
         "run_key": resolved_run_key,
         "log_file": str(log_file),
         "line_count": len(output_lines),
         "lines": output_lines,
-        "updated_at": _utc_iso_now(),
+        "updated_at": last_log_iso,  # Use actual last log time instead of current time
         "detail": source,
+        "equity": equity,
+        "session_pnl": session_pnl,
+        "session_pnl_pct": session_pnl_pct,
+        "run_start_time": run_start_time,
+        "run_end_time": last_update_time,
+        "pair_history": pair_history,
+        "pair_count": len(pair_history),
     }
 
 
@@ -420,6 +590,74 @@ def list_report_runs(limit: int = 100) -> list[dict]:
     return rows[: max(min(int(limit), 500), 1)]
 
 
+def clear_logs_and_reports(keep_latest: bool = True) -> dict:
+    """Clear log and report directories.
+
+    Args:
+        keep_latest: If True, keeps the most recent run directory. If False, clears all.
+
+    Returns:
+        dict with counts of deleted items and any errors.
+    """
+    deleted_logs = 0
+    deleted_reports = 0
+    errors: list[str] = []
+
+    # Get list of run directories sorted by modification time (newest first)
+    def get_sorted_runs(root):
+        if not root.exists():
+            return []
+        runs = []
+        for run_dir in root.iterdir():
+            if run_dir.is_dir() and run_dir.name.startswith("run_"):
+                try:
+                    mtime = run_dir.stat().st_mtime
+                    runs.append((mtime, run_dir))
+                except Exception:
+                    continue
+        runs.sort(key=lambda x: x[0], reverse=True)
+        return runs
+
+    # Handle logs
+    if LOGS_ROOT.exists():
+        log_runs = get_sorted_runs(LOGS_ROOT)
+        for idx, (_, run_dir) in enumerate(log_runs):
+            if keep_latest and idx == 0:
+                continue  # Keep the newest
+            try:
+                # Remove all files in the directory
+                for file in run_dir.iterdir():
+                    if file.is_file():
+                        file.unlink()
+                # Remove the directory
+                run_dir.rmdir()
+                deleted_logs += 1
+            except Exception as e:
+                errors.append(f"Failed to delete log {run_dir.name}: {e}")
+
+    # Handle reports
+    if REPORTS_ROOT.exists():
+        report_runs = get_sorted_runs(REPORTS_ROOT)
+        for idx, (_, run_dir) in enumerate(report_runs):
+            if keep_latest and idx == 0:
+                continue  # Keep the newest
+            try:
+                for file in run_dir.iterdir():
+                    if file.is_file():
+                        file.unlink()
+                run_dir.rmdir()
+                deleted_reports += 1
+            except Exception as e:
+                errors.append(f"Failed to delete report {run_dir.name}: {e}")
+
+    return {
+        "deleted_logs": deleted_logs,
+        "deleted_reports": deleted_reports,
+        "kept_latest": keep_latest,
+        "errors": errors,
+    }
+
+
 def read_env_settings() -> dict[str, str]:
     values: dict[str, str] = {}
     if not ENV_FILE.exists():
@@ -476,3 +714,73 @@ def update_env_setting(key: str, value: str) -> dict:
     ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
     ENV_FILE.write_text("\n".join(next_lines).rstrip("\n") + "\n", encoding="utf-8")
     return {"ok": True, "detail": "updated", "key": setting_key, "value": new_value}
+
+
+PAIR_STRATEGY_STATE_FILE = EXECUTION_ROOT / "state" / "pair_strategy_state.json"
+ACTIVE_PAIR_FILE = EXECUTION_ROOT / "state" / "active_pair.json"
+
+
+def get_pair_health_data() -> dict:
+    """Get pair health data from state files."""
+    import json
+
+    result = {
+        "hospital": [],
+        "graveyard": [],
+        "active_pair": None,
+    }
+
+    # Read hospital and graveyard from pair_strategy_state.json
+    if PAIR_STRATEGY_STATE_FILE.exists():
+        try:
+            data = json.loads(PAIR_STRATEGY_STATE_FILE.read_text(encoding="utf-8"))
+            now = time.time()
+
+            # Process hospital entries
+            hospital = data.get("hospital", {})
+            for pair_key, entry in hospital.items():
+                if not isinstance(entry, dict):
+                    continue
+                ts = entry.get("ts", 0)
+                cooldown = entry.get("cooldown", 3600)
+                elapsed = now - ts
+                remaining = max(0, cooldown - elapsed)
+                is_ready = remaining <= 0
+
+                result["hospital"].append({
+                    "pair": pair_key,
+                    "reason": entry.get("reason", "unknown"),
+                    "added_at": ts,
+                    "cooldown_seconds": cooldown,
+                    "elapsed_seconds": elapsed,
+                    "remaining_seconds": remaining,
+                    "is_ready": is_ready,
+                    "visits": entry.get("visits", 1),
+                })
+
+            # Process graveyard entries
+            graveyard = data.get("graveyard", {})
+            for pair_key, entry in graveyard.items():
+                if not isinstance(entry, dict):
+                    continue
+                ts = entry.get("ts", 0)
+                ttl_days = entry.get("ttl_days")
+
+                result["graveyard"].append({
+                    "pair": pair_key,
+                    "reason": entry.get("reason", "unknown"),
+                    "added_at": ts,
+                    "ttl_days": ttl_days,
+                })
+
+        except Exception:
+            pass
+
+    # Read active pair
+    if ACTIVE_PAIR_FILE.exists():
+        try:
+            result["active_pair"] = json.loads(ACTIVE_PAIR_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    return result

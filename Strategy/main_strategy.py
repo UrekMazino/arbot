@@ -176,14 +176,14 @@ def main():
     mode_label = "DEMO" if is_demo else "LIVE"
     settle_label = ",".join(settle_ccy_filter) if settle_ccy_filter else "ALL"
     min_equity_label = f"{min_equity_filter_usdt:.2f}" if min_equity_filter_usdt > 0 else "off"
-    fallback_enabled = str(os.getenv("STATBOT_STRATEGY_FALLBACK_ENABLED", "1")).strip().lower() not in (
+    fallback_enabled = str(os.getenv("STATBOT_STRATEGY_INTERNAL_FALLBACK_ENABLED", "1")).strip().lower() not in (
         "0",
         "false",
         "no",
         "off",
     )
     try:
-        min_pairs_needed = int(float(os.getenv("STATBOT_STRATEGY_MIN_PAIRS", "10")))
+        min_pairs_needed = int(float(os.getenv("STATBOT_STRATEGY_INTERNAL_MIN_PAIRS", "10")))
     except (TypeError, ValueError):
         min_pairs_needed = 3
     if min_pairs_needed < 1:
@@ -271,24 +271,24 @@ def main():
     base_min_capital = min_capital_per_leg
 
     corr_candidates = _env_float_list(
-        "STATBOT_STRATEGY_CORR_TIERS",
+        "STATBOT_STRATEGY_INTERNAL_CORR_TIERS",
         [base_corr, 0.15, 0.10, 0.05, 0.0],
     )
     pvalue_candidates = _env_float_list(
-        "STATBOT_STRATEGY_PVALUE_MAX_TIERS",
+        "STATBOT_STRATEGY_INTERNAL_PVALUE_MAX_TIERS",
         # [base_pvalue_max, 0.05, 0.10, 0.15, 0.20],
         [base_pvalue_max, 0.05, 0.10],
     )
     zero_cross_candidates = _env_int_list(
-        "STATBOT_STRATEGY_ZERO_CROSS_TIERS",
+        "STATBOT_STRATEGY_INTERNAL_ZERO_CROSS_TIERS",
         [base_zero_cross, 7, 5, 3, 1],
     )
     equity_mults = _env_float_list(
-        "STATBOT_STRATEGY_MIN_EQUITY_MULTS",
+        "STATBOT_STRATEGY_INTERNAL_MIN_EQUITY_MULTS",
         [1.0,0.8,0.6,0.4,0.2,0.0],
     )
     min_capital_mults = _env_float_list(
-        "STATBOT_STRATEGY_MIN_CAPITAL_MULTS",
+        "STATBOT_STRATEGY_INTERNAL_MIN_CAPITAL_MULTS",
         [1.0,0.75,0.5,0.25,0.0],
     )
 

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add Platform/web/app/admin/dashboard/analytics/page.tsx Platform/web/components/panels.tsx Platform/web/lib/ui-classes.ts Platform/web/components/dashboard-shell.tsx)",
+      "Bash(npx tsc --noEmit)"
+    ]
+  }
+}

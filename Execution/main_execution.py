@@ -67,6 +67,7 @@ from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
     add_to_hospital,
+    remove_from_hospital,
     is_in_graveyard,
     is_in_hospital,
     is_good_pair_history,
@@ -883,6 +884,33 @@ def _run_strategy_refresh():
     return True
 
 
+def _run_strategy_at_startup():
+    """Run Strategy at startup to discover pairs if CSV is empty or missing."""
+    strategy_path = Path(__file__).resolve().parent.parent / "Strategy" / "main_strategy.py"
+    if not strategy_path.exists():
+        logger.error("Cannot run Strategy: script not found at %s", strategy_path)
+        return False
+
+    logger.warning("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")
+    print("Running Strategy to discover cointegrated pairs...")
+    print(f"   Strategy: {strategy_path}")
+    print("   This may take a few minutes...")
+
+    try:
+        env = os.environ.copy()
+        ret = subprocess.call([sys.executable, str(strategy_path)], env=env)
+    except Exception as exc:
+        logger.error("Strategy startup run failed: %s", exc)
+        return False
+
+    if ret != 0:
+        logger.error("Strategy startup run failed with exit code %s", ret)
+        return False
+
+    logger.info("Strategy startup run completed successfully.")
+    return True
+
+
 def _pair_meets_min_capital(t1, t2, per_leg_capital):
     remaining = get_min_capital_cooldown(t1, t2)
     if remaining > 0:
@@ -1218,8 +1246,13 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 if equity_usdt > 0 and min_equity and min_equity > equity_usdt:
                     continue
                 if not _pair_passes_switch_precheck(t1, t2):
+                    # Health check failed - remove from hospital instead of keeping forever
+                    logger.info("Removing hospital pair %s/%s: health check failed.", t1, t2)
+                    remove_from_hospital(t1, t2)
                     continue
-                logger.info("Prioritizing hospital pair %s/%s (cooldown complete).", t1, t2)
+                logger.info("Prioritizing hospital pair %s/%s (cooldown complete, health passed).", t1, t2)
+                # Remove from hospital now that cooldown is complete and pair is selected
+                remove_from_hospital(t1, t2)
                 return t1, t2
 
         for i in range(1, len(pairs)):
@@ -1588,32 +1621,26 @@ if __name__ == "__main__":
     poll_interval = 10  # Check every 10 seconds
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
-        logger.info("Cointegrated pairs CSV is empty or missing. Waiting for Strategy to discover pairs...")
-        print("â³ Waiting for Strategy to discover cointegrated pairs...")
-        print(f"   CSV path: {csv_path}")
-        print(f"   Will check every {poll_interval}s (max wait: {max_wait_seconds}s)")
+        logger.info("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")
+        print("Running Strategy to discover cointegrated pairs...")
 
-        start_wait = time.time()
-        while (time.time() - start_wait) < max_wait_seconds:
-            if csv_path.exists():
-                import pandas as pd
-                try:
-                    df = pd.read_csv(csv_path)
-                    if not df.empty and len(df) > 0:
-                        logger.info(f"âœ… CSV populated with {len(df)} pairs. Proceeding with startup...")
-                        print(f"âœ… Found {len(df)} cointegrated pairs. Starting bot...")
-                        break
-                except Exception as e:
-                    logger.debug(f"Error reading CSV during polling: {e}")
-
-            time.sleep(poll_interval)
-        else:
-            # Timeout reached
-            logger.error("Timeout waiting for cointegrated pairs CSV. Strategy may still be running.")
-            print("âŒ Timeout: No pairs found after 10 minutes.")
-            print("   Strategy may need more time or filters may be too strict.")
-            print("   Check Strategy logs and adjust min_zero_crossings or p_value filters.")
+        # Run Strategy to populate the CSV
+        strategy_success = _run_strategy_at_startup()
+        if not strategy_success:
+            logger.error("Strategy failed to produce pairs. Exiting.")
+            print("Strategy failed to produce pairs. Check logs for errors.")
             exit(1)
+
+        # Verify CSV now has data
+        if not csv_path.exists() or csv_path.stat().st_size <= 200:
+            logger.error("Strategy completed but no pairs found. Check filters.")
+            print("Strategy completed but no pairs found. Check filters.")
+            exit(1)
+
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        logger.info(f"CSV populated with {len(df)} pairs. Proceeding with startup...")
+        print(f"Found {len(df)} cointegrated pairs. Starting bot...")
 
     # Validate ticker configuration at startup
     try:

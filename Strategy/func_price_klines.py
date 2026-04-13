@@ -55,7 +55,7 @@ class RateLimiter:
             self.tokens -= 1
 
 
-_KLINE_RATE_LIMITER = RateLimiter(max_requests_per_second=_float_env("STATBOT_STRATEGY_KLINE_RPS", 5.0))
+_KLINE_RATE_LIMITER = RateLimiter(max_requests_per_second=_float_env("STATBOT_STRATEGY_INTERNAL_KLINE_RPS", 5.0))
 
 
 def get_price_klines(inst_id):

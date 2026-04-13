@@ -10,24 +10,29 @@ type LogStreamMessage = {
 /**
  * Hook for streaming logs via Server-Sent Events (SSE)
  */
-export function useLogStream(runKey: string = "latest") {
+export function useLogStream(defaultKey: string = "latest") {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const startStream = useCallback(() => {
+  const startStream = useCallback((key?: string) => {
+    if (typeof window === "undefined") return;
+
     // Cleanup previous stream
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
 
     setError(null);
+    setLogLines([]);
     setIsStreaming(true);
 
+    const streamKey = key ?? defaultKey;
+
     const eventSource = new EventSource(
-      `/api/admin/bot/logs/stream?run_key=${encodeURIComponent(runKey)}`,
+      `/api/admin/bot/logs/stream?run_key=${encodeURIComponent(streamKey)}`
     );
 
     eventSource.onmessage = (event) => {
@@ -41,7 +46,9 @@ export function useLogStream(runKey: string = "latest") {
         }
 
         if (Array.isArray(data.lines) && data.lines.length > 0) {
-          const newLines = data.lines.filter((line): line is string => typeof line === "string");
+          const newLines = data.lines.filter(
+            (line): line is string => typeof line === "string"
+          );
           setLogLines((prev) => [...prev.slice(-500), ...newLines]);
         }
       } catch {
@@ -59,7 +66,7 @@ export function useLogStream(runKey: string = "latest") {
     };
 
     eventSourceRef.current = eventSource;
-  }, [runKey]);
+  }, [defaultKey]);
 
   const stopStream = useCallback(() => {
     if (eventSourceRef.current) {

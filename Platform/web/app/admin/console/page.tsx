@@ -129,7 +129,7 @@ export default function AdminConsolePage() {
   } = useLogRuns();
 
   // SSE for real-time log streaming
-  const { logLines: streamLogLines, isStreaming } = useLogStream(selectedRunKey);
+  const { logLines: streamLogLines, isStreaming, startStream, stopStream } = useLogStream(selectedRunKey);
 
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
@@ -147,7 +147,21 @@ export default function AdminConsolePage() {
     if (redirectToLogin) {
       router.replace("/login?next=/admin/console");
     }
-  }, [router, setFloating]);
+  }, [
+    router,
+    setFloating,
+    setStatus,
+    setError,
+    setProfileResolved,
+    setMe,
+    setBotStatus,
+    setLogRuns,
+    setReportRuns,
+    setLocalLogTail,
+    setPairsHealth,
+    isFloating,
+    setSharedLogTail,
+  ]);
 
   const reportFileCount = useMemo(
     () => reportRuns.reduce((acc, row) => acc + row.file_count, 0),
@@ -158,8 +172,10 @@ export default function AdminConsolePage() {
   const canViewLogs = hasPermission(me, "view_logs");
   const canManageBot = hasPermission(me, "manage_bot");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
-  // Use shared logTail from context when floating, otherwise use local state
+  // Use shared logTail from context when floating, otherwise use local state + SSE stream
   const displayLogTail = isFloating ? sharedLogTail : localLogTail;
+  // Use SSE streamed lines when available and not floating
+  const displayLines = (!isFloating && streamLogLines.length > 0) ? streamLogLines : displayLogTail?.lines || [];
   const showingControlLog = displayLogTail?.run_key === "__control__";
 
   // Memoize run key options for dropdown to prevent recalculation
@@ -291,9 +307,20 @@ export default function AdminConsolePage() {
       } else if (runKey === "latest") {
         setSelectedRunKey("latest");
       }
-    },
-    [canViewLogs, waitingForRun, lastKnownRunKey],
-  );
+    }, [
+      canViewLogs,
+      waitingForRun,
+      lastKnownRunKey,
+      isFloating,
+      setSharedLogTail,
+      setLocalLogTail,
+      setRunningEquity,
+      setSessionPnl,
+      setRunUptime,
+      setPairHistory,
+      setPairCount,
+      setSelectedRunKey,
+    ]);
 
   // Effect to poll for new run when bot is starting
   useEffect(() => {
@@ -341,7 +368,22 @@ export default function AdminConsolePage() {
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [waitingForRun, canViewLogs, lastKnownRunKey]);
+  }, [
+    waitingForRun,
+    canViewLogs,
+    lastKnownRunKey,
+    selectedRunKey,
+    setLogRuns,
+    setLocalLogTail,
+    setRunningEquity,
+    setStartingEquity,
+    setSessionPnl,
+    setRunUptime,
+    setPairHistory,
+    setPairCount,
+    setBotStatus,
+    setSelectedRunKey,
+  ]);
 
   useEffect(() => {
     const storedEmail = getStoredAdminEmail();
@@ -381,6 +423,8 @@ export default function AdminConsolePage() {
       .finally(() => setProfileResolved(true));
   }, [clearAdminSession, loadAdminData, router]);
 
+  const [redirectHandled, setRedirectHandled] = useState(false);
+  
   useEffect(() => {
     if (!profileResolved || !me || canViewConsole) {
       return;
@@ -392,43 +436,62 @@ export default function AdminConsolePage() {
     if (fallbackHref && fallbackHref !== "/admin/console") {
       setStatus("Redirecting");
       setError("Console access is not enabled for your account.");
+      setRedirectHandled(true);
       router.replace(fallbackHref);
     }
-  }, [canViewConsole, fallbackHref, me, profileResolved, router]);
+  }, [
+    profileResolved,
+    me,
+    canViewConsole,
+    fallbackHref,
+    router,
+    setBotStatus,
+    setLogRuns,
+    setReportRuns,
+    setLocalLogTail,
+    setStatus,
+    setError,
+  ]);
 
   useEffect(() => {
-    // Only poll when floating terminal is NOT active (floating terminal handles its own polling)
+    // SSE streaming - replaces polling when not floating
     if (!canViewConsole || !canViewLogs || isFloating) return;
-    const timer = window.setInterval(() => {
-      refreshLogTail(selectedRunKey || "latest").catch((err: unknown) => {
-        if (isUnauthorizedError(err)) {
-          clearAdminSession("Session expired. Please sign in again.", true);
-          setError("Session expired. Please sign in again.");
-          return;
-        }
-        if (isForbiddenError(err)) {
-          setError("Insufficient permissions to read log tail.");
-        }
-      });
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [canViewConsole, canViewLogs, clearAdminSession, selectedRunKey, refreshLogTail, isFloating]);
+    startStream(selectedRunKey || "latest");
+    return () => stopStream();
+  }, [canViewConsole, canViewLogs, selectedRunKey, isFloating, startStream, stopStream]);
 
   // Poll pairs health data
   useEffect(() => {
     if (!canViewConsole) return;
+
+    let isMounted = true;
+    let inFlight = false;
     const timer = window.setInterval(async () => {
-      if (canManageBot || canViewLogs) {
-        try {
-          const health = await getAdminPairsHealth();
-          setPairsHealth(health);
-        } catch {
-          // Ignore errors for health polling
-        }
+      if (!canManageBot && !canViewLogs) return;
+      if (inFlight) return;
+
+      inFlight = true;
+
+      try {
+        const health = await getAdminPairsHealth();
+        if (isMounted) setPairsHealth(health);
+      } catch {
+        // ignore
+      } finally {
+        inFlight = false;
       }
     }, 10000);
-    return () => window.clearInterval(timer);
-  }, [canViewConsole, canManageBot, canViewLogs]);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+    };
+  }, [
+    canViewConsole,
+    canManageBot,
+    canViewLogs,
+    setPairsHealth,
+  ]);
 
   async function handleStart() {
     if (!me || !canManageBot) return;
@@ -634,8 +697,8 @@ export default function AdminConsolePage() {
                     Showing current startup/control output until a fresh run log is created.
                   </p>
                 ) : null}
-                <pre className="custom-scrollbar mt-2 h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
-                  {(displayLogTail?.lines || []).join("\n") || "No log lines yet."}
+                <pre className="custom-scrollbar mt-2 h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
                 </pre>
               </PanelCard>
 
@@ -805,8 +868,8 @@ export default function AdminConsolePage() {
                   Showing current startup/control output until a fresh run log is created.
                 </p>
               ) : null}
-              <pre className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100">
-                {(displayLogTail?.lines || []).join("\n") || "No log lines yet."}
+              <pre className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
               </pre>
             </div>
           </div>

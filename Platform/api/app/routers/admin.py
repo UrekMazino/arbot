@@ -105,7 +105,7 @@ async def admin_bot_logs_stream(
                     if new_lines:
                         # Send last 10 lines as update
                         tail_lines = new_lines[-10:] if len(new_lines) > 10 else new_lines
-                        payload = {"lines": [line.rstrip("\n") for line in tail_lines]}
+                        payload = {"lines": [line.rstrip("\n\r") for line in tail_lines]}
                         yield f"data: {json.dumps(payload)}\n\n"
                         last_pos = f.tell()
 

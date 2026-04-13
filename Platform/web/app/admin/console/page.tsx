@@ -30,6 +30,7 @@ import {
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
 import { UI_CLASSES } from "../../../lib/ui-classes";
+import { useBotStatus, useLogRuns } from "../../../lib/hooks";
 import { useFloatingTerminal } from "../../../context/floating-terminal-context";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";

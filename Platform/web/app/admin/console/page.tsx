@@ -460,6 +460,82 @@ export default function AdminConsolePage() {
     return () => stopStream();
   }, [canViewConsole, canViewLogs, selectedRunKey, isFloating, startStream, stopStream]);
 
+  // Poll log tail metadata (equity, pair_count) while using SSE for real-time logs
+  useEffect(() => {
+    if (!canViewConsole || !canViewLogs || isFloating) return;
+
+    let isMounted = true;
+    let inFlight = false;
+
+    const pollMetadata = async () => {
+      if (inFlight) return;
+      inFlight = true;
+
+      try {
+        const tail = await getAdminBotLogTail(selectedRunKey || "latest", 50);
+        if (!isMounted) return;
+
+        // Update localLogTail with fresh metadata (but keep existing lines if SSE is active)
+        if (streamLogLines.length > 0) {
+          // SSE is active, merge new metadata with SSE lines
+          setLocalLogTail({
+            ...tail,
+            lines: streamLogLines, // Keep SSE lines
+          });
+        } else {
+          // No SSE, use full tail data
+          setLocalLogTail(tail);
+        }
+
+        // Update equity data
+        if (tail?.equity !== null) {
+          setRunningEquity(tail.equity);
+          // Set starting equity only if not already set
+          if (startingEquity === null) {
+            setStartingEquity(tail.equity);
+          }
+        }
+        if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
+          setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
+        }
+        if (tail?.run_start_time !== null) {
+          setRunUptime(tail.run_start_time);
+        }
+        if (tail?.pair_history) {
+          setPairHistory(tail.pair_history);
+          setPairCount(tail.pair_count || 0);
+        }
+      } catch {
+        // Ignore errors
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    // Poll immediately then every 5 seconds
+    pollMetadata();
+    const timer = window.setInterval(pollMetadata, 5000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+    };
+  }, [
+    canViewConsole,
+    canViewLogs,
+    selectedRunKey,
+    isFloating,
+    streamLogLines,
+    startingEquity,
+    setLocalLogTail,
+    setRunningEquity,
+    setStartingEquity,
+    setSessionPnl,
+    setRunUptime,
+    setPairHistory,
+    setPairCount,
+  ]);
+
   // Poll pairs health data
   useEffect(() => {
     if (!canViewConsole) return;

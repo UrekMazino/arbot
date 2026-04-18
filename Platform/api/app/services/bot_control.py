@@ -43,8 +43,9 @@ STATE_FILE = EXECUTION_ROOT / "state" / "ui_bot_control.json"
 CONTROL_LOG_FILE = LOGS_ROOT / "superadmin_bot_control.log"
 STARTING_EQUITY_RE = re.compile(r"Starting equity:\s*(?P<eq>[-+]?\d+(?:\.\d+)?)\s*USDT", re.IGNORECASE)
 LOG_TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-CURRENT_PAIR_RE = re.compile(r"Current pair: (?P<pair>[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP)")
-PAIR_SWITCH_RE = re.compile(r"Switching from (?P<pair>[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP) to")
+PAIR_TEXT_PATTERN = r"[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP"
+CURRENT_PAIR_RE = re.compile(rf"Current pair: (?P<pair>{PAIR_TEXT_PATTERN})")
+PAIR_SWITCH_RE = re.compile(rf"Switching from (?P<from_pair>{PAIR_TEXT_PATTERN}) to (?P<to_pair>{PAIR_TEXT_PATTERN})")
 TICKER_CONFIG_RE = re.compile(
     r"Ticker configuration validated: ticker_1=(?P<t1>[A-Z0-9]+-[A-Z]+-SWAP), ticker_2=(?P<t2>[A-Z0-9]+-[A-Z]+-SWAP)"
 )
@@ -189,6 +190,59 @@ def _extract_pair_from_line(line: str) -> str | None:
         return f"{ticker_config_match.group('t1')}/{ticker_config_match.group('t2')}"
 
     return None
+
+
+def _append_pair_history_entry(pair_history: list[dict], pair: str | None, start_ts: float | None, end_ts: float | None) -> None:
+    if not pair or start_ts is None or end_ts is None:
+        return
+    duration = float(end_ts) - float(start_ts)
+    if duration < 0:
+        return
+    pair_history.append(
+        {
+            "pair": pair,
+            "duration_seconds": duration,
+        }
+    )
+
+
+def _extract_pair_history(lines: list[str], *, run_start_time: float | None, last_update_time: float | None) -> list[dict]:
+    pair_history: list[dict] = []
+    current_pair: str | None = None
+    current_pair_start_ts: float | None = None
+
+    for line in lines:
+        line_ts = _parse_log_timestamp(line)
+        if line_ts is None:
+            continue
+
+        new_pair = _extract_pair_from_line(line)
+        if new_pair is not None and new_pair != current_pair:
+            _append_pair_history_entry(pair_history, current_pair, current_pair_start_ts, line_ts)
+            current_pair = new_pair
+            current_pair_start_ts = line_ts
+
+        switch_match = PAIR_SWITCH_RE.search(line)
+        if not switch_match:
+            continue
+
+        from_pair = switch_match.group("from_pair")
+        to_pair = switch_match.group("to_pair")
+
+        if current_pair is None:
+            current_pair = from_pair
+            current_pair_start_ts = run_start_time if run_start_time is not None else line_ts
+        elif current_pair != from_pair:
+            _append_pair_history_entry(pair_history, current_pair, current_pair_start_ts, line_ts)
+            current_pair = from_pair
+            current_pair_start_ts = run_start_time if run_start_time is not None else line_ts
+
+        _append_pair_history_entry(pair_history, current_pair, current_pair_start_ts, line_ts)
+        current_pair = to_pair
+        current_pair_start_ts = line_ts
+
+    _append_pair_history_entry(pair_history, current_pair, current_pair_start_ts, last_update_time)
+    return pair_history
 
 
 def _extract_start_snapshot_from_lines(lines: list[str]) -> dict[str, float | None]:
@@ -616,6 +670,18 @@ def _save_run_to_database(run_key: str, requested_by: str | None = None) -> dict
         return {"saved": False, "error": str(e)}
 
 
+def _send_stop_signal(pid: int, sig: int) -> None:
+    if os.name != "nt":
+        os.killpg(os.getpgid(pid), sig)
+        return
+
+    ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+    if sig == getattr(signal, "SIGINT", None) and ctrl_break is not None:
+        os.kill(pid, ctrl_break)
+        return
+    os.kill(pid, sig)
+
+
 def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
     state = get_bot_status()
     pid = int(state.get("pid") or 0)
@@ -628,17 +694,16 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
         return state
 
     terminated = False
-    detail = "stop_sent"
+    detail = "interrupt_sent"
+    interrupt_sent = False
     try:
-        if os.name != "nt":
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        else:
-            os.kill(pid, signal.SIGTERM)
+        _send_stop_signal(pid, signal.SIGINT)
+        interrupt_sent = True
     except Exception as exc:
-        detail = f"term_signal_failed:{exc}"
+        detail = f"interrupt_signal_failed:{exc}"
 
     deadline = time.time() + max(float(timeout_seconds), 1.0)
-    while time.time() < deadline:
+    while interrupt_sent and time.time() < deadline:
         if not _pid_exists(pid):
             terminated = True
             break
@@ -646,10 +711,21 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
 
     if not terminated:
         try:
-            if os.name != "nt":
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            else:
-                os.kill(pid, signal.SIGKILL)
+            _send_stop_signal(pid, signal.SIGTERM)
+            detail = "term_sent"
+        except Exception as exc:
+            detail = f"term_signal_failed:{exc}"
+
+        term_deadline = min(deadline + 2.0, time.time() + 2.0)
+        while time.time() < term_deadline:
+            if not _pid_exists(pid):
+                terminated = True
+                break
+            time.sleep(0.2)
+
+    if not terminated:
+        try:
+            _send_stop_signal(pid, signal.SIGKILL)
             terminated = True
             detail = "killed"
         except Exception as exc:
@@ -741,6 +817,14 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             "run_start_time": stored_run_start_time,
         }
 
+    analysis_lines = output_lines
+    analysis_line_count = max(int(lines), 5000)
+    if analysis_line_count > len(output_lines):
+        try:
+            analysis_lines = _tail_lines(log_file, analysis_line_count)
+        except Exception:
+            analysis_lines = output_lines
+
     if resolved_run_key and resolved_run_key != "__control__":
         snapshot = _read_run_start_snapshot(log_file)
         if snapshot.get("starting_equity") is not None or snapshot.get("run_start_time") is not None:
@@ -760,20 +844,17 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
     session_pnl_pct = None
     run_start_time = stored_run_start_time
     last_update_time = None  # Track most recent timestamp
-    pair_history: list[dict] = []
-    current_pair = None
-    current_pair_start_ts = None
 
     # First pass: find run_start_time (earliest timestamp) and last_update_time (most recent)
-    for line in output_lines:
+    for line in analysis_lines:
         line_ts = _parse_log_timestamp(line)
         if line_ts is not None:
             if run_start_time is None:
                 run_start_time = line_ts
             last_update_time = line_ts
 
-    # Second pass: process equity and pair history (can still use reverse iteration)
-    for line in reversed(output_lines):
+    # Second pass: process equity using the latest available PnL line.
+    for line in reversed(analysis_lines):
         # Extract equity from PnL line
         if "PnL:" in line and "Equity:" in line:
             try:
@@ -787,47 +868,11 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             except Exception:
                 pass
 
-        # Parse timestamp from log line - only for pair tracking, NOT for run_start_time
-        line_ts = _parse_log_timestamp(line)
-        if line_ts is not None:
-            try:
-                # Don't set run_start_time here - it was already set in first pass
-
-                # Track pair switches
-                new_pair = _extract_pair_from_line(line)
-                if new_pair is not None:
-                    if current_pair and current_pair != new_pair:
-                        # Record previous pair's duration.
-                        duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
-                        pair_history.append({
-                            "pair": current_pair,
-                            "duration_seconds": duration,
-                        })
-                    current_pair = new_pair
-                    current_pair_start_ts = line_ts
-
-                switch_match = PAIR_SWITCH_RE.search(line)
-                if switch_match:
-                    switched_pair = switch_match.group("pair")
-                    if current_pair == switched_pair:
-                        # Pair was switched away.
-                        duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
-                        pair_history.append({
-                            "pair": current_pair,
-                            "duration_seconds": duration,
-                        })
-                        current_pair = None
-                        current_pair_start_ts = None
-            except Exception:
-                pass
-
-    # Add the last active pair if still active - use last_update_time for duration
-    if current_pair and current_pair_start_ts and last_update_time:
-        duration = last_update_time - current_pair_start_ts
-        pair_history.append({
-            "pair": current_pair,
-            "duration_seconds": duration,
-        })
+    pair_history = _extract_pair_history(
+        analysis_lines,
+        run_start_time=run_start_time,
+        last_update_time=last_update_time,
+    )
 
     # If run_start_time wasn't set, use last_update_time as fallback (for runs with timestamps)
     if run_start_time is None and last_update_time is not None:

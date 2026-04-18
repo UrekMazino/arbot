@@ -197,6 +197,7 @@ def get_symbols_by_maker_fees(
         inst_id = instrument['instId']
         result = {
             'symbol': inst_id,
+            'instId': inst_id,
             'base_coin': instrument.get('baseCcy', ''),
             'quote_coin': instrument.get('quoteCcy', ''),
             'settle_coin': instrument.get('settleCcy', ''),
@@ -207,7 +208,10 @@ def get_symbols_by_maker_fees(
             'category': fee_info.get('category', ''),
             'inst_type': inst_type,
             'min_sz': _safe_float(instrument.get('minSz')),
-            'lot_sz': _safe_float(instrument.get('lotSz'))
+            'lot_sz': _safe_float(instrument.get('lotSz')),
+            'ctVal': _safe_float(instrument.get('ctVal')),
+            'ctMult': _safe_float(instrument.get('ctMult')),
+            'ctValCcy': instrument.get('ctValCcy', ''),
         }
 
         # Track all fees

@@ -277,6 +277,35 @@ def _safe_float(value):
         return None
 
 
+def _parse_quote_ccy(inst_id):
+    if not inst_id:
+        return ""
+    parts = str(inst_id).split("-")
+    if len(parts) >= 2:
+        return parts[1].upper()
+    return ""
+
+
+def _resolve_contract_value_quote(last_price, instrument_info=None, inst_id=""):
+    if not isinstance(instrument_info, dict):
+        return 0.0
+
+    ct_val = _safe_float(instrument_info.get("ctVal"))
+    ct_mult = _safe_float(instrument_info.get("ctMult"))
+    if ct_mult in (None, 0):
+        ct_mult = 1.0
+    if ct_val is None or ct_val <= 0 or last_price is None or last_price <= 0:
+        return 0.0
+
+    ct_val_ccy = str(instrument_info.get("ctValCcy") or "").upper()
+    inst_ref = inst_id or instrument_info.get("instId") or instrument_info.get("symbol") or ""
+    quote_ccy = _parse_quote_ccy(inst_ref)
+    contract_units = ct_val * ct_mult
+    if ct_val_ccy and quote_ccy and ct_val_ccy == quote_ccy:
+        return float(contract_units)
+    return float(last_price) * float(contract_units)
+
+
 def _get_min_order_qty(min_sz, lot_sz):
     try:
         min_sz_dec = Decimal(str(min_sz)) if min_sz is not None else Decimal("0")
@@ -298,13 +327,39 @@ def _get_min_order_qty(min_sz, lot_sz):
     return float(steps * lot_sz_dec)
 
 
-def _calculate_min_capital(last_price, min_sz, lot_sz):
+def _calculate_min_capital(last_price, min_sz, lot_sz, instrument_info=None, inst_id=""):
     if last_price is None or last_price <= 0:
         return 0.0, 0.0
     min_qty = _get_min_order_qty(min_sz, lot_sz)
     if min_qty <= 0:
         return 0.0, 0.0
+    contract_value_quote = _resolve_contract_value_quote(last_price, instrument_info, inst_id=inst_id)
+    if contract_value_quote > 0:
+        return min_qty, float(min_qty) * contract_value_quote
     return min_qty, float(min_qty) * float(last_price)
+
+
+def _calculate_orderbook_depth_usdt(levels, instrument_info=None, inst_id="", fallback_price=None):
+    total = 0.0
+    for level in levels or []:
+        try:
+            price = _safe_float(level[0] if len(level) > 0 else None)
+            size = _safe_float(level[1] if len(level) > 1 else None)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if price is None or price <= 0 or size is None or size <= 0:
+            continue
+
+        contract_value_quote = _resolve_contract_value_quote(price, instrument_info, inst_id=inst_id)
+        if contract_value_quote > 0:
+            total += size * contract_value_quote
+            continue
+
+        ref_price = price if price > 0 else fallback_price
+        if ref_price is None or ref_price <= 0:
+            continue
+        total += ref_price * size
+    return float(total)
 
 
 def _average_quote_volume(klines, window):
@@ -388,13 +443,16 @@ def get_cointegrated_pairs(
         if lot_sz is None and isinstance(info, dict):
             lot_sz = info.get('lotSz')
         last_close = series[-1] if series.size else None
-        min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz)
+        contract_value_quote = _resolve_contract_value_quote(last_close, info, inst_id=sym)
+        min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz, info, inst_id=sym)
         avg_quote_volume = _average_quote_volume(klines, liquidity_window)
         symbol_meta[sym] = {
             "min_qty": min_qty,
             "min_capital": min_capital,
             "last_close": last_close,
             "avg_quote_volume": avg_quote_volume,
+            "contract_value_quote": contract_value_quote,
+            "instrument_info": info,
         }
 
     symbols = list(series_by_symbol.keys())
@@ -430,8 +488,6 @@ def get_cointegrated_pairs(
 
     # Load graveyard to exclude failed pairs
     graveyard_pairs = set()
-    # Load hospital pairs with expired cooldowns to include in discovery
-    hospital_pairs = set()
     try:
         execution_state_path = Path(__file__).resolve().parent.parent / "Execution" / "state" / "pair_strategy_state.json"
         if execution_state_path.exists():
@@ -446,9 +502,10 @@ def get_cointegrated_pairs(
                         graveyard_pairs.add(f"{parts[1]}/{parts[0]}")
                 logger.info(f"Loaded {len(graveyard)} pairs from graveyard (will exclude from discovery)")
 
-                # Load hospital pairs with expired cooldowns (ready to be re-discovered)
+                # Expired hospital entries are already eligible again, but stale state may still contain them.
                 hospital = exec_state.get("hospital", {})
                 now = time.time()
+                expired_hospital_count = 0
                 for pair_key, entry in hospital.items():
                     if not isinstance(entry, dict):
                         continue
@@ -456,17 +513,123 @@ def get_cointegrated_pairs(
                     cooldown = entry.get("cooldown", 3600)
                     elapsed = now - ts
                     if elapsed >= cooldown:
-                        # Cooldown expired, include this pair in discovery
-                        hospital_pairs.add(pair_key)
-                        parts = pair_key.split('/')
-                        if len(parts) == 2:
-                            hospital_pairs.add(f"{parts[1]}/{parts[0]}")
-                if hospital_pairs:
-                    logger.info(f"Loaded {len(hospital_pairs)} hospital pairs with expired cooldowns (will include in discovery)")
+                        expired_hospital_count += 1
+                if expired_hospital_count:
+                    logger.info(
+                        "Found %d expired hospital entries in state (already eligible for discovery).",
+                        expired_hospital_count,
+                    )
     except Exception as e:
         logger.warning(f"Could not load graveyard/hospital: {e}")
 
     filtered_breakdown = {}
+    orderbook_cache = {}
+
+    def _get_orderbook_liquidity_status(ticker):
+        cached = orderbook_cache.get(ticker)
+        if cached is not None:
+            return cached
+
+        meta = symbol_meta.get(ticker, {})
+        instrument_info = meta.get("instrument_info") or {}
+        last_close = meta.get("last_close")
+
+        try:
+            orderbook_res = market_session.get_orderbook(instId=ticker, sz=50)
+            if orderbook_res.get("code") != "0":
+                result = {
+                    "ok": False,
+                    "reason": "orderbook_fetch_error",
+                    "detail": orderbook_res.get("msg") or "unknown_error",
+                }
+                logger.warning("Failed to fetch orderbook for %s: %s", ticker, result["detail"])
+                orderbook_cache[ticker] = result
+                return result
+
+            data = orderbook_res.get("data", [])
+            if not data:
+                result = {
+                    "ok": False,
+                    "reason": "orderbook_fetch_error",
+                    "detail": "empty_data",
+                }
+                logger.warning("Failed to fetch orderbook for %s: empty response data", ticker)
+                orderbook_cache[ticker] = result
+                return result
+
+            bids = data[0].get("bids", [])
+            asks = data[0].get("asks", [])
+            if len(bids) < min_orderbook_levels or len(asks) < min_orderbook_levels:
+                result = {
+                    "ok": False,
+                    "reason": "orderbook_levels",
+                    "bid_levels": len(bids),
+                    "ask_levels": len(asks),
+                }
+                logger.info(
+                    "Skipping thin orderbook: %s (bids=%d, asks=%d levels)",
+                    ticker,
+                    len(bids),
+                    len(asks),
+                )
+                orderbook_cache[ticker] = result
+                return result
+
+            try:
+                bid_depth_usdt = _calculate_orderbook_depth_usdt(
+                    bids,
+                    instrument_info=instrument_info,
+                    inst_id=ticker,
+                    fallback_price=last_close,
+                )
+                ask_depth_usdt = _calculate_orderbook_depth_usdt(
+                    asks,
+                    instrument_info=instrument_info,
+                    inst_id=ticker,
+                    fallback_price=last_close,
+                )
+            except (ValueError, TypeError, IndexError) as exc:
+                result = {
+                    "ok": False,
+                    "reason": "orderbook_calc_error",
+                    "detail": str(exc),
+                }
+                logger.warning("Error calculating orderbook depth for %s: %s", ticker, exc)
+                orderbook_cache[ticker] = result
+                return result
+
+            result = {
+                "ok": bid_depth_usdt >= min_orderbook_depth_usdt and ask_depth_usdt >= min_orderbook_depth_usdt,
+                "reason": "orderbook_depth",
+                "bid_depth_usdt": bid_depth_usdt,
+                "ask_depth_usdt": ask_depth_usdt,
+            }
+            if not result["ok"]:
+                logger.info(
+                    "Skipping low liquidity: %s (bid_depth=%.0f USDT, ask_depth=%.0f USDT, min=%.0f USDT)",
+                    ticker,
+                    bid_depth_usdt,
+                    ask_depth_usdt,
+                    min_orderbook_depth_usdt,
+                )
+            else:
+                logger.debug(
+                    "%s liquidity OK: bids=%.0f USDT, asks=%.0f USDT",
+                    ticker,
+                    bid_depth_usdt,
+                    ask_depth_usdt,
+                )
+            orderbook_cache[ticker] = result
+            return result
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "reason": "orderbook_fetch_error",
+                "detail": str(exc),
+            }
+            logger.warning("Error checking orderbook depth for %s: %s", ticker, exc)
+            orderbook_cache[ticker] = result
+            return result
 
     for sym_1, sym_2 in combinations(symbols, 2):
         series_1_log = log_series_by_symbol[sym_1]
@@ -511,47 +674,10 @@ def get_cointegrated_pairs(
             orderbook_check_passed = True
 
             for ticker in [sym_1, sym_2]:
-                try:
-                    orderbook_res = market_session.get_orderbook(instId=ticker, sz=50)
-                    if orderbook_res.get("code") == "0":
-                        data = orderbook_res.get("data", [])
-                        if data:
-                            bids = data[0].get("bids", [])
-                            asks = data[0].get("asks", [])
-
-                            # Check minimum levels first (quick sanity check)
-                            if len(bids) < min_orderbook_levels or len(asks) < min_orderbook_levels:
-                                logger.info(f"Skipping thin orderbook: {ticker} (bids={len(bids)}, asks={len(asks)} levels)")
-                                filtered_breakdown["orderbook_levels"] = filtered_breakdown.get("orderbook_levels", 0) + 1
-                                orderbook_check_passed = False
-                                break
-
-                            # Calculate actual USDT depth (price × quantity)
-                            try:
-                                bid_depth_usdt = sum(float(bid[0]) * float(bid[1]) for bid in bids)
-                                ask_depth_usdt = sum(float(ask[0]) * float(ask[1]) for ask in asks)
-
-                                if bid_depth_usdt < min_orderbook_depth_usdt or ask_depth_usdt < min_orderbook_depth_usdt:
-                                    logger.info(f"Skipping low liquidity: {ticker} (bid_depth={bid_depth_usdt:.0f} USDT, ask_depth={ask_depth_usdt:.0f} USDT, min={min_orderbook_depth_usdt:.0f} USDT)")
-                                    filtered_breakdown["orderbook_depth"] = filtered_breakdown.get("orderbook_depth", 0) + 1
-                                    orderbook_check_passed = False
-                                    break
-
-                                logger.debug(f"{ticker} liquidity OK: bids={bid_depth_usdt:.0f} USDT, asks={ask_depth_usdt:.0f} USDT")
-
-                            except (ValueError, TypeError, IndexError) as e:
-                                logger.warning(f"Error calculating orderbook depth for {ticker}: {e}")
-                                filtered_breakdown["orderbook_calc_error"] = filtered_breakdown.get("orderbook_calc_error", 0) + 1
-                                orderbook_check_passed = False
-                                break
-                    else:
-                        logger.warning(f"Failed to fetch orderbook for {ticker}: {orderbook_res.get('msg')}")
-                        filtered_breakdown["orderbook_fetch_error"] = filtered_breakdown.get("orderbook_fetch_error", 0) + 1
-                        orderbook_check_passed = False
-                        break
-                except Exception as e:
-                    logger.warning(f"Error checking orderbook depth for {ticker}: {e}")
-                    filtered_breakdown["orderbook_fetch_error"] = filtered_breakdown.get("orderbook_fetch_error", 0) + 1
+                orderbook_status = _get_orderbook_liquidity_status(ticker)
+                if not orderbook_status.get("ok"):
+                    reason = orderbook_status.get("reason") or "orderbook_fetch_error"
+                    filtered_breakdown[reason] = filtered_breakdown.get(reason, 0) + 1
                     orderbook_check_passed = False
                     break
 

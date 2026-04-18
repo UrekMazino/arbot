@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -191,6 +192,53 @@ def test_tail_run_log_infers_pair_history_from_startup_ticker_configuration(tmp_
     ]
 
 
+def test_tail_run_log_keeps_pair_history_when_switch_markers_scroll_out_of_display_tail(tmp_path, monkeypatch):
+    logs_root = tmp_path / "Logs" / "v1"
+    run_key = "run_05_20260418_130000"
+    run_dir = logs_root / run_key
+    run_dir.mkdir(parents=True)
+    log_file = run_dir / "log_20260418_130000.log"
+
+    lines = [
+        "2026-04-18 13:00:00 INFO Starting equity: 1500.00 USDT",
+        "2026-04-18 13:00:01 INFO Ticker configuration validated: ticker_1=CRV-USDT-SWAP, ticker_2=ETHW-USDT-SWAP, signal_positive=ETHW-USDT-SWAP, signal_negative=CRV-USDT-SWAP",
+        "2026-04-18 13:05:00 INFO Current pair: CRV-USDT-SWAP/ETHW-USDT-SWAP",
+        "2026-04-18 13:05:10 INFO Switching from CRV-USDT-SWAP/ETHW-USDT-SWAP to BAND-USDT-SWAP/CHZ-USDT-SWAP",
+    ]
+    for idx in range(200):
+        minute = 5 + ((11 + idx) // 60)
+        second = (11 + idx) % 60
+        lines.append(f"2026-04-18 13:{minute:02d}:{second:02d} INFO Heartbeat {idx}")
+    log_file.write_text("\n".join(lines), encoding="utf-8")
+
+    state_file = tmp_path / "state" / "ui_bot_control.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps({"run_key": run_key}), encoding="utf-8")
+
+    fake_run = SimpleNamespace(id="run-db-5", run_key=run_key, start_equity=None, start_ts=None)
+    fake_session = _FakeSession(run=fake_run)
+
+    monkeypatch.setattr(bot_control, "LOGS_ROOT", logs_root)
+    monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", logs_root / "superadmin_bot_control.log")
+    monkeypatch.setattr(bot_control, "STATE_FILE", state_file)
+    monkeypatch.setattr(bot_control, "SessionLocal", lambda: fake_session)
+
+    tail = bot_control.tail_run_log(run_key=run_key, lines=50)
+
+    assert tail["line_count"] == 50
+    assert tail["pair_count"] == 2
+    assert tail["pair_history"] == [
+        {
+            "pair": "CRV-USDT-SWAP/ETHW-USDT-SWAP",
+            "duration_seconds": 309.0,
+        },
+        {
+            "pair": "BAND-USDT-SWAP/CHZ-USDT-SWAP",
+            "duration_seconds": 200.0,
+        },
+    ]
+
+
 def test_ensure_run_prefers_existing_run_key_record():
     existing_run = SimpleNamespace(id="db-run-123", run_key="run_02_20260418_121500")
     fake_session = _FakeSession(run=existing_run)
@@ -235,3 +283,27 @@ def test_apply_run_metrics_from_event_updates_start_and_live_equity():
     assert run.session_pnl == 4.35
     assert run.status == "stopped"
     assert run.end_ts == datetime(2026, 4, 18, 12, 30, 0, tzinfo=timezone.utc)
+
+
+def test_stop_bot_prefers_interrupt_for_graceful_shutdown(monkeypatch):
+    writes = []
+    signal_calls = []
+
+    monkeypatch.setattr(
+        bot_control,
+        "get_bot_status",
+        lambda: {"running": True, "pid": 123, "requested_by": "", "detail": "started"},
+    )
+    monkeypatch.setattr(bot_control, "_normalize_status", lambda state: state)
+    monkeypatch.setattr(bot_control, "_write_state", lambda state: writes.append(dict(state)))
+    monkeypatch.setattr(bot_control, "_pid_exists", lambda _pid: False)
+    monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
+    monkeypatch.setattr(bot_control.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(bot_control.os, "killpg", lambda pgid, sig: signal_calls.append((pgid, sig)), raising=False)
+
+    result = bot_control.stop_bot(requested_by="tester@example.com", timeout_seconds=1.0)
+
+    assert signal_calls == [(123, signal.SIGINT)]
+    assert result["running"] is False
+    assert result["detail"] == "stopped"
+    assert writes[-1]["requested_by"] == "tester@example.com"

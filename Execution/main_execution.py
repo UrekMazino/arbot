@@ -6,6 +6,7 @@ import logging
 import math
 import time
 import sys
+import signal
 import subprocess
 import threading
 from datetime import datetime
@@ -67,7 +68,6 @@ from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
     add_to_hospital,
-    remove_from_hospital,
     is_in_graveyard,
     is_in_hospital,
     is_good_pair_history,
@@ -79,8 +79,8 @@ from func_pair_state import (
     record_pair_trade_result,
     get_pair_history_stats,
     should_blacklist_pair,
-    get_hospital_entries,
     get_hospital_remaining,
+    drain_ready_hospital_pairs,
     normalize_pair_key,
     get_last_health_score,
     get_last_switch_reason,
@@ -102,6 +102,21 @@ from func_pair_state import (
 
 # Setup logging
 logger = get_logger("main_execution")
+
+
+def _handle_shutdown_signal(signum, _frame):
+    try:
+        signal_name = signal.Signals(signum).name
+    except Exception:
+        signal_name = str(signum)
+    logger.warning("Received %s. Requesting graceful shutdown...", signal_name)
+    raise KeyboardInterrupt
+
+
+try:
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+except Exception:
+    pass
 
 SWITCH_RESULT_SWITCHED = "switched"
 SWITCH_RESULT_BLOCKED = "blocked"
@@ -1267,20 +1282,11 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             logger.warning("Equity unavailable; skipping min-equity filter.")
 
         pair_by_key = {pair.get("pair_key"): pair for pair in pairs if pair.get("pair_key")}
-        hospital_entries = get_hospital_entries()
-        ready_hospital = []
-        if hospital_entries:
-            now = time.time()
-            for key, entry in hospital_entries.items():
-                if not isinstance(entry, dict):
-                    continue
-                ts = entry.get("ts") or 0
-                cooldown = entry.get("cooldown") or 0
-                if ts and cooldown >= 0 and (now - ts) >= cooldown:
-                    ready_hospital.append((key, ts))
+        ready_hospital, removed_hospital = drain_ready_hospital_pairs(pair_by_key.keys())
+        if removed_hospital:
+            logger.info("Removed %d expired hospital entries from state.", removed_hospital)
 
         if ready_hospital:
-            ready_hospital.sort(key=lambda item: item[1])
             for key, _ts in ready_hospital:
                 pair = pair_by_key.get(key)
                 if not pair:
@@ -1298,13 +1304,9 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 if equity_usdt > 0 and min_equity and min_equity > equity_usdt:
                     continue
                 if not _pair_passes_switch_precheck(t1, t2):
-                    # Health check failed - remove from hospital instead of keeping forever
-                    logger.info("Removing hospital pair %s/%s: health check failed.", t1, t2)
-                    remove_from_hospital(t1, t2)
+                    logger.info("Skipping ready hospital pair %s/%s: health check failed.", t1, t2)
                     continue
-                logger.info("Prioritizing hospital pair %s/%s (cooldown complete, health passed).", t1, t2)
-                # Remove from hospital now that cooldown is complete and pair is selected
-                remove_from_hospital(t1, t2)
+                logger.info("Prioritizing ready hospital pair %s/%s (cooldown complete, state cleared).", t1, t2)
                 return t1, t2
 
         for i in range(1, len(pairs)):
@@ -1672,6 +1674,17 @@ if __name__ == "__main__":
     max_wait_seconds = 600  # Wait up to 10 minutes for Strategy to populate CSV
     poll_interval = 10  # Check every 10 seconds
     starting_equity, balance_res, avail_bal, avail_eq = _capture_starting_equity_snapshot()
+
+    try:
+        ready_hospital, removed = drain_ready_hospital_pairs()
+        if removed:
+            logger.info(
+                "Cleaned %d expired hospital entries before startup (%d ready for reuse).",
+                removed,
+                len(ready_hospital),
+            )
+    except Exception as exc:
+        logger.warning("Failed to cleanup hospital entries: %s", exc)
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
         logger.info("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")

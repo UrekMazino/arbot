@@ -375,6 +375,53 @@ def get_hospital_entries():
         return {}
     return entries
 
+def drain_ready_hospital_pairs(valid_pair_keys=None):
+    state = load_pair_state()
+    hospital = state.get("hospital", {})
+    if not isinstance(hospital, dict):
+        return [], 0
+
+    valid_keys = None
+    if valid_pair_keys is not None:
+        valid_keys = {str(key) for key in valid_pair_keys if key}
+
+    now = time.time()
+    ready_pairs = []
+    removed = 0
+
+    for pair_key in list(hospital.keys()):
+        entry = hospital.get(pair_key)
+        if not isinstance(entry, dict):
+            hospital.pop(pair_key, None)
+            removed += 1
+            continue
+
+        ts = entry.get("ts") or 0
+        cooldown = entry.get("cooldown") or HOSPITAL_DEFAULT_COOLDOWN_SECONDS
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = 0.0
+        try:
+            cooldown = float(cooldown)
+        except (TypeError, ValueError):
+            cooldown = float(HOSPITAL_DEFAULT_COOLDOWN_SECONDS)
+
+        if not ts or (now - ts) < max(cooldown, 0.0):
+            continue
+
+        hospital.pop(pair_key, None)
+        removed += 1
+        if valid_keys is None or pair_key in valid_keys:
+            ready_pairs.append((pair_key, ts))
+
+    if removed:
+        state["hospital"] = hospital
+        save_pair_state(state)
+
+    ready_pairs.sort(key=lambda item: item[1])
+    return ready_pairs, removed
+
 def get_hospital_remaining(t1, t2):
     key = normalize_pair_key(t1, t2)
     if not key:

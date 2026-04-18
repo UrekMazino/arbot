@@ -877,7 +877,7 @@ export default function AdminConsolePage() {
                                   : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
                                 const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
                                 return (
-                                  <tr key={entry.pair}>
+                                  <tr key={`${entry.pair}-${idx}`}>
                                     <td className="text-xs text-gray-500">{idx + 1}</td>
                                     <td className="font-mono text-xs">{entry.pair}</td>
                                     <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>

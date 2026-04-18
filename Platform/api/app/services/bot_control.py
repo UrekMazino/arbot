@@ -7,6 +7,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -40,6 +41,13 @@ REPORTS_ROOT = WORKSPACE_ROOT / "Reports" / "v1"
 ENV_FILE = EXECUTION_ROOT / ".env"
 STATE_FILE = EXECUTION_ROOT / "state" / "ui_bot_control.json"
 CONTROL_LOG_FILE = LOGS_ROOT / "superadmin_bot_control.log"
+STARTING_EQUITY_RE = re.compile(r"Starting equity:\s*(?P<eq>[-+]?\d+(?:\.\d+)?)\s*USDT", re.IGNORECASE)
+LOG_TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+CURRENT_PAIR_RE = re.compile(r"Current pair: (?P<pair>[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP)")
+PAIR_SWITCH_RE = re.compile(r"Switching from (?P<pair>[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP) to")
+TICKER_CONFIG_RE = re.compile(
+    r"Ticker configuration validated: ticker_1=(?P<t1>[A-Z0-9]+-[A-Z]+-SWAP), ticker_2=(?P<t2>[A-Z0-9]+-[A-Z]+-SWAP)"
+)
 
 
 def _default_bot_command() -> list[str]:
@@ -121,6 +129,274 @@ def _tail_lines(path: Path, line_count: int) -> list[str]:
         for raw in handle:
             lines.append(raw.rstrip("\n"))
     return list(lines)
+
+
+def _head_lines(path: Path, line_count: int) -> list[str]:
+    max_lines = max(min(int(line_count), 5000), 1)
+    lines: list[str] = []
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for idx, raw in enumerate(handle):
+            if idx >= max_lines:
+                break
+            lines.append(raw.rstrip("\n"))
+    return lines
+
+
+def _coerce_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_log_timestamp(line: str) -> float | None:
+    ts_match = LOG_TIMESTAMP_RE.match(line)
+    if not ts_match:
+        return None
+    try:
+        return datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+    except Exception:
+        return None
+
+
+def _extract_log_timestamp_text(line: str) -> str | None:
+    ts_match = LOG_TIMESTAMP_RE.match(line)
+    if not ts_match:
+        return None
+    return ts_match.group(1)
+
+
+def _format_log_threshold_text(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _extract_pair_from_line(line: str) -> str | None:
+    current_pair_match = CURRENT_PAIR_RE.search(line)
+    if current_pair_match:
+        return current_pair_match.group("pair")
+
+    ticker_config_match = TICKER_CONFIG_RE.search(line)
+    if ticker_config_match:
+        return f"{ticker_config_match.group('t1')}/{ticker_config_match.group('t2')}"
+
+    return None
+
+
+def _extract_start_snapshot_from_lines(lines: list[str]) -> dict[str, float | None]:
+    starting_equity = None
+    run_start_time = None
+    for line in lines:
+        if starting_equity is None:
+            match = STARTING_EQUITY_RE.search(line)
+            if match:
+                starting_equity = _coerce_float(match.group("eq"))
+        if run_start_time is None:
+            run_start_time = _parse_log_timestamp(line)
+        if starting_equity is not None and run_start_time is not None:
+            break
+    return {
+        "starting_equity": starting_equity,
+        "run_start_time": run_start_time,
+    }
+
+
+def _read_run_start_snapshot(log_file: Path | None) -> dict[str, float | None]:
+    if not log_file or not log_file.exists():
+        return {"starting_equity": None, "run_start_time": None}
+    try:
+        header_lines = _head_lines(log_file, 200)
+    except Exception:
+        return {"starting_equity": None, "run_start_time": None}
+    return _extract_start_snapshot_from_lines(header_lines)
+
+
+def _read_recent_start_snapshot(
+    log_file: Path | None,
+    *,
+    line_count: int = 400,
+    started_after_text: str | None = None,
+) -> dict[str, float | None]:
+    if not log_file or not log_file.exists():
+        return {"starting_equity": None, "run_start_time": None}
+    try:
+        lines = _tail_lines(log_file, line_count)
+    except Exception:
+        return {"starting_equity": None, "run_start_time": None}
+
+    starting_equity = None
+    run_start_time = None
+    for line in lines:
+        line_text_ts = _extract_log_timestamp_text(line)
+        if started_after_text is not None and line_text_ts is not None and line_text_ts < started_after_text:
+            continue
+        line_ts = _parse_log_timestamp(line)
+        if run_start_time is None and line_ts is not None:
+            run_start_time = line_ts
+        match = STARTING_EQUITY_RE.search(line)
+        if match:
+            starting_equity = _coerce_float(match.group("eq"))
+            if line_ts is not None:
+                run_start_time = line_ts
+    return {
+        "starting_equity": starting_equity,
+        "run_start_time": run_start_time,
+    }
+
+
+def _load_run_snapshot(run_key: str | None) -> dict[str, float | None]:
+    selected = str(run_key or "").strip()
+    if not selected or selected == "__control__":
+        return {"starting_equity": None, "run_start_time": None}
+
+    state = _read_state()
+    state_started_at = _parse_iso_timestamp(state.get("started_at"))
+    state_started_text = _format_log_threshold_text(state_started_at)
+    state_snapshot = {"starting_equity": None, "run_start_time": None}
+    if state.get("run_key") == selected:
+        state_snapshot = {
+            "starting_equity": _coerce_float(state.get("starting_equity")),
+            "run_start_time": _coerce_float(state.get("run_start_time")),
+        }
+
+    db_snapshot = {"starting_equity": None, "run_start_time": None}
+    try:
+        db: Session = SessionLocal()
+        try:
+            run = db.execute(select(Run).where(Run.run_key == selected)).scalar_one_or_none()
+            if run:
+                db_snapshot = {
+                    "starting_equity": _coerce_float(run.start_equity),
+                    "run_start_time": run.start_ts.timestamp() if getattr(run, "start_ts", None) else None,
+                }
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    log_run_key, log_file = _resolve_run_log_file(selected)
+    log_snapshot = _read_run_start_snapshot(log_file if log_run_key == selected else None)
+    control_snapshot = {"starting_equity": None, "run_start_time": None}
+    if state.get("run_key") == selected:
+        control_snapshot = _read_recent_start_snapshot(
+            CONTROL_LOG_FILE,
+            line_count=500,
+            started_after_text=state_started_text,
+        )
+
+    return {
+        "starting_equity": (
+            state_snapshot["starting_equity"]
+            if state_snapshot["starting_equity"] is not None
+            else db_snapshot["starting_equity"]
+            if db_snapshot["starting_equity"] is not None
+            else log_snapshot["starting_equity"]
+            if log_snapshot["starting_equity"] is not None
+            else control_snapshot["starting_equity"]
+        ),
+        "run_start_time": (
+            state_snapshot["run_start_time"]
+            if state_snapshot["run_start_time"] is not None
+            else db_snapshot["run_start_time"]
+            if db_snapshot["run_start_time"] is not None
+            else log_snapshot["run_start_time"]
+            if log_snapshot["run_start_time"] is not None
+            else control_snapshot["run_start_time"]
+        ),
+    }
+
+
+def _update_current_run_state_snapshot(
+    run_key: str,
+    *,
+    run_log_file: Path | None = None,
+    starting_equity: float | None = None,
+    run_start_time: float | None = None,
+) -> None:
+    state = _read_state()
+    if state.get("run_key") != run_key:
+        return
+
+    changed = False
+    if run_log_file is not None:
+        run_log_text = str(run_log_file)
+        if state.get("run_log_file") != run_log_text:
+            state["run_log_file"] = run_log_text
+            changed = True
+    if starting_equity is not None and _coerce_float(state.get("starting_equity")) != float(starting_equity):
+        state["starting_equity"] = float(starting_equity)
+        changed = True
+    if run_start_time is not None and _coerce_float(state.get("run_start_time")) != float(run_start_time):
+        state["run_start_time"] = float(run_start_time)
+        changed = True
+
+    if changed:
+        _write_state(state)
+
+
+def _persist_run_start_snapshot(
+    run_key: str,
+    *,
+    starting_equity: float | None = None,
+    run_start_time: float | None = None,
+) -> dict:
+    if not run_key:
+        return {"saved": False, "detail": "missing_run_key"}
+
+    _update_current_run_state_snapshot(
+        run_key,
+        starting_equity=starting_equity,
+        run_start_time=run_start_time,
+    )
+
+    if starting_equity is None and run_start_time is None:
+        return {"saved": False, "detail": "empty_snapshot"}
+
+    try:
+        db: Session = SessionLocal()
+        try:
+            run = db.execute(select(Run).where(Run.run_key == run_key)).scalar_one_or_none()
+            if not run:
+                return {"saved": False, "detail": "run_not_found"}
+
+            changed = False
+            if starting_equity is not None and _coerce_float(run.start_equity) != float(starting_equity):
+                run.start_equity = float(starting_equity)
+                changed = True
+            if run_start_time is not None and getattr(run, "start_ts", None) is None:
+                run.start_ts = datetime.fromtimestamp(float(run_start_time), tz=timezone.utc)
+                changed = True
+            if changed:
+                db.commit()
+            return {"saved": changed, "detail": "updated" if changed else "unchanged"}
+        finally:
+            db.close()
+    except Exception as exc:
+        return {"saved": False, "detail": f"db_error:{exc}"}
+
+
+def _backfill_run_start_snapshot(run_key: str, run_log_file: Path, timeout_seconds: float = 45.0) -> None:
+    deadline = time.time() + max(float(timeout_seconds), 1.0)
+    while time.time() < deadline:
+        snapshot = _read_run_start_snapshot(run_log_file)
+        starting_equity = snapshot.get("starting_equity")
+        run_start_time = snapshot.get("run_start_time")
+        if starting_equity is not None or run_start_time is not None:
+            _persist_run_start_snapshot(
+                run_key,
+                starting_equity=starting_equity,
+                run_start_time=run_start_time,
+            )
+            return
+        time.sleep(0.5)
 
 
 def _latest_run_log_file() -> tuple[str | None, Path | None]:
@@ -255,6 +531,9 @@ def start_bot(requested_by: str | None = None) -> dict:
                         pass
         run_seq = max_seq + 1
     run_key = f"run_{run_seq:02d}_{run_id}"
+    run_log_dir = LOGS_ROOT / run_key
+    run_log_file = run_log_dir / f"log_{run_id}.log"
+    env["STATBOT_LOG_PATH"] = str(run_log_file)
 
     try:
         proc = subprocess.Popen(
@@ -286,11 +565,22 @@ def start_bot(requested_by: str | None = None) -> dict:
         "requested_by": requested_by or "",
         "control_log_file": str(CONTROL_LOG_FILE),
         "run_key": run_key,
+        "run_log_file": str(run_log_file),
+        "starting_equity": None,
+        "run_start_time": None,
     }
     _write_state(state)
 
     # Save run to database
     _save_run_to_database(run_key, requested_by)
+
+    snapshot_thread = threading.Thread(
+        target=_backfill_run_start_snapshot,
+        args=(run_key, run_log_file),
+        daemon=True,
+        name=f"bot-start-snapshot-{run_key}",
+    )
+    snapshot_thread.start()
 
     return _normalize_status(state)
 
@@ -375,6 +665,21 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
 
 def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
     resolved_run_key, log_file, source = _resolve_live_tail_target(run_key)
+    state = _read_state()
+    snapshot_run_key = resolved_run_key
+    if resolved_run_key == "__control__":
+        active_run_key = str(state.get("run_key") or "").strip()
+        if active_run_key:
+            snapshot_run_key = active_run_key
+    run_snapshot = _load_run_snapshot(snapshot_run_key)
+    starting_equity = run_snapshot.get("starting_equity")
+    stored_run_start_time = run_snapshot.get("run_start_time")
+    if snapshot_run_key and snapshot_run_key != "__control__":
+        _persist_run_start_snapshot(
+            snapshot_run_key,
+            starting_equity=starting_equity,
+            run_start_time=stored_run_start_time,
+        )
     if not log_file:
         if CONTROL_LOG_FILE.exists():
             try:
@@ -388,8 +693,10 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
                     "updated_at": _utc_iso_now(),
                     "detail": f"control_log_read_failed:{exc}",
                     "equity": None,
+                    "starting_equity": starting_equity,
                     "session_pnl": None,
                     "session_pnl_pct": None,
+                    "run_start_time": stored_run_start_time,
                 }
             return {
                 "run_key": "__control__",
@@ -399,8 +706,10 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
                 "updated_at": _utc_iso_now(),
                 "detail": "control_log_fallback",
                 "equity": None,
+                "starting_equity": starting_equity,
                 "session_pnl": None,
                 "session_pnl_pct": None,
+                "run_start_time": stored_run_start_time,
             }
         return {
             "run_key": resolved_run_key,
@@ -410,8 +719,10 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             "updated_at": _utc_iso_now(),
             "detail": "log_not_found",
             "equity": None,
+            "starting_equity": starting_equity,
             "session_pnl": None,
             "session_pnl_pct": None,
+            "run_start_time": stored_run_start_time,
         }
     try:
         output_lines = _tail_lines(log_file, lines)
@@ -424,15 +735,30 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
             "updated_at": _utc_iso_now(),
             "detail": f"log_read_failed:{exc}",
             "equity": None,
+            "starting_equity": starting_equity,
             "session_pnl": None,
             "session_pnl_pct": None,
+            "run_start_time": stored_run_start_time,
         }
+
+    if resolved_run_key and resolved_run_key != "__control__":
+        snapshot = _read_run_start_snapshot(log_file)
+        if snapshot.get("starting_equity") is not None or snapshot.get("run_start_time") is not None:
+            _persist_run_start_snapshot(
+                resolved_run_key,
+                starting_equity=snapshot.get("starting_equity"),
+                run_start_time=snapshot.get("run_start_time"),
+            )
+            if starting_equity is None:
+                starting_equity = snapshot.get("starting_equity")
+            if stored_run_start_time is None:
+                stored_run_start_time = snapshot.get("run_start_time")
 
     # Extract equity info from last PnL line
     equity = None
     session_pnl = None
     session_pnl_pct = None
-    run_start_time = None
+    run_start_time = stored_run_start_time
     last_update_time = None  # Track most recent timestamp
     pair_history: list[dict] = []
     current_pair = None
@@ -440,15 +766,11 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
 
     # First pass: find run_start_time (earliest timestamp) and last_update_time (most recent)
     for line in output_lines:
-        ts_match = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
-        if ts_match:
-            try:
-                line_ts = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
-                if run_start_time is None:
-                    run_start_time = line_ts
-                last_update_time = line_ts
-            except Exception:
-                pass
+        line_ts = _parse_log_timestamp(line)
+        if line_ts is not None:
+            if run_start_time is None:
+                run_start_time = line_ts
+            last_update_time = line_ts
 
     # Second pass: process equity and pair history (can still use reverse iteration)
     for line in reversed(output_lines):
@@ -466,39 +788,36 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
                 pass
 
         # Parse timestamp from log line - only for pair tracking, NOT for run_start_time
-        ts_match = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", line)
-        if ts_match:
+        line_ts = _parse_log_timestamp(line)
+        if line_ts is not None:
             try:
-                line_ts = datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
                 # Don't set run_start_time here - it was already set in first pass
 
                 # Track pair switches
-                if "Current pair:" in line:
-                    pair_match = re.search(r"Current pair: ([A-Z]+-USDT-SWAP/[A-Z]+-USDT-SWAP)", line)
-                    if pair_match:
-                        new_pair = pair_match.group(1)
-                        if current_pair and current_pair != new_pair:
-                            # Record previous pair's duration
-                            duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
-                            pair_history.append({
-                                "pair": current_pair,
-                                "duration_seconds": duration,
-                            })
-                        current_pair = new_pair
-                        current_pair_start_ts = line_ts
-                elif "Switching from" in line:
-                    from_match = re.search(r"Switching from ([A-Z]+-USDT-SWAP/[A-Z]+-USDT-SWAP) to", line)
-                    if from_match:
-                        switched_pair = from_match.group(1)
-                        if current_pair == switched_pair:
-                            # Pair was switched away
-                            duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
-                            pair_history.append({
-                                "pair": current_pair,
-                                "duration_seconds": duration,
-                            })
-                            current_pair = None
-                            current_pair_start_ts = None
+                new_pair = _extract_pair_from_line(line)
+                if new_pair is not None:
+                    if current_pair and current_pair != new_pair:
+                        # Record previous pair's duration.
+                        duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
+                        pair_history.append({
+                            "pair": current_pair,
+                            "duration_seconds": duration,
+                        })
+                    current_pair = new_pair
+                    current_pair_start_ts = line_ts
+
+                switch_match = PAIR_SWITCH_RE.search(line)
+                if switch_match:
+                    switched_pair = switch_match.group("pair")
+                    if current_pair == switched_pair:
+                        # Pair was switched away.
+                        duration = line_ts - current_pair_start_ts if current_pair_start_ts else 0
+                        pair_history.append({
+                            "pair": current_pair,
+                            "duration_seconds": duration,
+                        })
+                        current_pair = None
+                        current_pair_start_ts = None
             except Exception:
                 pass
 
@@ -525,6 +844,7 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
         "updated_at": last_log_iso,  # Use actual last log time instead of current time
         "detail": source,
         "equity": equity,
+        "starting_equity": starting_equity,
         "session_pnl": session_pnl,
         "session_pnl_pct": session_pnl_pct,
         "run_start_time": run_start_time,

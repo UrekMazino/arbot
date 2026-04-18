@@ -188,6 +188,61 @@ export default function AdminConsolePage() {
     [logRuns],
   );
 
+  const applyTailMetrics = useCallback(
+    (
+      tail: AdminLogTail | null,
+      options?: {
+        preserveStartingEquity?: boolean;
+        preserveRunningEquity?: boolean;
+        preserveRunUptime?: boolean;
+      },
+    ) => {
+      if (!tail) return;
+
+      if (tail.starting_equity !== null) {
+        setStartingEquity(tail.starting_equity);
+      } else if (!options?.preserveStartingEquity) {
+        setStartingEquity(null);
+      }
+
+      if (tail.equity !== null) {
+        setRunningEquity(tail.equity);
+      } else if (tail.starting_equity !== null) {
+        setRunningEquity(tail.starting_equity);
+      } else if (!options?.preserveRunningEquity) {
+        setRunningEquity(null);
+      }
+
+      if (tail.session_pnl !== null && tail.session_pnl_pct !== null) {
+        setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
+      } else {
+        setSessionPnl(null);
+      }
+
+      if (tail.run_start_time !== null) {
+        setRunUptime(tail.run_start_time);
+      } else if (!options?.preserveRunUptime) {
+        setRunUptime(null);
+      }
+
+      if (tail.pair_history) {
+        setPairHistory(tail.pair_history);
+        setPairCount(tail.pair_count || 0);
+      } else {
+        setPairHistory([]);
+        setPairCount(0);
+      }
+    },
+    [
+      setStartingEquity,
+      setRunningEquity,
+      setSessionPnl,
+      setRunUptime,
+      setPairHistory,
+      setPairCount,
+    ],
+  );
+
   const loadAdminData = useCallback(async () => {
       const meData = await getMe();
       setMe(meData);
@@ -233,22 +288,7 @@ export default function AdminConsolePage() {
       if (canLoadLogs) {
         const displayLogTailData = await getAdminBotLogTail(runKeyToLoad, 320);
         setLocalLogTail(displayLogTailData);
-        // Set equity data on initial load
-        if (displayLogTailData?.equity !== null) {
-          setStartingEquity(displayLogTailData.equity);
-          setRunningEquity(displayLogTailData.equity);
-        }
-        if (displayLogTailData?.session_pnl !== null && displayLogTailData?.session_pnl_pct !== null) {
-          setSessionPnl({ amount: displayLogTailData.session_pnl, pct: displayLogTailData.session_pnl_pct });
-        }
-        // Set uptime and pair history
-        if (displayLogTailData?.run_start_time !== null) {
-          setRunUptime(displayLogTailData.run_start_time);
-        }
-        if (displayLogTailData?.pair_history) {
-          setPairHistory(displayLogTailData.pair_history);
-          setPairCount(displayLogTailData.pair_count || 0);
-        }
+        applyTailMetrics(displayLogTailData);
         if (displayLogTailData?.run_key && displayLogTailData.run_key !== "__control__") {
           setSelectedRunKey(displayLogTailData.run_key);
         } else {
@@ -256,7 +296,7 @@ export default function AdminConsolePage() {
         }
       }
     },
-    [],
+    [applyTailMetrics],
   );
 
   const refreshLogTail = useCallback(
@@ -268,21 +308,11 @@ export default function AdminConsolePage() {
       }
       const next = await getAdminBotLogTail(runKey || "latest", 320);
       setLocalLogTail(next);
-      // Update equity data from log tail
-      if (next?.equity !== null) {
-        setRunningEquity(next.equity);
-      }
-      if (next?.session_pnl !== null && next?.session_pnl_pct !== null) {
-        setSessionPnl({ amount: next.session_pnl, pct: next.session_pnl_pct });
-      }
-      // Update uptime and pair history
-      if (next?.run_start_time !== null) {
-        setRunUptime(next.run_start_time);
-      }
-      if (next?.pair_history) {
-        setPairHistory(next.pair_history);
-        setPairCount(next.pair_count || 0);
-      }
+      applyTailMetrics(next, {
+        preserveStartingEquity: true,
+        preserveRunningEquity: true,
+        preserveRunUptime: true,
+      });
       // Also update shared context when floating
       if (isFloating) setSharedLogTail(next);
 
@@ -320,6 +350,7 @@ export default function AdminConsolePage() {
       setPairHistory,
       setPairCount,
       setSelectedRunKey,
+      applyTailMetrics,
     ]);
 
   // Effect to poll for new run when bot is starting
@@ -338,25 +369,7 @@ export default function AdminConsolePage() {
           // New run detected! Fetch its log tail
           const tail = await getAdminBotLogTail(latestRunKey, 320);
           setLocalLogTail(tail);
-          // Update equity data from log tail
-          if (tail?.equity !== null) {
-            setRunningEquity(tail.equity);
-            // Set starting equity when switching to a new run
-            if (selectedRunKey !== latestRunKey) {
-              setStartingEquity(tail.equity);
-            }
-          }
-          if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
-            setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
-          }
-          // Update uptime and pair history
-          if (tail?.run_start_time !== null) {
-            setRunUptime(tail.run_start_time);
-          }
-          if (tail?.pair_history) {
-            setPairHistory(tail.pair_history);
-            setPairCount(tail.pair_count || 0);
-          }
+          applyTailMetrics(tail);
           // Also update the bot status to get latest_run_key updated
           const statusData = await getAdminBotStatus();
           setBotStatus(statusData);
@@ -383,6 +396,7 @@ export default function AdminConsolePage() {
     setPairCount,
     setBotStatus,
     setSelectedRunKey,
+    applyTailMetrics,
   ]);
 
   useEffect(() => {
@@ -487,24 +501,11 @@ export default function AdminConsolePage() {
           setLocalLogTail(tail);
         }
 
-        // Update equity data
-        if (tail?.equity !== null) {
-          setRunningEquity(tail.equity);
-          // Set starting equity only if not already set
-          if (startingEquity === null) {
-            setStartingEquity(tail.equity);
-          }
-        }
-        if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
-          setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
-        }
-        if (tail?.run_start_time !== null) {
-          setRunUptime(tail.run_start_time);
-        }
-        if (tail?.pair_history) {
-          setPairHistory(tail.pair_history);
-          setPairCount(tail.pair_count || 0);
-        }
+        applyTailMetrics(tail, {
+          preserveStartingEquity: true,
+          preserveRunningEquity: true,
+          preserveRunUptime: true,
+        });
       } catch {
         // Ignore errors
       } finally {
@@ -526,14 +527,8 @@ export default function AdminConsolePage() {
     selectedRunKey,
     isFloating,
     streamLogLines,
-    startingEquity,
     setLocalLogTail,
-    setRunningEquity,
-    setStartingEquity,
-    setSessionPnl,
-    setRunUptime,
-    setPairHistory,
-    setPairCount,
+    applyTailMetrics,
   ]);
 
   // Poll pairs health data
@@ -833,7 +828,7 @@ export default function AdminConsolePage() {
                   </div>
                   <div className="pt-1">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pairs Used</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{pairCount > 0 ? pairCount : "n/a"}</p>
+                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{pairCount}</p>
                   </div>
                   <div className="pt-1">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
@@ -851,71 +846,57 @@ export default function AdminConsolePage() {
                       // Fetch equity for newly selected run
                       if (newKey !== "latest") {
                         const tail = await getAdminBotLogTail(newKey, 320);
-                        if (tail?.equity !== null) {
-                          setStartingEquity(tail.equity);
-                          setRunningEquity(tail.equity);
-                        }
-                        if (tail?.session_pnl !== null && tail?.session_pnl_pct !== null) {
-                          setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
-                        } else {
-                          setSessionPnl(null);
-                        }
-                        // Update uptime and pair history
-                        if (tail?.run_start_time !== null) {
-                          setRunUptime(tail.run_start_time);
-                        }
-                        if (tail?.pair_history) {
-                          setPairHistory(tail.pair_history);
-                          setPairCount(tail.pair_count || 0);
-                        } else {
-                          setPairHistory([]);
-                          setPairCount(0);
-                        }
+                        applyTailMetrics(tail);
                       }
                     }}>
                       <option value="latest">latest</option>
                       {runKeyOptions}
                     </select>
                   </div>
+                  <div className="col-span-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pair History</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{pairHistory.length} pairs used in this run</p>
+                    </div>
+                    {pairHistory.length > 0 ? (
+                      <div className="mt-2">
+                        <TableFrame compact>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>#</th>
+                                <th>Pair</th>
+                                <th>Uptime</th>
+                                <th>Duration</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pairHistory.map((entry, idx) => {
+                                const totalDuration = runUptime && localLogTail?.updated_at
+                                  ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
+                                  : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
+                                const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
+                                return (
+                                  <tr key={entry.pair}>
+                                    <td className="text-xs text-gray-500">{idx + 1}</td>
+                                    <td className="font-mono text-xs">{entry.pair}</td>
+                                    <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>
+                                    <td className="text-xs text-gray-500">
+                                      {entry.duration_seconds > 0 ? `${pct.toFixed(1)}%` : "0%"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </TableFrame>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No pair history recorded yet.</p>
+                    )}
+                  </div>
                 </div>
               </PanelCard>
-
-              {/* Pair History Table */}
-              {pairHistory.length > 0 && (
-                <PanelCard title="Pair History" subtitle={`${pairHistory.length} pairs used in this run`}>
-                  <TableFrame>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Pair</th>
-                          <th>Uptime</th>
-                          <th>Duration</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {pairHistory.map((entry, idx) => {
-                          // Calculate total run duration consistently
-                          const totalDuration = runUptime && localLogTail?.updated_at
-                            ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
-                            : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
-                          const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
-                          return (
-                            <tr key={entry.pair}>
-                              <td className="text-xs text-gray-500">{idx + 1}</td>
-                              <td className="font-mono text-xs">{entry.pair}</td>
-                              <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>
-                              <td className="text-xs text-gray-500">
-                                {entry.duration_seconds > 0 ? `${pct.toFixed(1)}%` : "0%"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </TableFrame>
-                </PanelCard>
-              )}
             </section>
 
             {/* Fullscreen Terminal Modal - simplified without drag */}

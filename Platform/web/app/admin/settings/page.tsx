@@ -43,6 +43,7 @@ const SETTING_TOOLTIPS: Record<string, { description: string; default: string }>
   ROUTER_MODE: { description: "Strategy router mode: active or passive", default: "active" },
   LIQUIDITY_PCT: { description: "Minimum liquidity percentage filter", default: "0" },
   CORR_MIN: { description: "Minimum correlation coefficient (0-1)", default: "0.6" },
+  MIN_CAPITAL_PER_LEG: { description: "Minimum capital per leg in USDT (0=any)", default: "0" },
   MIN_P_VALUE: { description: "Minimum p-value for cointegration (scientific notation)", default: "1e-08" },
   MAX_P_VALUE: { description: "Maximum p-value for cointegration", default: "0.01" },
   MIN_ZERO_CROSSINGS: { description: "Minimum zero crossings for valid pair", default: "3" },

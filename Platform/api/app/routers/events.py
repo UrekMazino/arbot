@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -35,16 +36,51 @@ def _ensure_run(db: Session, run_id: str, bot_instance_id: str) -> Run:
     run = db.get(Run, run_id)
     if run:
         return run
+    run = db.execute(select(Run).where(Run.run_key == run_id)).scalar_one_or_none()
+    if run:
+        return run
     run = Run(
         id=run_id,
         bot_instance_id=bot_instance_id,
-        run_key=f"ingest-{run_id[:8]}",
+        run_key=run_id if str(run_id).startswith("run_") else f"ingest-{run_id[:8]}",
         status="running",
         start_ts=datetime.now(timezone.utc),
     )
     db.add(run)
     db.flush()
     return run
+
+
+def _coerce_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_run_metrics_from_event(run: Run, event) -> None:
+    payload = event.payload or {}
+
+    if event.event_type == "status_update":
+        status_text = str(payload.get("status") or "").strip().lower()
+        if status_text == "startup_complete":
+            start_equity = _coerce_float(payload.get("starting_equity_usdt"))
+            if start_equity is not None:
+                run.start_equity = start_equity
+            run.status = "running"
+        elif status_text in {"manual_stop", "run_end"}:
+            run.status = "stopped"
+            run.end_ts = _coerce_ts(event.ts)
+
+    if event.event_type == "heartbeat":
+        end_equity = _coerce_float(payload.get("equity_usdt"))
+        session_pnl = _coerce_float(payload.get("session_pnl_usdt"))
+        if end_equity is not None:
+            run.end_equity = end_equity
+        if session_pnl is not None:
+            run.session_pnl = session_pnl
 
 
 @router.post("/{bot_instance_id}/events/batch", response_model=EventIngestResultOut)
@@ -69,10 +105,10 @@ def ingest_events_batch(
 
     for event in body.events:
         try:
-            _ensure_run(db, event.run_id, bot_instance_id)
+            run = _ensure_run(db, event.run_id, bot_instance_id)
             row = RunEvent(
                 event_id=event.event_id,
-                run_id=event.run_id,
+                run_id=run.id,
                 bot_instance_id=bot_instance_id,
                 ts=_coerce_ts(event.ts),
                 event_type=event.event_type,
@@ -81,11 +117,12 @@ def ingest_events_batch(
             )
             db.add(row)
             db.flush()
+            _apply_run_metrics_from_event(run, event)
             accepted += 1
 
             if row.severity in {"warn", "error", "critical"}:
                 alert = Alert(
-                    run_id=event.run_id,
+                    run_id=run.id,
                     event_id=event.event_id,
                     severity=row.severity,
                     alert_type=event.event_type,

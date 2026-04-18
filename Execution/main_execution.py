@@ -732,6 +732,58 @@ def _get_equity_usdt():
     return 0.0
 
 
+def _extract_usdt_balance_snapshot(balance_res):
+    starting_equity = 0.0
+    avail_bal = 0.0
+    avail_eq = 0.0
+    if not balance_res or balance_res.get("code") != "0":
+        return starting_equity, avail_bal, avail_eq
+
+    details = balance_res.get("data", [{}])[0].get("details", [])
+    for det in details:
+        if det.get("ccy") == "USDT":
+            try:
+                starting_equity = float(det.get("eq", 0) or 0)
+            except (TypeError, ValueError):
+                starting_equity = 0.0
+            try:
+                avail_bal = float(det.get("availBal", 0) or 0)
+            except (TypeError, ValueError):
+                avail_bal = 0.0
+            try:
+                avail_eq = float(det.get("availEq", 0) or 0)
+            except (TypeError, ValueError):
+                avail_eq = 0.0
+            break
+    return starting_equity, avail_bal, avail_eq
+
+
+def _capture_starting_equity_snapshot():
+    balance_res = None
+    starting_equity = 0.0
+    avail_bal = 0.0
+    avail_eq = 0.0
+    try:
+        balance_res = _get_account_balance_safe()
+        starting_equity, avail_bal, avail_eq = _extract_usdt_balance_snapshot(balance_res)
+        logger.info("Starting equity: %.2f USDT", starting_equity)
+    except Exception as exc:
+        logger.warning("Failed to capture starting equity: %s", exc)
+
+    try:
+        logger.info(
+            "Balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s | pos_mode=%s",
+            avail_bal,
+            avail_eq,
+            td_mode,
+            pos_mode,
+        )
+    except Exception as exc:
+        logger.warning("Failed to log balance snapshot: %s", exc)
+
+    return starting_equity, balance_res, avail_bal, avail_eq
+
+
 def _parse_min_equity(value):
     try:
         parsed = float(value)
@@ -1619,6 +1671,7 @@ if __name__ == "__main__":
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
     max_wait_seconds = 600  # Wait up to 10 minutes for Strategy to populate CSV
     poll_interval = 10  # Check every 10 seconds
+    starting_equity, balance_res, avail_bal, avail_eq = _capture_starting_equity_snapshot()
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
         logger.info("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")
@@ -1687,8 +1740,11 @@ if __name__ == "__main__":
     
     # Session tracking
     try:
-        bot_start_time = float(os.getenv("STATBOT_START_TS") or "")
+        bot_start_time = float(os.getenv("STATBOT_START_TS") or "0")
     except ValueError:
+        bot_start_time = time.time()
+    # Preserve bot_start_time across pair switches - if STATBOT_START_TS is set and valid, use it
+    if bot_start_time <= 0:
         bot_start_time = time.time()
     pair_start_time = time.time()
     last_health_check = time.time()  # First check on startup or after 1h
@@ -1747,41 +1803,9 @@ if __name__ == "__main__":
     else:
         logger.warning("Strategy router ACTIVE mode enabled: strategy gate + policy enforcement is on.")
 
-    # Capture starting equity for session P&L tracking
-    starting_equity = 0.0
-    balance_res = None
-    try:
-        balance_res = _get_account_balance_safe()
-        if balance_res and balance_res.get("code") == "0":
-            details = balance_res.get("data", [{}])[0].get("details", [])
-            for det in details:
-                if det.get("ccy") == "USDT":
-                    starting_equity = float(det.get("eq", 0))
-                    break
-        logger.info(f"ðŸ“Š Starting equity: {starting_equity:.2f} USDT")
-    except Exception as e:
-        logger.warning(f"Failed to capture starting equity: {e}")
-
-    # One-time balance snapshot for cross vs isolated margin checks
-    try:
-        avail_bal = 0.0
-        avail_eq = 0.0
-        if balance_res and balance_res.get("code") == "0":
-            details = balance_res.get("data", [{}])[0].get("details", [])
-            for det in details:
-                if det.get("ccy") == "USDT":
-                    avail_bal = float(det.get("availBal", 0))
-                    avail_eq = float(det.get("availEq", 0))
-                    break
-        logger.info(
-            "ðŸ’° Balance snapshot (USDT): availBal=%.2f | availEq=%.2f | td_mode=%s | pos_mode=%s",
-            avail_bal,
-            avail_eq,
-            td_mode,
-            pos_mode,
-        )
-    except Exception as exc:
-        logger.warning("Failed to log balance snapshot: %s", exc)
+    # Retry startup balance capture once if the earliest snapshot was unavailable.
+    if (not balance_res or balance_res.get("code") != "0") and starting_equity <= 0:
+        starting_equity, balance_res, avail_bal, avail_eq = _capture_starting_equity_snapshot()
 
     # Save status
     save_status(status_dict)
@@ -3124,8 +3148,5 @@ if __name__ == "__main__":
             logger=logger,
         )
         flush_events(force=True, logger=logger)
-        if os.getenv("STATBOT_MANAGED") != "1":
-            _run_report_generator()
+        _run_report_generator()
         sys.exit(run_end_exit_code)
-
-

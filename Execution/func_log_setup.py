@@ -90,6 +90,7 @@ def setup_logging():
                 _LOG_SETUP_DONE = True
                 return
 
+    # File handler (plain text)
     handler = RotatingFileHandler(
         log_file,
         maxBytes=max_bytes,
@@ -98,6 +99,30 @@ def setup_logging():
     )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     root.addHandler(handler)
+
+    # Console handler (colored output)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+
+    # ANSI color codes
+    RESET = "\033[0m"
+    COLORS = {
+        "DEBUG": "\033[36m",    # Cyan
+        "INFO": "\033[32m",     # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",    # Red
+        "CRITICAL": "\033[35m", # Magenta
+    }
+
+    class ColoredFormatter(logging.Formatter):
+        def format(self, record):
+            levelname = record.levelname
+            color = COLORS.get(levelname, RESET)
+            record.levelname = f"{color}{levelname}{RESET}"
+            return super().format(record)
+
+    console_handler.setFormatter(ColoredFormatter("%(asctime)s %(levelname)s %(message)s"))
+    root.addHandler(console_handler)
 
     # Quiet noisy HTTP client logs (OKX SDK uses httpx/httpcore under the hood).
     logging.getLogger("httpx").setLevel(logging.WARNING)

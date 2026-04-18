@@ -6,7 +6,6 @@ import {
   getAdminBotStatus,
   getAdminPairsHealth,
   getAdminBotLogTail,
-  AdminLogTail,
   AdminPairsHealth,
 } from "../../lib/api";
 
@@ -59,11 +58,15 @@ export function useBotStatus(pollingEnabled: boolean = true) {
         if (!tail) return;
 
         // Starting equity (set once when run loads)
-        if (tail.equity !== null && startingEquity === null) {
+        if (tail.starting_equity !== null) {
+          setStartingEquity(tail.starting_equity);
+        } else if (tail.equity !== null && startingEquity === null) {
           setStartingEquity(tail.equity);
         }
         if (tail.equity !== null) {
           setRunningEquity(tail.equity);
+        } else if (tail.starting_equity !== null) {
+          setRunningEquity(tail.starting_equity);
         }
 
         // Session PnL

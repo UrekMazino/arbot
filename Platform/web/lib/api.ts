@@ -178,6 +178,7 @@ export type AdminLogTail = {
   updated_at: string;
   detail: string;
   equity: number | null;
+  starting_equity: number | null;
   session_pnl: number | null;
   session_pnl_pct: number | null;
   run_start_time: number | null;

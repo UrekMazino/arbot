@@ -38,17 +38,19 @@ export function PanelCard({ title, subtitle, className = "", actions, titleRight
 export function TableFrame({
   compact = false,
   className = "",
+  maxHeightClass,
   children,
 }: {
   compact?: boolean;
   className?: string;
+  maxHeightClass?: string;
   children: ReactNode;
 }) {
   return (
     <div
       className={[
         "overflow-auto rounded-xl border border-gray-200 dark:border-gray-800 custom-scrollbar",
-        compact ? "max-h-80" : "max-h-[34rem]",
+        maxHeightClass ?? (compact ? "max-h-80" : "max-h-[34rem]"),
         className,
       ]
         .filter(Boolean)

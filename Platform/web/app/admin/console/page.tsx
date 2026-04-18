@@ -696,7 +696,7 @@ export default function AdminConsolePage() {
         hasToken: Boolean(me),
       }}
     >
-      <div className="flex min-h-[calc(100vh-9rem)] flex-col gap-2">
+      <div className="flex h-full min-h-0 flex-col gap-2">
         <section className={sectionCardClasses}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -738,10 +738,10 @@ export default function AdminConsolePage() {
         {activeTab === "control" && (
           <>
             {/* Terminal and Bot Control side by side */}
-            <section className="grid flex-1 gap-2 lg:min-h-0 lg:grid-cols-2 lg:auto-rows-fr">
+            <section className="grid flex-1 min-h-0 gap-2 lg:grid-cols-2 lg:auto-rows-fr">
               {/* Terminal - Left side */}
               <PanelCard
-                className="flex h-full min-h-[32rem] flex-col overflow-hidden"
+                className="flex h-full min-h-0 flex-col overflow-hidden"
                 title="Terminal"
                 actions={
                   <div className="flex gap-2">
@@ -770,7 +770,7 @@ export default function AdminConsolePage() {
                       Showing current startup/control output until a fresh run log is created.
                     </p>
                   ) : null}
-                  <pre className="custom-scrollbar mt-2 min-h-[20rem] flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100 lg:min-h-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  <pre className="custom-scrollbar mt-2 min-h-0 flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
                   </pre>
                 </div>
@@ -778,7 +778,7 @@ export default function AdminConsolePage() {
 
               {/* Bot Control - Right side */}
               <PanelCard
-                className="flex h-full min-h-[32rem] flex-col overflow-hidden"
+                className="flex h-full min-h-0 flex-col overflow-hidden"
                 title="Bot Control"
                 subtitle="Process status and run context."
                 actions={
@@ -865,7 +865,7 @@ export default function AdminConsolePage() {
                       <p className="text-xs text-gray-500 dark:text-gray-400">{pairHistory.length} pairs used in this run</p>
                     </div>
                     {pairHistory.length > 0 ? (
-                      <TableFrame compact className="mt-2 max-h-80 lg:min-h-0 lg:flex-1 lg:max-h-full">
+                      <TableFrame compact maxHeightClass="max-h-full" className="mt-2 min-h-0 flex-1">
                         <table>
                           <thead>
                             <tr>

@@ -57,7 +57,7 @@ function DashboardFrame({
 
       <div className={`app-shell-shift flex flex-col flex-1 ${contentMargin} min-h-screen`}>
         <AppHeader title={title} subtitle={subtitle} status={status} actions={actions} auth={auth} />
-        <main className="w-full px-4 py-4 md:px-6 md:py-6">{children}</main>
+        <main className="flex min-h-0 flex-1 flex-col w-full px-4 py-4 md:px-6 md:py-6">{children}</main>
       </div>
     </div>
   );

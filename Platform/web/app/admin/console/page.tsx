@@ -647,6 +647,10 @@ export default function AdminConsolePage() {
 
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
+  const contentLayoutClasses =
+    activeTab === "control"
+      ? "flex h-full min-h-0 flex-col gap-2 overflow-hidden"
+      : "grid gap-2";
 
   const tabButtonClass = (isActive: boolean) =>
     `px-4 py-2 font-medium text-sm ${
@@ -696,8 +700,8 @@ export default function AdminConsolePage() {
         hasToken: Boolean(me),
       }}
     >
-      <div className="flex h-full min-h-0 flex-col gap-2">
-        <section className={sectionCardClasses}>
+      <div className={contentLayoutClasses}>
+        <section className={`${sectionCardClasses} shrink-0`}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-500">Console</p>
@@ -714,7 +718,7 @@ export default function AdminConsolePage() {
         {error ? <p className="text-sm text-error-600 dark:text-error-400">{error}</p> : null}
 
         {/* Tabs */}
-        <div className="flex flex-wrap gap-8 border-b border-gray-200 dark:border-gray-700">
+        <div className="shrink-0 flex flex-wrap gap-8 border-b border-gray-200 dark:border-gray-700">
           <button
             onClick={() => setActiveTab("control")}
             className={tabButtonClass(activeTab === "control")}
@@ -738,7 +742,7 @@ export default function AdminConsolePage() {
         {activeTab === "control" && (
           <>
             {/* Terminal and Bot Control side by side */}
-            <section className="grid flex-1 min-h-0 gap-2 lg:grid-cols-2 lg:auto-rows-fr">
+            <section className="grid flex-1 min-h-0 overflow-hidden gap-2 lg:grid-cols-2 lg:auto-rows-fr">
               {/* Terminal - Left side */}
               <PanelCard
                 className="flex h-full min-h-0 flex-col overflow-hidden"

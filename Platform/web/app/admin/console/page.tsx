@@ -696,7 +696,7 @@ export default function AdminConsolePage() {
         hasToken: Boolean(me),
       }}
     >
-      <div className="grid gap-2">
+      <div className="flex min-h-[calc(100vh-9rem)] flex-col gap-2">
         <section className={sectionCardClasses}>
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -738,9 +738,10 @@ export default function AdminConsolePage() {
         {activeTab === "control" && (
           <>
             {/* Terminal and Bot Control side by side */}
-            <section className="grid gap-2 lg:grid-cols-2">
+            <section className="grid flex-1 gap-2 lg:min-h-0 lg:grid-cols-2 lg:auto-rows-fr">
               {/* Terminal - Left side */}
               <PanelCard
+                className="flex h-full min-h-[32rem] flex-col overflow-hidden"
                 title="Terminal"
                 actions={
                   <div className="flex gap-2">
@@ -759,22 +760,25 @@ export default function AdminConsolePage() {
                   </div>
                 }
               >
-                {waitingForRun ? (
-                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
-                    Waiting for new run to start...
-                  </p>
-                ) : showingControlLog ? (
-                  <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
-                    Showing current startup/control output until a fresh run log is created.
-                  </p>
-                ) : null}
-                <pre className="custom-scrollbar mt-2 h-[520px] overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                  {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
-                </pre>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  {waitingForRun ? (
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+                      Waiting for new run to start...
+                    </p>
+                  ) : showingControlLog ? (
+                    <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                      Showing current startup/control output until a fresh run log is created.
+                    </p>
+                  ) : null}
+                  <pre className="custom-scrollbar mt-2 min-h-[20rem] flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100 lg:min-h-0" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                    {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
+                  </pre>
+                </div>
               </PanelCard>
 
               {/* Bot Control - Right side */}
               <PanelCard
+                className="flex h-full min-h-[32rem] flex-col overflow-hidden"
                 title="Bot Control"
                 subtitle="Process status and run context."
                 actions={
@@ -798,99 +802,99 @@ export default function AdminConsolePage() {
                   ) : null
                 }
               >
-                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
-                    <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                    <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
+                      <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
+                    </div>
+                    <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
+                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{startingEquity !== null ? `${startingEquity.toFixed(2)} USDT` : "n/a"}</p>
+                    </div>
+                    <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
+                      <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
+                    </div>
+                    <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Running Equity</p>
+                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">
+                        {runningEquity !== null ? `${runningEquity.toFixed(2)} USDT` : "n/a"}
+                        {sessionPnl && (
+                          <span className={`ml-2 text-xs ${sessionPnl.amount >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                            ({sessionPnl.amount >= 0 ? "+" : ""}{sessionPnl.amount.toFixed(2)} / {sessionPnl.pct.toFixed(2)}%)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="pt-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Run Uptime</p>
+                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{fmtUptime(runUptime, Boolean(selectedRunKey === "latest" || selectedRunKey === botStatus?.latest_run_key), Boolean(botStatus?.running), localLogTail?.updated_at)}</p>
+                    </div>
+                    <div className="pt-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pairs Used</p>
+                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{pairCount}</p>
+                    </div>
+                    <div className="pt-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
+                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
+                    </div>
+                    <div className="pt-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
+                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Select Run</p>
+                      <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={async (e) => {
+                        const newKey = e.target.value;
+                        setSelectedRunKey(newKey);
+                        // Fetch equity for newly selected run
+                        if (newKey !== "latest") {
+                          const tail = await getAdminBotLogTail(newKey, 320);
+                          applyTailMetrics(tail);
+                        }
+                      }}>
+                        <option value="latest">latest</option>
+                        {runKeyOptions}
+                      </select>
+                    </div>
                   </div>
-                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{startingEquity !== null ? `${startingEquity.toFixed(2)} USDT` : "n/a"}</p>
-                  </div>
-                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>
-                    <p className="mt-1.5 truncate font-mono text-sm text-gray-900 dark:text-white/90">{botStatus?.latest_run_key || "n/a"}</p>
-                  </div>
-                  <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Running Equity</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">
-                      {runningEquity !== null ? `${runningEquity.toFixed(2)} USDT` : "n/a"}
-                      {sessionPnl && (
-                        <span className={`ml-2 text-xs ${sessionPnl.amount >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-                          ({sessionPnl.amount >= 0 ? "+" : ""}{sessionPnl.amount.toFixed(2)} / {sessionPnl.pct.toFixed(2)}%)
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                  <div className="pt-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Run Uptime</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{fmtUptime(runUptime, Boolean(selectedRunKey === "latest" || selectedRunKey === botStatus?.latest_run_key), Boolean(botStatus?.running), localLogTail?.updated_at)}</p>
-                  </div>
-                  <div className="pt-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pairs Used</p>
-                    <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{pairCount}</p>
-                  </div>
-                  <div className="pt-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
-                    <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
-                  </div>
-                  <div className="pt-1">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
-                    <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
-                  </div>
-                  <div className="col-span-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Select Run</p>
-                    <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={async (e) => {
-                      const newKey = e.target.value;
-                      setSelectedRunKey(newKey);
-                      // Fetch equity for newly selected run
-                      if (newKey !== "latest") {
-                        const tail = await getAdminBotLogTail(newKey, 320);
-                        applyTailMetrics(tail);
-                      }
-                    }}>
-                      <option value="latest">latest</option>
-                      {runKeyOptions}
-                    </select>
-                  </div>
-                  <div className="col-span-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                  <div className="mt-4 flex min-h-0 flex-1 flex-col border-t border-gray-200 pt-4 dark:border-gray-700">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pair History</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">{pairHistory.length} pairs used in this run</p>
                     </div>
                     {pairHistory.length > 0 ? (
-                      <div className="mt-2">
-                        <TableFrame compact>
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>#</th>
-                                <th>Pair</th>
-                                <th>Uptime</th>
-                                <th>Duration</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pairHistory.map((entry, idx) => {
-                                const totalDuration = runUptime && localLogTail?.updated_at
-                                  ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
-                                  : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
-                                const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
-                                return (
-                                  <tr key={`${entry.pair}-${idx}`}>
-                                    <td className="text-xs text-gray-500">{idx + 1}</td>
-                                    <td className="font-mono text-xs">{entry.pair}</td>
-                                    <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>
-                                    <td className="text-xs text-gray-500">
-                                      {entry.duration_seconds > 0 ? `${pct.toFixed(1)}%` : "0%"}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </TableFrame>
-                      </div>
+                      <TableFrame compact className="mt-2 max-h-80 lg:min-h-0 lg:flex-1 lg:max-h-full">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>#</th>
+                              <th>Pair</th>
+                              <th>Uptime</th>
+                              <th>Duration</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pairHistory.map((entry, idx) => {
+                              const totalDuration = runUptime && localLogTail?.updated_at
+                                ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
+                                : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
+                              const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
+                              return (
+                                <tr key={`${entry.pair}-${idx}`}>
+                                  <td className="text-xs text-gray-500">{idx + 1}</td>
+                                  <td className="font-mono text-xs">{entry.pair}</td>
+                                  <td className="text-xs">{fmtDuration(entry.duration_seconds)}</td>
+                                  <td className="text-xs text-gray-500">
+                                    {entry.duration_seconds > 0 ? `${pct.toFixed(1)}%` : "0%"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </TableFrame>
                     ) : (
                       <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">No pair history recorded yet.</p>
                     )}

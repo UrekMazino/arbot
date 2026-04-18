@@ -35,12 +35,24 @@ export function PanelCard({ title, subtitle, className = "", actions, titleRight
   );
 }
 
-export function TableFrame({ compact = false, children }: { compact?: boolean; children: ReactNode }) {
+export function TableFrame({
+  compact = false,
+  className = "",
+  children,
+}: {
+  compact?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <div
-      className={`overflow-auto rounded-xl border border-gray-200 dark:border-gray-800 ${
-        compact ? "max-h-80" : "max-h-[34rem]"
-      } custom-scrollbar`}
+      className={[
+        "overflow-auto rounded-xl border border-gray-200 dark:border-gray-800 custom-scrollbar",
+        compact ? "max-h-80" : "max-h-[34rem]",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       {children}
     </div>

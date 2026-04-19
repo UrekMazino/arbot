@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -17,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import BotInstance, Run
+from ..models import BotInstance, Report, ReportFile, Run
+from .run_pair_segments import list_run_pair_history_rows_by_run_key
 
 
 def _utc_iso_now() -> str:
@@ -243,6 +245,23 @@ def _extract_pair_history(lines: list[str], *, run_start_time: float | None, las
 
     _append_pair_history_entry(pair_history, current_pair, current_pair_start_ts, last_update_time)
     return pair_history
+
+
+def _load_pair_history_from_database(run_key: str, *, last_update_time: float | None) -> list[dict]:
+    reference_time = None
+    if last_update_time is not None:
+        reference_time = datetime.fromtimestamp(float(last_update_time), tz=timezone.utc)
+
+    db: Session = SessionLocal()
+    try:
+        return list_run_pair_history_rows_by_run_key(
+            db,
+            run_key,
+            reference_time=reference_time,
+            ensure_backfilled=True,
+        )
+    finally:
+        db.close()
 
 
 def _extract_start_snapshot_from_lines(lines: list[str]) -> dict[str, float | None]:
@@ -873,6 +892,16 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
         run_start_time=run_start_time,
         last_update_time=last_update_time,
     )
+    if resolved_run_key and resolved_run_key != "__control__":
+        try:
+            db_pair_history = _load_pair_history_from_database(
+                resolved_run_key,
+                last_update_time=last_update_time,
+            )
+            if db_pair_history:
+                pair_history = db_pair_history
+        except Exception:
+            pass
 
     # If run_start_time wasn't set, use last_update_time as fallback (for runs with timestamps)
     if run_start_time is None and last_update_time is not None:
@@ -966,13 +995,16 @@ def clear_logs_and_reports(keep_latest: bool = True) -> dict:
     """
     deleted_logs = 0
     deleted_reports = 0
+    deleted_log_files = 0
+    deleted_report_rows = 0
+    deleted_report_files = 0
+    deleted_indexes = 0
     errors: list[str] = []
 
-    # Get list of run directories sorted by modification time (newest first)
-    def get_sorted_runs(root):
+    def get_sorted_runs(root: Path) -> list[tuple[float, Path]]:
         if not root.exists():
             return []
-        runs = []
+        runs: list[tuple[float, Path]] = []
         for run_dir in root.iterdir():
             if run_dir.is_dir() and run_dir.name.startswith("run_"):
                 try:
@@ -983,41 +1015,91 @@ def clear_logs_and_reports(keep_latest: bool = True) -> dict:
         runs.sort(key=lambda x: x[0], reverse=True)
         return runs
 
+    def remove_path(path: Path) -> bool:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+            return True
+        except Exception as exc:
+            errors.append(f"Failed to delete {path.name}: {exc}")
+            return False
+
+    def clear_index_files(root: Path) -> int:
+        removed = 0
+        for name in ("index.csv", "index.json"):
+            path = root / name
+            if path.exists() and remove_path(path):
+                removed += 1
+        return removed
+
+    protected_report_run_keys: set[str] = set()
+
     # Handle logs
     if LOGS_ROOT.exists():
         log_runs = get_sorted_runs(LOGS_ROOT)
         for idx, (_, run_dir) in enumerate(log_runs):
             if keep_latest and idx == 0:
                 continue  # Keep the newest
-            try:
-                # Remove all files in the directory
-                for file in run_dir.iterdir():
-                    if file.is_file():
-                        file.unlink()
-                # Remove the directory
-                run_dir.rmdir()
+            if remove_path(run_dir):
                 deleted_logs += 1
-            except Exception as e:
-                errors.append(f"Failed to delete log {run_dir.name}: {e}")
+        for path in (CONTROL_LOG_FILE,):
+            if path.exists() and remove_path(path):
+                deleted_log_files += 1
+        deleted_indexes += clear_index_files(LOGS_ROOT)
 
     # Handle reports
     if REPORTS_ROOT.exists():
         report_runs = get_sorted_runs(REPORTS_ROOT)
         for idx, (_, run_dir) in enumerate(report_runs):
             if keep_latest and idx == 0:
+                protected_report_run_keys.add(run_dir.name)
                 continue  # Keep the newest
-            try:
-                for file in run_dir.iterdir():
-                    if file.is_file():
-                        file.unlink()
-                run_dir.rmdir()
+            if remove_path(run_dir):
                 deleted_reports += 1
-            except Exception as e:
-                errors.append(f"Failed to delete report {run_dir.name}: {e}")
+        deleted_indexes += clear_index_files(REPORTS_ROOT)
+
+    db: Session | None = None
+    try:
+        db = SessionLocal()
+        report_rows = db.execute(
+            select(Report, Run.run_key)
+            .join(Run, Report.run_id == Run.id)
+            .order_by(Report.requested_at.asc())
+        ).all()
+        reports_to_delete = [
+            row[0]
+            for row in report_rows
+            if (not keep_latest) or (str(row[1] or "") not in protected_report_run_keys)
+        ]
+        if reports_to_delete:
+            report_ids = [row.id for row in reports_to_delete]
+            report_files = db.execute(
+                select(ReportFile).where(ReportFile.report_id.in_(report_ids))
+            ).scalars().all()
+            for row in report_files:
+                db.delete(row)
+            deleted_report_files = len(report_files)
+            for row in reports_to_delete:
+                db.delete(row)
+            deleted_report_rows = len(reports_to_delete)
+            db.commit()
+    except Exception as exc:
+        if db is not None:
+            db.rollback()
+        errors.append(f"Failed to clear report records: {exc}")
+    finally:
+        if db is not None:
+            db.close()
 
     return {
         "deleted_logs": deleted_logs,
         "deleted_reports": deleted_reports,
+        "deleted_log_files": deleted_log_files,
+        "deleted_report_rows": deleted_report_rows,
+        "deleted_report_files": deleted_report_files,
+        "deleted_indexes": deleted_indexes,
         "kept_latest": keep_latest,
         "errors": errors,
     }

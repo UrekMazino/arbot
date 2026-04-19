@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..deps import get_db_session, require_permissions
 from ..models import Alert, BotConfig, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
-from ..schemas import RunEventOut, RunOut, TradeOut
+from ..schemas import RunEventOut, RunOut, RunPairSegmentOut, TradeOut
+from ..services.run_pair_segments import list_run_pair_history_rows
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -89,6 +90,16 @@ def list_run_events(
         .limit(limit)
     )
     return list(db.execute(stmt).scalars().all())
+
+
+@router.get("/{run_id}/pair-segments", response_model=list[RunPairSegmentOut])
+def list_run_pair_segments(
+    run_id: str,
+    _: object = Depends(require_permissions("view_dashboard")),
+    db: Session = Depends(get_db_session),
+):
+    run = _get_run_or_404(db, run_id)
+    return list_run_pair_history_rows(db, run, ensure_backfilled=True)
 
 
 @router.get("/{run_id}/trades", response_model=list[TradeOut])

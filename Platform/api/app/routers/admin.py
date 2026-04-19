@@ -170,5 +170,5 @@ def admin_logs_clear(
     keep_latest: bool = Query(default=True),
     user: User = Depends(require_permissions("manage_bot")),
 ):
-    """Clear old log and report directories."""
+    """Clear log and report data while optionally preserving the newest run."""
     return clear_logs_and_reports(keep_latest=keep_latest)

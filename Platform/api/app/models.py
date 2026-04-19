@@ -131,6 +131,12 @@ class Run(Base):
 
     bot_instance: Mapped[BotInstance] = relationship("BotInstance", back_populates="runs")
     events: Mapped[list[RunEvent]] = relationship("RunEvent", back_populates="run", cascade="all, delete-orphan")
+    pair_segments: Mapped[list[RunPairSegment]] = relationship(
+        "RunPairSegment",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="RunPairSegment.sequence_no.asc()",
+    )
     trades: Mapped[list[Trade]] = relationship("Trade", back_populates="run", cascade="all, delete-orphan")
 
 
@@ -149,6 +155,25 @@ class RunEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     run: Mapped[Run] = relationship("Run", back_populates="events")
+
+
+class RunPairSegment(Base):
+    __tablename__ = "run_pair_segments"
+    __table_args__ = (UniqueConstraint("run_id", "sequence_no", name="uq_run_pair_segments_run_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    pair_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    switch_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    start_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    end_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    run: Mapped[Run] = relationship("Run", back_populates="pair_segments")
 
 
 class Trade(Base):

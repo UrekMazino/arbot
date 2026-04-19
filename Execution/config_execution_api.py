@@ -145,7 +145,6 @@ PERMANENT_BLACKLIST = {
     # Consistently poor performers (multiple failed pairs, large losses)
     'ZETA-USDT-SWAP': 'Trap token, 5+ failed pairs, -2.22 USDT total',
     'IMX-USDT-SWAP': '-2.13 USDT single loss, high fees',
-    'MAGIC-USDT-SWAP': '-0.30 USDT across 2 trades, unreliable',
 
     # Regime break catastrophic losses
     'SPK-USDT-SWAP': 'Regime break -37.82 USDT loss, Z whipsaw -3.83 to +4.18',

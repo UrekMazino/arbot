@@ -163,6 +163,17 @@ class RunEventOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RunPairSegmentOut(BaseModel):
+    id: str
+    run_id: str
+    pair: str
+    sequence_no: int
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    switch_reason: str | None = None
+    duration_seconds: float
+
+
 class TradeOut(BaseModel):
     id: str
     run_id: str

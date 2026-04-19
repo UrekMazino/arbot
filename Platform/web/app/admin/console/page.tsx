@@ -948,25 +948,38 @@ export default function AdminConsolePage() {
               <button
                 className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
                 onClick={async () => {
-                  if (!confirm("Clear old logs and reports? The most recent run will be kept.")) return;
+                  if (!confirm("Clear logs and reports? The most recent run will be kept.")) return;
                   setBusy(true);
                   try {
                     const result = await clearAdminLogs(true);
-                    alert(`Cleared ${result.deleted_logs} logs and ${result.deleted_reports} reports.`);
-                    // Refresh the log runs list
-                    const logs = await getAdminLogRuns();
-                    setLogRuns(logs);
-                    const reports = await getAdminReportRuns();
-                    setReportRuns(reports);
+                    const details = [
+                      `Cleared ${result.deleted_logs} log runs`,
+                      `${result.deleted_reports} report folders`,
+                      `${result.deleted_report_rows} report records`,
+                    ];
+                    if (result.deleted_log_files > 0) {
+                      details.push(`${result.deleted_log_files} auxiliary log files`);
+                    }
+                    if (result.deleted_report_files > 0) {
+                      details.push(`${result.deleted_report_files} report file records`);
+                    }
+                    if (result.deleted_indexes > 0) {
+                      details.push(`${result.deleted_indexes} derived indexes`);
+                    }
+                    if (result.errors.length > 0) {
+                      details.push(`${result.errors.length} cleanup errors`);
+                    }
+                    alert(`${details.join(", ")}.`);
+                    await loadAdminData();
                   } catch (err) {
-                    alert("Failed to clear logs: " + (err instanceof Error ? err.message : "Unknown error"));
+                    alert("Failed to clear logs and reports: " + (err instanceof Error ? err.message : "Unknown error"));
                   } finally {
                     setBusy(false);
                   }
                 }}
                 disabled={busy}
               >
-                Clear Old Logs
+                Clear Logs and Reports
               </button>
             </div>
             <div className="grid gap-2 xl:grid-cols-2">

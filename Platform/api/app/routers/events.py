@@ -13,6 +13,7 @@ from ..deps import get_db_session, get_event_ingest_principal
 from ..models import Alert, BotInstance, Run, RunEvent
 from ..realtime import publish_bot_event
 from ..schemas import EventBatchIn, EventIngestResultOut
+from ..services.run_pair_segments import sync_run_pair_segments_for_event
 
 router = APIRouter(prefix="/bots", tags=["events"])
 logger = logging.getLogger("platform.events")
@@ -118,6 +119,7 @@ def ingest_events_batch(
             db.add(row)
             db.flush()
             _apply_run_metrics_from_event(run, event)
+            sync_run_pair_segments_for_event(db, run, row)
             accepted += 1
 
             if row.severity in {"warn", "error", "critical"}:

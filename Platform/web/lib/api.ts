@@ -63,6 +63,17 @@ export type Trade = {
   exit_reason: string | null;
 };
 
+export type RunPairSegment = {
+  id: string;
+  run_id: string;
+  pair: string;
+  sequence_no: number;
+  started_at: string | null;
+  ended_at: string | null;
+  switch_reason: string | null;
+  duration_seconds: number;
+};
+
 export type WalkForwardPoint = {
   exit_ts: string;
   pnl_usdt: number;
@@ -328,6 +339,10 @@ export async function getRunTrades(runId: string): Promise<Trade[]> {
   return apiRequest<Trade[]>(`/runs/${runId}/trades?limit=300`, { method: "GET" });
 }
 
+export async function getRunPairSegments(runId: string): Promise<RunPairSegment[]> {
+  return apiRequest<RunPairSegment[]>(`/runs/${runId}/pair-segments`, { method: "GET" });
+}
+
 export async function getRunWalkForward(runId: string): Promise<WalkForwardPoint[]> {
   return apiRequest<WalkForwardPoint[]>(`/runs/${runId}/analytics/walk-forward`, { method: "GET" });
 }
@@ -399,6 +414,10 @@ export async function getAdminPairsHealth(): Promise<AdminPairsHealth> {
 export interface ClearLogsResult {
   deleted_logs: number;
   deleted_reports: number;
+  deleted_log_files: number;
+  deleted_report_rows: number;
+  deleted_report_files: number;
+  deleted_indexes: number;
   kept_latest: boolean;
   errors: string[];
 }

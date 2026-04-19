@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "OKXStatBot Postgres",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "okxbot_v2",
+      "Username": "okxbot",
+      "SSLMode": "prefer"
+    }
+  }
+}

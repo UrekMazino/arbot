@@ -648,7 +648,7 @@ export default function AdminConsolePage() {
   const sectionCardClasses = UI_CLASSES.sectionCard;
   const primaryButtonClasses = UI_CLASSES.primaryButton;
   const contentLayoutClasses =
-    activeTab === "control"
+    activeTab === "control" || activeTab === "logs"
       ? "flex h-full min-h-0 flex-col gap-2 overflow-hidden"
       : "grid gap-2";
 
@@ -943,8 +943,8 @@ export default function AdminConsolePage() {
         )}
 
         {activeTab === "logs" && (
-          <section className="grid gap-2">
-            <div className="flex justify-end">
+          <section className="flex flex-1 min-h-0 flex-col gap-2 overflow-hidden">
+            <div className="shrink-0 flex justify-end">
               <button
                 className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
                 onClick={async () => {
@@ -982,70 +982,70 @@ export default function AdminConsolePage() {
                 Clear Logs and Reports
               </button>
             </div>
-            <div className="grid gap-2 xl:grid-cols-2">
-              <PanelCard title="All Logs">
-              <TableFrame compact>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th>Size</th>
-                      <th>Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {logRuns.map((row) => (
-                      <tr key={row.run_key}>
-                        <td>{row.run_key}</td>
-                        <td>{fmtBytes(row.size_bytes)}</td>
-                        <td>{fmtUnix(row.mtime_ts)}</td>
-                      </tr>
-                    ))}
-                    {!logRuns.length ? (
+            <div className="grid flex-1 min-h-0 overflow-hidden gap-2 xl:grid-cols-2 xl:auto-rows-fr">
+              <PanelCard title="All Logs" className="flex h-full min-h-0 flex-col overflow-hidden">
+                <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                  <table>
+                    <thead>
                       <tr>
-                        <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
-                          No log runs found.
-                        </td>
+                        <th>Run</th>
+                        <th>Size</th>
+                        <th>Updated</th>
                       </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </TableFrame>
-            </PanelCard>
+                    </thead>
+                    <tbody>
+                      {logRuns.map((row) => (
+                        <tr key={row.run_key}>
+                          <td>{row.run_key}</td>
+                          <td>{fmtBytes(row.size_bytes)}</td>
+                          <td>{fmtUnix(row.mtime_ts)}</td>
+                        </tr>
+                      ))}
+                      {!logRuns.length ? (
+                        <tr>
+                          <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
+                            No log runs found.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </TableFrame>
+              </PanelCard>
 
-            <PanelCard title="All Reports">
-              <TableFrame compact>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Run</th>
-                      <th>Files</th>
-                      <th>Summary</th>
-                      <th>Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportRuns.map((row) => (
-                      <tr key={row.run_key}>
-                        <td>{row.run_key}</td>
-                        <td>{row.file_count}</td>
-                        <td>
-                          <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
-                        </td>
-                        <td>{fmtUnix(row.mtime_ts)}</td>
-                      </tr>
-                    ))}
-                    {!reportRuns.length ? (
+              <PanelCard title="All Reports" className="flex h-full min-h-0 flex-col overflow-hidden">
+                <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                  <table>
+                    <thead>
                       <tr>
-                        <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
-                          No report runs found.
-                        </td>
+                        <th>Run</th>
+                        <th>Files</th>
+                        <th>Summary</th>
+                        <th>Updated</th>
                       </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </TableFrame>
-            </PanelCard>
+                    </thead>
+                    <tbody>
+                      {reportRuns.map((row) => (
+                        <tr key={row.run_key}>
+                          <td>{row.run_key}</td>
+                          <td>{row.file_count}</td>
+                          <td>
+                            <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
+                          </td>
+                          <td>{fmtUnix(row.mtime_ts)}</td>
+                        </tr>
+                      ))}
+                      {!reportRuns.length ? (
+                        <tr>
+                          <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                            No report runs found.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </TableFrame>
+              </PanelCard>
             </div>
           </section>
         )}

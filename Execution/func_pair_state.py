@@ -5,6 +5,8 @@ from pathlib import Path
 
 _STATE_DIR = Path(__file__).resolve().parent / "state"
 STATE_FILE = _STATE_DIR / "pair_strategy_state.json"
+GRAVEYARD_TICKERS_FILE = _STATE_DIR / "graveyard_tickers.json"
+TICKER_GRAVEYARD_PREFIX = "ticker::"
 
 # Pair history/hospital defaults
 DEFAULT_HISTORY_MIN_TRADES = 1
@@ -32,7 +34,7 @@ GRAVEYARD_REASON_DAYS = {
     "cointegration_lost_bad_history": 7,
     "cointegration_lost_unproven": 7,  # Added for consistency
     "orderbook_dead": 30,
-    "compliance_restricted": None,  # Permanent (handled by permanent blacklist)
+    "compliance_restricted": None,  # Permanent ticker-level restriction
     "manual": 7,  # Changed from 3 to 7 days
     "health": 7,  # Changed from 5min to 7 days
     "health_bad_history": 7,
@@ -41,6 +43,7 @@ GRAVEYARD_REASON_DAYS = {
     "idle_timeout": 7,  # Changed from 3 to 7 days
     "idle_timeout_bad_history": 7,  # Added for consistency
     "pair_loss_limit": 7,  # New reason from per-pair loss limit
+    "restricted_ticker": 7,
 }
 
 
@@ -91,6 +94,152 @@ BLACKLIST_REQUIRE_LOSS_DOMINANCE = _env_flag(
     DEFAULT_BLACKLIST_REQUIRE_LOSS_DOMINANCE,
 )
 
+
+def _read_json_object(path):
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _normalize_ttl_days(value):
+    if value is None or value == "":
+        return None
+    try:
+        ttl_days = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ttl_days <= 0:
+        return None
+    return ttl_days
+
+
+def _normalize_restricted_entry(entry, default_source="runtime", fallback_ts=None):
+    if fallback_ts is None:
+        fallback_ts = time.time()
+    try:
+        fallback_ts = float(fallback_ts)
+    except (TypeError, ValueError):
+        fallback_ts = time.time()
+
+    if isinstance(entry, dict):
+        ts_raw = entry.get("ts", fallback_ts)
+        try:
+            ts = float(ts_raw)
+        except (TypeError, ValueError):
+            ts = fallback_ts
+        code = str(entry.get("code") or "").strip()
+        msg = str(entry.get("msg") or "").strip()
+        reason = str(entry.get("reason") or "").strip()
+        source = str(entry.get("source") or default_source).strip() or default_source
+        ttl_days = _normalize_ttl_days(entry.get("ttl_days"))
+        if not msg and reason:
+            msg = reason
+        if not reason and msg:
+            reason = msg
+        return {
+            "ts": ts,
+            "code": code,
+            "msg": msg,
+            "reason": reason,
+            "ttl_days": ttl_days,
+            "source": source,
+        }
+
+    text = str(entry or "").strip()
+    if not text:
+        return None
+    return {
+        "ts": fallback_ts,
+        "code": "",
+        "msg": text,
+        "reason": text,
+        "ttl_days": None,
+        "source": default_source,
+    }
+
+
+def _load_seed_ticker_graveyard():
+    data = _read_json_object(GRAVEYARD_TICKERS_FILE)
+    normalized = {}
+    for ticker, entry in data.items():
+        ticker_text = str(ticker or "").strip()
+        if not ticker_text:
+            continue
+        normalized_entry = _normalize_restricted_entry(entry, default_source="seed", fallback_ts=0.0)
+        if not normalized_entry:
+            continue
+        normalized[ticker_text] = normalized_entry
+    return normalized
+
+
+def _ticker_graveyard_key(ticker):
+    ticker_text = str(ticker or "").strip()
+    if not ticker_text:
+        return ""
+    return f"{TICKER_GRAVEYARD_PREFIX}{ticker_text}"
+
+
+def _is_ticker_graveyard_key(key):
+    return str(key or "").startswith(TICKER_GRAVEYARD_PREFIX)
+
+
+def _ticker_from_graveyard_key(key):
+    key_text = str(key or "").strip()
+    if not _is_ticker_graveyard_key(key_text):
+        return ""
+    return key_text[len(TICKER_GRAVEYARD_PREFIX):]
+
+
+def _merge_restricted_entry(existing_entry, next_entry):
+    if not next_entry:
+        return existing_entry, False
+    if not existing_entry:
+        return dict(next_entry), True
+
+    merged = dict(existing_entry)
+    updated = False
+    for key in ("code", "msg", "reason", "ttl_days", "source"):
+        next_value = next_entry.get(key)
+        if key == "ttl_days" and next_value is None:
+            continue
+        if next_value and merged.get(key) != next_value:
+            merged[key] = next_value
+            updated = True
+    if not merged.get("ts"):
+        merged["ts"] = next_entry.get("ts") or time.time()
+        updated = True
+    return merged, updated
+
+
+def _extract_runtime_ticker_graveyard(state):
+    graveyard = state.get("graveyard", {})
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+    runtime_restricted = {}
+    dirty = False
+
+    for key, entry in list(graveyard.items()):
+        if not _is_ticker_graveyard_key(key):
+            continue
+        ticker = _ticker_from_graveyard_key(key)
+        if not ticker:
+            graveyard.pop(key, None)
+            dirty = True
+            continue
+        normalized_entry = _normalize_restricted_entry(entry, default_source="runtime")
+        if not normalized_entry:
+            graveyard.pop(key, None)
+            dirty = True
+            continue
+        runtime_restricted[ticker] = normalized_entry
+
+    return runtime_restricted, graveyard, dirty
+
 def load_pair_state():
     if not STATE_FILE.exists():
         return {
@@ -100,7 +249,7 @@ def load_pair_state():
             "graveyard": {}, # { "ticker_1/ticker_2": fail_timestamp }
             "hospital": {}, # { "ticker_1/ticker_2": {"ts": float, "cooldown": int, "reason": str} }
             "pair_history": {}, # { "ticker_1/ticker_2": {wins, losses, win_usdt, loss_usdt, trades} }
-            "restricted_tickers": {}, # { "TICKER": {"ts": float, "code": str, "msg": str} }
+            "restricted_tickers": {}, # Legacy field kept for migration; ticker exclusions now live in graveyard.
             "consecutive_losses": 0,
             "last_health_score": None,
             "price_fetch_failures": 0,
@@ -122,54 +271,109 @@ def load_pair_state():
     try:
         with open(STATE_FILE, "r") as f:
             state = json.load(f)
+            dirty = False
             # Ensure consecutive_losses exists
             if "consecutive_losses" not in state:
                 state["consecutive_losses"] = 0
+                dirty = True
             if "switch_events" not in state:
                 state["switch_events"] = []
+                dirty = True
             if "switch_rate_limit_until_ts" not in state:
                 state["switch_rate_limit_until_ts"] = 0.0
+                dirty = True
+            if "graveyard" not in state or not isinstance(state.get("graveyard"), dict):
+                state["graveyard"] = {}
+                dirty = True
             if "restricted_tickers" not in state:
                 state["restricted_tickers"] = {}
+                dirty = True
             if "hospital" not in state:
                 state["hospital"] = {}
+                dirty = True
             if "pair_history" not in state:
                 state["pair_history"] = {}
+                dirty = True
             if "health_failures" not in state:
                 state["health_failures"] = {}
+                dirty = True
             # Ensure last_health_score exists
             if "last_health_score" not in state:
                 state["last_health_score"] = None
+                dirty = True
             # Ensure price_fetch_failures exists
             if "price_fetch_failures" not in state:
                 state["price_fetch_failures"] = 0
+                dirty = True
             # Ensure entry tracking exists
             if "entry_z_score" not in state:
                 state["entry_z_score"] = None
+                dirty = True
             if "entry_time" not in state:
                 state["entry_time"] = None
+                dirty = True
             if "coint_lost_since_ts" not in state:
                 state["coint_lost_since_ts"] = None
+                dirty = True
             if "coint_lost_confirm_count" not in state:
                 state["coint_lost_confirm_count"] = 0
+                dirty = True
             if "entry_equity" not in state:
                 state["entry_equity"] = None
+                dirty = True
             if "entry_notional" not in state:
                 state["entry_notional"] = None
+                dirty = True
             if "entry_strategy" not in state:
                 state["entry_strategy"] = None
+                dirty = True
             if "entry_regime" not in state:
                 state["entry_regime"] = None
+                dirty = True
             if "entry_policy_snapshot" not in state or not isinstance(state.get("entry_policy_snapshot"), dict):
                 state["entry_policy_snapshot"] = {}
+                dirty = True
             if "entry_ts" not in state:
                 state["entry_ts"] = None
+                dirty = True
             if "last_switch_reason" not in state:
                 state["last_switch_reason"] = ""
+                dirty = True
             if "min_capital_cooldowns" not in state:
                 state["min_capital_cooldowns"] = {}
+                dirty = True
             if "stall_warning_marks" not in state:
                 state["stall_warning_marks"] = []
+                dirty = True
+
+            restricted = state.get("restricted_tickers", {})
+            if isinstance(restricted, dict) and restricted:
+                graveyard = state.get("graveyard", {})
+                for ticker, entry in restricted.items():
+                    ticker_text = str(ticker or "").strip()
+                    if not ticker_text:
+                        continue
+                    normalized_entry = _normalize_restricted_entry(entry, default_source="runtime")
+                    merged_key = _ticker_graveyard_key(ticker_text)
+                    existing_entry = _normalize_restricted_entry(graveyard.get(merged_key), default_source="runtime")
+                    merged_entry, updated = _merge_restricted_entry(existing_entry, normalized_entry)
+                    if updated or merged_key not in graveyard:
+                        graveyard[merged_key] = merged_entry
+                        dirty = True
+                state["graveyard"] = graveyard
+                state["restricted_tickers"] = {}
+                dirty = True
+
+            runtime_restricted, normalized_graveyard, graveyard_dirty = _extract_runtime_ticker_graveyard(state)
+            if graveyard_dirty:
+                state["graveyard"] = normalized_graveyard
+                dirty = True
+            if runtime_restricted and state.get("restricted_tickers"):
+                state["restricted_tickers"] = {}
+                dirty = True
+
+            if dirty:
+                save_pair_state(state)
             return state
     except Exception:
         return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "entry_policy_snapshot": {}, "entry_ts": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
@@ -526,34 +730,82 @@ def add_restricted_ticker(ticker, code="", msg=""):
     if not ticker:
         return False
     state = load_pair_state()
-    restricted = state.get("restricted_tickers", {})
-    if ticker in restricted:
+    ticker = str(ticker).strip()
+    if not ticker:
         return False
-    restricted[ticker] = {
-        "ts": time.time(),
-        "code": str(code or ""),
-        "msg": str(msg or ""),
-    }
-    state["restricted_tickers"] = restricted
+
+    next_entry = _normalize_restricted_entry(
+        {
+            "ts": time.time(),
+            "code": str(code or ""),
+            "msg": str(msg or ""),
+            "reason": "compliance_restricted" if str(code or "").strip() else "",
+            "ttl_days": None,
+            "source": "runtime",
+        },
+        default_source="runtime",
+    )
+    if not next_entry:
+        return False
+
+    graveyard = state.get("graveyard", {})
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+    ticker_key = _ticker_graveyard_key(ticker)
+    existing_entry = _normalize_restricted_entry(graveyard.get(ticker_key), default_source="runtime")
+    merged_entry, updated = _merge_restricted_entry(existing_entry, next_entry)
+    if not updated and ticker_key in graveyard:
+        return False
+    graveyard[ticker_key] = merged_entry
+    state["graveyard"] = graveyard
+    state["restricted_tickers"] = {}
     save_pair_state(state)
     return True
 
-def is_restricted_ticker(ticker, lookback_days=365):
-    if not ticker:
-        return False
+
+def get_restricted_tickers():
     state = load_pair_state()
-    restricted = state.get("restricted_tickers", {})
-    entry = restricted.get(ticker)
+    runtime_restricted, normalized_graveyard, dirty = _extract_runtime_ticker_graveyard(state)
+    if dirty:
+        state["graveyard"] = normalized_graveyard
+        save_pair_state(state)
+
+    merged = _load_seed_ticker_graveyard()
+    merged.update(runtime_restricted)
+    return merged
+
+
+def get_restricted_ticker_entry(ticker):
+    if not ticker:
+        return None
+    restricted = get_restricted_tickers()
+    entry = restricted.get(str(ticker).strip())
+    if not isinstance(entry, dict):
+        return None
+    return dict(entry)
+
+
+def get_restricted_ticker_reason(ticker):
+    entry = get_restricted_ticker_entry(ticker)
     if not entry:
-        return False
-    ts = entry.get("ts") or 0
-    if lookback_days and ts > 0:
-        if time.time() - ts > (lookback_days * 24 * 60 * 60):
-            restricted.pop(ticker, None)
-            state["restricted_tickers"] = restricted
-            save_pair_state(state)
-            return False
-    return True
+        return None
+    msg = str(entry.get("msg") or "").strip()
+    code = str(entry.get("code") or "").strip()
+    reason = str(entry.get("reason") or "").strip()
+    if msg and code and code not in msg:
+        return f"{msg} (code={code})"
+    if msg:
+        return msg
+    if code:
+        return f"code={code}"
+    if reason:
+        return reason
+    return None
+
+
+def is_restricted_ticker(ticker, lookback_days=365):
+    _ = lookback_days
+    return get_restricted_ticker_entry(ticker) is not None
 
 def is_in_graveyard(t1, t2, lookback_days=7):
     state = load_pair_state()

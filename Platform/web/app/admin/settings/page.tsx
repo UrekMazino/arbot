@@ -22,10 +22,51 @@ import { UI_CLASSES } from "../../../lib/ui-classes";
 import { DashboardShell } from "../../../components/dashboard-shell";
 
 type TabType = "bot" | "api";
+type SettingTooltip = { description: string; default: string };
+type SettingGroupDefinition = {
+  id: string;
+  title: string;
+  description: string;
+  keys?: string[];
+  prefixes?: string[];
+};
+type ResolvedSettingGroup = SettingGroupDefinition & { settingKeys: string[] };
 
 // Tooltip configuration for settings with descriptions and default values
-const SETTING_TOOLTIPS: Record<string, { description: string; default: string }> = {
+const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   // Execution settings
+  DEFAULT_TICKER_1: { description: "Fallback first ticker when no active pair is stored", default: "ETH-USDT-SWAP" },
+  DEFAULT_TICKER_2: { description: "Fallback second ticker when no active pair is stored", default: "SOL-USDT-SWAP" },
+  LOCK_PAIR: { description: "Explicit locked pair payload used when lock-on-pair is enabled", default: "(empty)" },
+  EXECUTION_SETTLE_CCY: { description: "Allowed settle currencies for execution pair validation", default: "USDT" },
+  INST_TYPE: { description: "OKX instrument type used by execution", default: "SWAP" },
+  DEPTH: { description: "Orderbook depth request size; 5 uses books5, other values use books", default: "5" },
+  TD_MODE: { description: "Trade mode for order placement: cross or isolated", default: "cross" },
+  POS_MODE: { description: "Position mode for execution: net or long_short", default: "long_short" },
+  DRY_RUN: { description: "When enabled, execution simulates orders without placing them", default: "0" },
+  LIMIT_ORDER_BASIS: { description: "Place entry orders as limits instead of market orders", default: "1" },
+  USE_FRESH_ORDERBOOK: { description: "Reserved toggle for forcing a fresh orderbook snapshot before entry", default: "0" },
+  MAX_SNAPSHOT_AGE_SECONDS: { description: "Maximum allowed age for a reusable orderbook snapshot", default: "15" },
+  STOP_LOSS_FAIL_SAFE: { description: "Fail-safe stop loss percentage as a decimal", default: "0.03" },
+  DEFAULT_LEVERAGE: { description: "Default leverage applied to each leg at startup", default: "1" },
+  MAX_CYCLES: { description: "Maximum execution cycles before stop; 0 runs indefinitely", default: "0" },
+  SKIP_INSTRUMENT_FETCH: { description: "Skip OKX instrument metadata fetch at startup", default: "0" },
+  OKX_SESSION_TIMEOUT_SECONDS: { description: "Network timeout for OKX SDK requests in seconds", default: "10" },
+  TRADEABLE_CAPITAL_USDT: { description: "Capital budget used by execution sizing and circuit breakers", default: "2000" },
+  Z_SCORE_WINDOW: { description: "Default rolling window used for Z-score calculations", default: "21" },
+  ENTRY_Z: { description: "Base Z-score threshold required to open a position", default: "2.0" },
+  ENTRY_Z_MAX: { description: "Maximum Z-score allowed for a new entry to avoid regime breaks", default: "3.0" },
+  EXIT_Z: { description: "Base Z-score threshold used for mean reversion exits", default: "0.35" },
+  MIN_PERSIST_BARS: { description: "Minimum consecutive bars a signal must persist before entry", default: "4" },
+  MAX_CONSECUTIVE_LOSSES: { description: "Consecutive pair losses allowed before pair retirement logic escalates", default: "2" },
+  HEALTH_CHECK_INTERVAL: { description: "Seconds between pair health evaluations while running", default: "3600" },
+  STATUS_UPDATE_INTERVAL: { description: "Seconds between execution status updates", default: "60" },
+  P_VALUE_CRITICAL: { description: "Base p-value threshold used to judge cointegration health", default: "0.15" },
+  ZERO_CROSSINGS_MIN: { description: "Minimum zero crossings expected for a healthy pair", default: "15" },
+  CORRELATION_MIN: { description: "Minimum correlation threshold for pair health", default: "0.60" },
+  TREND_CRITICAL: { description: "Maximum allowed spread trend magnitude before health degradation", default: "0.002" },
+  Z_SCORE_CRITICAL: { description: "Maximum absolute Z-score tolerated before health degradation", default: "6.0" },
+  MAX_DRAWDOWN_PCT: { description: "Circuit breaker loss threshold as a decimal of capital", default: "0.05" },
   LOCK_ON_PAIR: { description: "Lock to current pair until trade completes", default: "False" },
   LOG_MAX_MB: { description: "Maximum log file size in MB before rotation", default: "4" },
   LOG_BACKUPS: { description: "Number of backup log files to keep", default: "2" },
@@ -40,24 +81,24 @@ const SETTING_TOOLTIPS: Record<string, { description: string; default: string }>
   BLACKLIST_REQUIRE_LOSS_DOMINANCE: { description: "Require loss dominance for blacklisting", default: "1" },
   HOSPITAL_COOLDOWN_SECONDS: { description: "Cooldown time in seconds for pairs in hospital", default: "3600" },
   // Strategy settings (exposed ones)
-  ROUTER_MODE: { description: "Strategy router mode: active or passive", default: "active" },
-  LIQUIDITY_PCT: { description: "Minimum liquidity percentage filter", default: "0" },
-  CORR_MIN: { description: "Minimum correlation coefficient (0-1)", default: "0.6" },
-  MIN_CAPITAL_PER_LEG: { description: "Minimum capital per leg in USDT (0=any)", default: "0" },
-  MIN_P_VALUE: { description: "Minimum p-value for cointegration (scientific notation)", default: "1e-08" },
-  MAX_P_VALUE: { description: "Maximum p-value for cointegration", default: "0.01" },
-  MIN_ZERO_CROSSINGS: { description: "Minimum zero crossings for valid pair", default: "3" },
-  MAX_PAIRS_PER_TICKER: { description: "Maximum cointegrated pairs per ticker", default: "10" },
-  MIN_ORDERBOOK_DEPTH: { description: "Minimum orderbook depth in USDT", default: "1000" },
-  MIN_ORDERBOOK_LEVELS: { description: "Minimum orderbook levels required", default: "10" },
+  STRATEGY_ROUTER_MODE: { description: "Strategy router mode: active or passive", default: "active" },
+  STRATEGY_LIQUIDITY_PCT: { description: "Minimum liquidity percentage filter", default: "0" },
+  STRATEGY_CORR_MIN: { description: "Minimum correlation coefficient (0-1)", default: "0.6" },
+  STRATEGY_MIN_CAPITAL_PER_LEG: { description: "Minimum capital per leg in USDT (0=any)", default: "0" },
+  STRATEGY_MIN_P_VALUE: { description: "Minimum p-value for cointegration (scientific notation)", default: "1e-08" },
+  STRATEGY_MAX_P_VALUE: { description: "Maximum p-value for cointegration", default: "0.01" },
+  STRATEGY_MIN_ZERO_CROSSINGS: { description: "Minimum zero crossings for valid pair", default: "3" },
+  STRATEGY_MAX_PAIRS_PER_TICKER: { description: "Maximum cointegrated pairs per ticker", default: "10" },
+  STRATEGY_MIN_ORDERBOOK_DEPTH: { description: "Minimum orderbook depth in USDT", default: "1000" },
+  STRATEGY_MIN_ORDERBOOK_LEVELS: { description: "Minimum orderbook levels required", default: "10" },
   STRATEGY_EVAL_SECONDS: { description: "Seconds between strategy evaluation", default: "30" },
   REGIME_ROUTER_MODE: { description: "Regime detection router mode: active or passive", default: "active" },
   REGIME_EVAL_SECONDS: { description: "Seconds between regime evaluation", default: "30" },
-  SCORE_WINDOW_TRADES: { description: "Number of trades for rolling score window", default: "20" },
-  SCORE_MIN_TRADES: { description: "Minimum trades required for scoring", default: "8" },
-  SCORE_MIN_WIN_RATE: { description: "Minimum win rate for scoring (0-1)", default: "0.35" },
-  SCORE_MAX_ROLLING_LOSS_USDT: { description: "Maximum rolling loss in USDT", default: "20" },
-  COOLDOWN_SECONDS: { description: "Cooldown seconds between trades", default: "3600" },
+  STRATEGY_SCORE_WINDOW_TRADES: { description: "Number of trades for rolling score window", default: "20" },
+  STRATEGY_SCORE_MIN_TRADES: { description: "Minimum trades required for scoring", default: "8" },
+  STRATEGY_SCORE_MIN_WIN_RATE: { description: "Minimum win rate for scoring (0-1)", default: "0.35" },
+  STRATEGY_SCORE_MAX_ROLLING_LOSS_USDT: { description: "Maximum rolling loss in USDT", default: "20" },
+  STRATEGY_COOLDOWN_SECONDS: { description: "Cooldown seconds between strategy switches or entries", default: "3600" },
   RANGE_Z_LOOKBACK: { description: "Lookback bars for range Z-score calculation", default: "200" },
   TREND_Z_LOOKBACK: { description: "Lookback bars for trend Z-score calculation", default: "60" },
   STRATEGY_TREND_DIRECTIONAL_FILTER_MODE: { description: "Trend directional filter mode: shadow, strict, or off", default: "shadow" },
@@ -86,19 +127,208 @@ const SETTING_TOOLTIPS: Record<string, { description: string; default: string }>
   RISKOFF_COINT_MIN_LOSS_PCT: { description: "Minimum loss percentage for risk-off exit (0-1)", default: "0.25" },
 };
 
-// Helper to get tooltip info from full env key
-function getTooltipInfo(fullKey: string): { description: string; default: string } | null {
-  // Extract short key (e.g., STATBOT_LOCK_ON_PAIR -> LOCK_ON_PAIR)
-  // Handle prefixes in order: STRATEGY_, REGIME_, then STATBOT_
-  let shortKey = fullKey;
-  if (fullKey.startsWith("STATBOT_STRATEGY_")) {
-    shortKey = fullKey.replace("STATBOT_STRATEGY_", "");
-  } else if (fullKey.startsWith("STATBOT_REGIME_")) {
-    shortKey = fullKey.replace("STATBOT_REGIME_", "");
-  } else if (fullKey.startsWith("STATBOT_")) {
-    shortKey = fullKey.replace("STATBOT_", "");
+const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
+  {
+    id: "execution-runtime",
+    title: "Execution Runtime",
+    description: "Core pair defaults, order placement mode, and exchange runtime controls.",
+    keys: [
+      "STATBOT_DEFAULT_TICKER_1",
+      "STATBOT_DEFAULT_TICKER_2",
+      "STATBOT_LOCK_ON_PAIR",
+      "STATBOT_LOCK_PAIR",
+      "STATBOT_EXECUTION_SETTLE_CCY",
+      "STATBOT_INST_TYPE",
+      "STATBOT_DEPTH",
+      "STATBOT_TD_MODE",
+      "STATBOT_POS_MODE",
+      "STATBOT_DRY_RUN",
+      "STATBOT_LIMIT_ORDER_BASIS",
+      "STATBOT_USE_FRESH_ORDERBOOK",
+      "STATBOT_MAX_SNAPSHOT_AGE_SECONDS",
+      "STATBOT_DEFAULT_LEVERAGE",
+      "STATBOT_MAX_CYCLES",
+      "STATBOT_SKIP_INSTRUMENT_FETCH",
+      "STATBOT_OKX_SESSION_TIMEOUT_SECONDS",
+    ],
+  },
+  {
+    id: "capital-risk",
+    title: "Capital & Risk",
+    description: "Sizing, leverage, stop-loss, and session or pair loss controls.",
+    keys: [
+      "STATBOT_TRADEABLE_CAPITAL_USDT",
+      "STATBOT_STOP_LOSS_FAIL_SAFE",
+      "STATBOT_MAX_DRAWDOWN_PCT",
+      "STATBOT_HARD_STOP_PNL_BASIS",
+      "STATBOT_ENABLE_RISKOFF_COINT_EARLY_EXIT",
+      "STATBOT_RISKOFF_COINT_CONFIRM_COUNT",
+      "STATBOT_RISKOFF_COINT_GRACE_SECONDS",
+      "STATBOT_RISKOFF_COINT_MIN_LOSS_PCT",
+    ],
+  },
+  {
+    id: "signals-thresholds",
+    title: "Signal Thresholds",
+    description: "Entry, exit, Z-score, and pair-quality thresholds used during execution.",
+    keys: [
+      "STATBOT_Z_SCORE_WINDOW",
+      "STATBOT_ENTRY_Z",
+      "STATBOT_ENTRY_Z_MAX",
+      "STATBOT_EXIT_Z",
+      "STATBOT_MIN_PERSIST_BARS",
+      "STATBOT_P_VALUE_CRITICAL",
+      "STATBOT_ZERO_CROSSINGS_MIN",
+      "STATBOT_CORRELATION_MIN",
+      "STATBOT_TREND_CRITICAL",
+      "STATBOT_Z_SCORE_CRITICAL",
+    ],
+  },
+  {
+    id: "pair-lifecycle",
+    title: "Pair Lifecycle",
+    description: "Switching, hospital, blacklist, and ongoing pair-health behavior.",
+    keys: [
+      "STATBOT_PAIR_IDLE_TIMEOUT_MIN",
+      "STATBOT_MAX_SWITCHES",
+      "STATBOT_SWITCH_COOLDOWN_SECONDS",
+      "STATBOT_HOSPITAL_COOLDOWN_SECONDS",
+      "STATBOT_MAX_CONSECUTIVE_LOSSES",
+      "STATBOT_HEALTH_CHECK_INTERVAL",
+      "STATBOT_STATUS_UPDATE_INTERVAL",
+      "STATBOT_BLACKLIST_ENABLED",
+      "STATBOT_BLACKLIST_MIN_TRADES",
+      "STATBOT_BLACKLIST_MAX_LOSS_RATE",
+      "STATBOT_BLACKLIST_REQUIRE_LOSS_DOMINANCE",
+    ],
+  },
+  {
+    id: "liquidity-ops",
+    title: "Liquidity & Operations",
+    description: "Liquidity filters, logging, report cadence, and operational retry controls.",
+    keys: [
+      "STATBOT_MIN_LIQUIDITY_RATIO",
+      "STATBOT_LIQUIDITY_FALLBACK_TIER1",
+      "STATBOT_LIQUIDITY_FALLBACK_TIER2",
+      "STATBOT_LIQUIDITY_FALLBACK_MIN",
+      "STATBOT_ORDERBOOK_BACKOFF_SECONDS",
+      "STATBOT_ORDERBOOK_BACKOFF_RETRIES",
+      "STATBOT_ORDERBOOK_BACKOFF_RETRY_SLEEP",
+      "STATBOT_BALANCE_FETCH_TIMEOUT_SECONDS",
+      "STATBOT_LOG_MAX_MB",
+      "STATBOT_LOG_BACKUPS",
+      "STATBOT_MOLT_MONITOR",
+      "STATBOT_COMMAND_LISTENER",
+      "STATBOT_REPORT_ENABLE",
+      "STATBOT_REPORT_UPTIME_HOURS",
+      "STATBOT_MAX_UPTIME_HOURS",
+    ],
+  },
+  {
+    id: "strategy-discovery",
+    title: "Strategy Discovery",
+    description: "Pair discovery filters used by the strategy scanner.",
+    keys: [
+      "STATBOT_STRATEGY_LIQUIDITY_PCT",
+      "STATBOT_STRATEGY_CORR_MIN",
+      "STATBOT_STRATEGY_MIN_CAPITAL_PER_LEG",
+      "STATBOT_STRATEGY_MIN_P_VALUE",
+      "STATBOT_STRATEGY_MAX_P_VALUE",
+      "STATBOT_STRATEGY_MIN_ZERO_CROSSINGS",
+      "STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER",
+      "STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH",
+      "STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS",
+    ],
+  },
+  {
+    id: "strategy-router",
+    title: "Strategy Router & Score",
+    description: "Strategy cadence, scoring thresholds, and directional filter controls.",
+    keys: [
+      "STATBOT_STRATEGY_ROUTER_MODE",
+      "STATBOT_STRATEGY_EVAL_SECONDS",
+      "STATBOT_STRATEGY_SCORE_WINDOW_TRADES",
+      "STATBOT_STRATEGY_SCORE_MIN_TRADES",
+      "STATBOT_STRATEGY_SCORE_MIN_WIN_RATE",
+      "STATBOT_STRATEGY_SCORE_MAX_ROLLING_LOSS_USDT",
+      "STATBOT_STRATEGY_COOLDOWN_SECONDS",
+      "STATBOT_RANGE_Z_LOOKBACK",
+      "STATBOT_TREND_Z_LOOKBACK",
+      "STATBOT_STRATEGY_TREND_DIRECTIONAL_FILTER_MODE",
+      "STATBOT_STRATEGY_TREND_DIRECTIONAL_FILTER_STRENGTH",
+    ],
+  },
+  {
+    id: "regime-router",
+    title: "Regime Router",
+    description: "Market-regime settings that influence policy and gating.",
+    prefixes: ["STATBOT_REGIME_"],
+  },
+  {
+    id: "trade-management",
+    title: "Trade Management",
+    description: "Hold-time, trailing, and ATM execution policy settings.",
+    prefixes: ["STATBOT_ATM_"],
+  },
+];
+
+function normalizeSettingKey(fullKey: string): string {
+  if (fullKey.startsWith("STATBOT_")) {
+    return fullKey.replace("STATBOT_", "");
   }
-  return SETTING_TOOLTIPS[shortKey] || null;
+  return fullKey;
+}
+
+function formatSettingLabel(fullKey: string): string {
+  return normalizeSettingKey(fullKey);
+}
+
+function getTooltipInfo(fullKey: string): SettingTooltip | null {
+  return SETTING_TOOLTIPS[normalizeSettingKey(fullKey)] || null;
+}
+
+function buildSettingGroups(keys: string[], searchTerm: string, groups: SettingGroupDefinition[]): ResolvedSettingGroup[] {
+  const loweredSearch = searchTerm.trim().toLowerCase();
+  const filteredKeys = loweredSearch
+    ? keys.filter((key) => key.toLowerCase().includes(loweredSearch))
+    : [...keys];
+
+  const remaining = new Set(filteredKeys);
+  const resolved: ResolvedSettingGroup[] = [];
+
+  for (const group of groups) {
+    const matched = filteredKeys.filter((key) => {
+      if (!remaining.has(key)) {
+        return false;
+      }
+      if (group.keys?.includes(key)) {
+        return true;
+      }
+      if (group.prefixes?.some((prefix) => key.startsWith(prefix))) {
+        return true;
+      }
+      return false;
+    });
+
+    if (!matched.length) {
+      continue;
+    }
+
+    matched.forEach((key) => remaining.delete(key));
+    resolved.push({ ...group, settingKeys: matched });
+  }
+
+  const otherKeys = [...remaining].sort((a, b) => a.localeCompare(b));
+  if (otherKeys.length) {
+    resolved.push({
+      id: "other",
+      title: "Other Settings",
+      description: "Settings that do not match one of the predefined groups yet.",
+      settingKeys: otherKeys,
+    });
+  }
+
+  return resolved;
 }
 
 export default function SettingsPage() {
@@ -232,18 +462,8 @@ export default function SettingsPage() {
     [],
   );
 
-  const executionKeys = useMemo(
-    () => sortedEnvKeys.filter((key) => !key.startsWith("STATBOT_STRATEGY_") && !key.startsWith("STATBOT_STRATEGY_INTERNAL_") && !apiKeys.has(key)),
-    [sortedEnvKeys, apiKeys],
-  );
-
-  const strategyKeys = useMemo(
-    () => sortedEnvKeys.filter((key) => key.startsWith("STATBOT_STRATEGY_") && !key.startsWith("STATBOT_STRATEGY_INTERNAL_") && !apiKeys.has(key)),
-    [sortedEnvKeys, apiKeys],
-  );
-
   const botEnvKeys = useMemo(
-    () => sortedEnvKeys.filter((key) => !apiKeys.has(key)),
+    () => sortedEnvKeys.filter((key) => !apiKeys.has(key) && !key.startsWith("STATBOT_STRATEGY_INTERNAL_")),
     [sortedEnvKeys, apiKeys],
   );
 
@@ -252,18 +472,14 @@ export default function SettingsPage() {
     [sortedEnvKeys, apiKeys],
   );
 
-  const filteredExecutionKeys = useMemo(() => {
-    return executionKeys.filter((key) => key.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [executionKeys, searchTerm]);
-
-  const filteredStrategyKeys = useMemo(() => {
-    return strategyKeys.filter((key) => key.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [strategyKeys, searchTerm]);
+  const groupedBotSettingSections = useMemo(
+    () => buildSettingGroups(botEnvKeys, searchTerm, BOT_SETTING_GROUPS),
+    [botEnvKeys, searchTerm],
+  );
 
   const filteredKeys = useMemo(() => {
-    const sourceKeys = activeTab === "bot" ? botEnvKeys : apiEnvKeys;
-    return sourceKeys.filter((key) => key.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [botEnvKeys, apiEnvKeys, activeTab, searchTerm]);
+    return apiEnvKeys.filter((key) => key.toLowerCase().includes(searchTerm.toLowerCase()));
+  }, [apiEnvKeys, searchTerm]);
 
   async function saveEnvKey(key: string) {
     if (!me) return;
@@ -419,7 +635,7 @@ export default function SettingsPage() {
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Bot Configuration</h3>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">General bot settings. Updates `Execution/.env` directly.</p>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Grouped runtime settings. Updates `Execution/.env` directly.</p>
                   </div>
                   <input
                     type="text"
@@ -430,12 +646,14 @@ export default function SettingsPage() {
                   />
                 </div>
 
-                {/* Side-by-side tables for Execution and Strategy */}
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {/* Execution Settings */}
-                  <div>
-                    <h4 className="mb-3 text-base font-semibold text-gray-900 dark:text-white/90">Execution Settings</h4>
-                    <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                <div className="grid gap-6 xl:grid-cols-2">
+                  {groupedBotSettingSections.map((group) => (
+                    <div key={group.id}>
+                      <div className="mb-3">
+                        <h4 className="text-base font-semibold text-gray-900 dark:text-white/90">{group.title}</h4>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{group.description}</p>
+                      </div>
+                      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
                       <table className="w-full border-collapse">
                         <thead>
                           <tr className="bg-gray-50 dark:bg-gray-800">
@@ -445,7 +663,7 @@ export default function SettingsPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredExecutionKeys.map((key) => {
+                          {group.settingKeys.map((key) => {
                             const isEditing = editingEnvKeys.has(key);
                             const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
                             const tooltipInfo = getTooltipInfo(key);
@@ -453,7 +671,7 @@ export default function SettingsPage() {
                               <tr key={key} className="border-t border-gray-100 dark:border-gray-800">
                                 <td className="relative px-3 py-2 text-xs text-gray-600 dark:text-gray-400 font-mono">
                                   <div className="flex items-center gap-1">
-                                    <span>{key.replace("STATBOT_", "")}</span>
+                                    <span title={key}>{formatSettingLabel(key)}</span>
                                     {tooltipInfo && (
                                       <button
                                         type="button"
@@ -521,119 +739,24 @@ export default function SettingsPage() {
                               </tr>
                             );
                           })}
-                          {!filteredExecutionKeys.length ? (
+                          {!group.settingKeys.length ? (
                             <tr>
                               <td colSpan={3} className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400 text-center">
-                                {searchTerm ? "No matches." : "No Execution settings."}
+                                {searchTerm ? "No matches." : "No settings in this group."}
                               </td>
                             </tr>
                           ) : null}
                         </tbody>
                       </table>
                     </div>
-                  </div>
-
-                  {/* Strategy Settings */}
-                  <div>
-                    <h4 className="mb-3 text-base font-semibold text-gray-900 dark:text-white/90">Strategy Settings</h4>
-                    <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr className="bg-gray-50 dark:bg-gray-800">
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Key</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-32">Value</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-16">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredStrategyKeys.map((key) => {
-                            const isEditing = editingEnvKeys.has(key);
-                            const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
-                            const tooltipInfo = getTooltipInfo(key);
-                            return (
-                              <tr key={key} className="border-t border-gray-100 dark:border-gray-800">
-                                <td className="relative px-3 py-2 text-xs text-gray-600 dark:text-gray-400 font-mono">
-                                  <div className="flex items-center gap-1">
-                                    <span>{key.replace("STATBOT_STRATEGY_", "")}</span>
-                                    {tooltipInfo && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setTooltipKey(tooltipKey === key ? null : key)}
-                                        onMouseEnter={() => setTooltipKey(key)}
-                                        onMouseLeave={() => setTooltipKey(null)}
-                                        className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-500 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600"
-                                        title={tooltipInfo.default}
-                                      >
-                                        ?
-                                      </button>
-                                    )}
-                                  </div>
-                                  {tooltipInfo && tooltipKey === key && (
-                                    <div className="absolute z-50 mt-2 w-64 max-w-xs rounded-md bg-gray-900 px-3 py-2 text-xs text-white shadow-lg whitespace-normal break-words">
-                                      <p className="font-semibold">Default: {tooltipInfo.default}</p>
-                                      <p className="mt-1 text-gray-300">{tooltipInfo.description}</p>
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-xs">
-                                  {isEditing ? (
-                                    <input
-                                      value={currentValue}
-                                      onChange={(e) =>
-                                        setEnvEdits((prev) => ({
-                                          ...prev,
-                                          [key]: e.target.value,
-                                        }))
-                                      }
-                                      className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                                    />
-                                  ) : (
-                                    <span className="text-gray-700 dark:text-gray-300 truncate block max-w-28">{currentValue || "(empty)"}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {isEditing ? (
-                                    <div className="flex gap-1">
-                                      <button
-                                        className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700"
-                                        onClick={() => saveEnvKey(key)}
-                                        disabled={busy}
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
-                                        onClick={() => cancelEditMode(key)}
-                                        disabled={busy}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-                                      onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
-                                      disabled={busy}
-                                    >
-                                      Edit
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {!filteredStrategyKeys.length ? (
-                            <tr>
-                              <td colSpan={3} className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400 text-center">
-                                {searchTerm ? "No matches." : "No Strategy settings."}
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
                     </div>
-                  </div>
+                  ))}
                 </div>
+                {!groupedBotSettingSections.length ? (
+                  <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                    {searchTerm ? "No bot settings match this search." : "No bot settings available."}
+                  </p>
+                ) : null}
               </div>
             )}
 

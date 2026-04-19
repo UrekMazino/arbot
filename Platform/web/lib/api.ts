@@ -229,9 +229,20 @@ export type PairHealthEntry = {
   ttl_days?: number | null;
 };
 
+export type RestrictedTickerEntry = {
+  ticker: string;
+  reason: string;
+  message: string;
+  code: string;
+  added_at: number;
+  ttl_days?: number | null;
+  source: string;
+};
+
 export type AdminPairsHealth = {
   hospital: PairHealthEntry[];
   graveyard: PairHealthEntry[];
+  restricted_tickers: RestrictedTickerEntry[];
   active_pair: Record<string, unknown> | null;
 };
 

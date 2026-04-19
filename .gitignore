@@ -47,6 +47,7 @@ wheels/
 status.json
 Execution/state/regime_state.json
 Execution/state/*.json
+!Execution/state/graveyard_tickers.json
 Execution/state/event_spool/
 
 # Testing

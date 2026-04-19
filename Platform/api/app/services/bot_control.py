@@ -1165,22 +1165,88 @@ def update_env_setting(key: str, value: str) -> dict:
 
 PAIR_STRATEGY_STATE_FILE = EXECUTION_ROOT / "state" / "pair_strategy_state.json"
 ACTIVE_PAIR_FILE = EXECUTION_ROOT / "state" / "active_pair.json"
+GRAVEYARD_TICKERS_FILE = EXECUTION_ROOT / "state" / "graveyard_tickers.json"
+TICKER_GRAVEYARD_PREFIX = "ticker::"
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _normalize_restricted_ticker_entry(ticker: str, entry: object, default_source: str) -> dict | None:
+    ticker_text = str(ticker or "").strip()
+    if not ticker_text:
+        return None
+
+    if isinstance(entry, dict):
+        added_at_raw = entry.get("ts", 0)
+        try:
+            added_at = float(added_at_raw)
+        except (TypeError, ValueError):
+            added_at = 0.0
+        ttl_days_raw = entry.get("ttl_days")
+        try:
+            ttl_days = float(ttl_days_raw) if ttl_days_raw is not None else None
+        except (TypeError, ValueError):
+            ttl_days = None
+        code = str(entry.get("code") or "").strip()
+        message = str(entry.get("msg") or "").strip()
+        reason = str(entry.get("reason") or "").strip() or (message or "restricted")
+        source = str(entry.get("source") or default_source).strip() or default_source
+        return {
+            "ticker": ticker_text,
+            "reason": reason,
+            "message": message,
+            "code": code,
+            "added_at": added_at,
+            "ttl_days": ttl_days,
+            "source": source,
+        }
+
+    text = str(entry or "").strip()
+    if not text:
+        return None
+    return {
+        "ticker": ticker_text,
+        "reason": text,
+        "message": text,
+        "code": "",
+        "added_at": 0.0,
+        "ttl_days": None,
+        "source": default_source,
+    }
+
+
+def _is_ticker_graveyard_key(key: str) -> bool:
+    return str(key or "").startswith(TICKER_GRAVEYARD_PREFIX)
+
+
+def _graveyard_ticker_from_key(key: str) -> str:
+    key_text = str(key or "").strip()
+    if not _is_ticker_graveyard_key(key_text):
+        return ""
+    return key_text[len(TICKER_GRAVEYARD_PREFIX):]
 
 
 def get_pair_health_data() -> dict:
     """Get pair health data from state files."""
-    import json
-
     result = {
         "hospital": [],
         "graveyard": [],
+        "restricted_tickers": [],
         "active_pair": None,
     }
 
     # Read hospital and graveyard from pair_strategy_state.json
     if PAIR_STRATEGY_STATE_FILE.exists():
         try:
-            data = json.loads(PAIR_STRATEGY_STATE_FILE.read_text(encoding="utf-8"))
+            data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
             now = time.time()
 
             # Process hospital entries
@@ -1207,8 +1273,15 @@ def get_pair_health_data() -> dict:
 
             # Process graveyard entries
             graveyard = data.get("graveyard", {})
+            merged_restricted = {}
             for pair_key, entry in graveyard.items():
                 if not isinstance(entry, dict):
+                    continue
+                if _is_ticker_graveyard_key(pair_key):
+                    ticker = _graveyard_ticker_from_key(pair_key)
+                    normalized = _normalize_restricted_ticker_entry(ticker, entry, default_source="runtime")
+                    if normalized:
+                        merged_restricted[ticker] = normalized
                     continue
                 ts = entry.get("ts", 0)
                 ttl_days = entry.get("ttl_days")
@@ -1220,8 +1293,34 @@ def get_pair_health_data() -> dict:
                     "ttl_days": ttl_days,
                 })
 
+            restricted_tickers = data.get("restricted_tickers", {})
+            for ticker, entry in _read_json_object(GRAVEYARD_TICKERS_FILE).items():
+                normalized = _normalize_restricted_ticker_entry(ticker, entry, default_source="seed")
+                if normalized:
+                    merged_restricted[str(ticker)] = normalized
+            if isinstance(restricted_tickers, dict):
+                for ticker, entry in restricted_tickers.items():
+                    normalized = _normalize_restricted_ticker_entry(ticker, entry, default_source="runtime")
+                    if normalized:
+                        merged_restricted[str(ticker)] = normalized
+
+            result["restricted_tickers"] = sorted(
+                merged_restricted.values(),
+                key=lambda item: (str(item.get("source") or ""), str(item.get("ticker") or "")),
+            )
+
         except Exception:
             pass
+    elif GRAVEYARD_TICKERS_FILE.exists():
+        merged_restricted = {}
+        for ticker, entry in _read_json_object(GRAVEYARD_TICKERS_FILE).items():
+            normalized = _normalize_restricted_ticker_entry(ticker, entry, default_source="seed")
+            if normalized:
+                merged_restricted[str(ticker)] = normalized
+        result["restricted_tickers"] = sorted(
+            merged_restricted.values(),
+            key=lambda item: (str(item.get("source") or ""), str(item.get("ticker") or "")),
+        )
 
     # Read active pair
     if ACTIVE_PAIR_FILE.exists():

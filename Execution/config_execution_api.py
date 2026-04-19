@@ -12,8 +12,12 @@ try:
 except ImportError:
     load_dotenv = None
 
+ENV_PATH = Path(__file__).resolve().parent / ".env"
 if load_dotenv:
-    load_dotenv()
+    if ENV_PATH.exists():
+        load_dotenv(ENV_PATH)
+    else:
+        load_dotenv()
 
 from okx.PublicData import PublicAPI
 from okx.Account import AccountAPI
@@ -42,6 +46,41 @@ def _env_list(name, default=""):
         return []
     return items
 
+
+def _env_str(name, default=""):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return str(default)
+    return str(raw).strip()
+
+
+def _env_int(name, default=0, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
+def _env_float(name, default=0.0, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
 def save_active_pair(t1, t2):
     """Save the current active pair to active_pair.json."""
     data = {"ticker_1": t1, "ticker_2": t2}
@@ -57,11 +96,12 @@ def save_active_pair(t1, t2):
 
 
 # CONFIG VARIABLES
-mode = "demo"  # "demo" or "live"
+flag = "1" if _env_flag("OKX_FLAG", True) else "0"  # "1" = demo, "0" = live
+mode = "demo" if flag == "1" else "live"  # "demo" or "live"
 
 # Default tickers
-default_ticker_1 = "ETH-USD-SWAP"
-default_ticker_2 = "ZETA-USDT-SWAP"
+default_ticker_1 = _env_str("STATBOT_DEFAULT_TICKER_1", "ETH-USDT-SWAP").upper()
+default_ticker_2 = _env_str("STATBOT_DEFAULT_TICKER_2", "SOL-USDT-SWAP").upper()
 
 ticker_1 = default_ticker_1
 ticker_2 = default_ticker_2
@@ -102,16 +142,20 @@ if not lock_pair_active and os.path.exists(active_pair_file):
 
 signal_positive_ticker = ticker_2
 signal_negative_ticker = ticker_1
-inst_type = "SWAP"
-depth = 5  # 5 uses books5, any other value uses books
-td_mode = "cross"  # "cross" or "isolated" - CROSS is more capital efficient for pairs trading
-pos_mode = "long_short"  # "net" or "long_short" (hedged)
-dry_run = False  # When True, execution calls will not place or cancel live orders.
-use_fresh_orderbook = False  # True fetches a new snapshot right before order placement.
-max_snapshot_age_seconds = 15  # Reuse snapshot only if it is this fresh or newer.
-stop_loss_fail_safe = 0.03  # 3% stop loss (reduced from 15% for proper arbitrage risk management)
-default_leverage = 1  # Default leverage for set_leverage calls.
-max_cycles = 0  # 0 = run indefinitely; set to 1 for a single cycle.
+inst_type = _env_str("STATBOT_INST_TYPE", "SWAP").upper()
+depth = _env_int("STATBOT_DEPTH", 5, minimum=1)  # 5 uses books5, any other value uses books
+td_mode = _env_str("STATBOT_TD_MODE", "cross").lower()  # "cross" or "isolated"
+if td_mode not in ("cross", "isolated"):
+    td_mode = "cross"
+pos_mode = _env_str("STATBOT_POS_MODE", "long_short").lower()  # "net" or "long_short" (hedged)
+if pos_mode not in ("net", "long_short"):
+    pos_mode = "long_short"
+dry_run = _env_flag("STATBOT_DRY_RUN", False)  # When True, execution calls will not place or cancel live orders.
+use_fresh_orderbook = _env_flag("STATBOT_USE_FRESH_ORDERBOOK", False)  # Reserved for fresh snapshot enforcement.
+max_snapshot_age_seconds = _env_int("STATBOT_MAX_SNAPSHOT_AGE_SECONDS", 15, minimum=0)
+stop_loss_fail_safe = _env_float("STATBOT_STOP_LOSS_FAIL_SAFE", 0.03, minimum=0.0)
+default_leverage = _env_int("STATBOT_DEFAULT_LEVERAGE", 1, minimum=1)
+max_cycles = _env_int("STATBOT_MAX_CYCLES", 0, minimum=0)
 # Default roundings (will be updated if possible)
 rounding_ticker_1 = 1
 rounding_ticker_2 = 2
@@ -125,43 +169,21 @@ try:
 except Exception:
     pass
 
-z_score_window = 21  # Z-score calculation window (21 x 1m candles = ~21 minutes)
+z_score_window = _env_int("STATBOT_Z_SCORE_WINDOW", 21, minimum=2)
                      # 21 bars is valid for 1m high-frequency data when:
                      # - Used only for entry timing (not sole cointegration validation)
                      # - Cointegration validated separately on sufficient window
                      # - Regime filter or other validation exists
-limit_order_basis = True  # Place entries with limit orders when True.
-tradeable_capital_usdt = 2000  # Total tradeable capital to split across pairs.
-
-# PERMANENT BLACKLIST - Tickers that should NEVER be traded
-# No cooldown, completely excluded from pair discovery and trading
-PERMANENT_BLACKLIST = {
-    # Compliance restricted (regional or regulatory issues)
-    'BIO-USDT-SWAP': 'Code 51155 - regional restriction',
-
-    # Liquidity failures (dead orderbooks, no bids/asks)
-    'MUBARAK-USDT-SWAP': '0 bids in orderbook, illiquid',
-
-    # Consistently poor performers (multiple failed pairs, large losses)
-    'ZETA-USDT-SWAP': 'Trap token, 5+ failed pairs, -2.22 USDT total',
-    'IMX-USDT-SWAP': '-2.13 USDT single loss, high fees',
-
-    # Regime break catastrophic losses
-    'SPK-USDT-SWAP': 'Regime break -37.82 USDT loss, Z whipsaw -3.83 to +4.18',
-    'XPL-USDT-SWAP': 'Multiple failures in previous runs, unreliable cointegration',
-}
-
-def is_permanently_blacklisted(ticker):
-    """Check if a ticker is permanently blacklisted"""
-    return ticker in PERMANENT_BLACKLIST
-
-def get_blacklist_reason(ticker):
-    """Get the reason why a ticker is blacklisted"""
-    return PERMANENT_BLACKLIST.get(ticker, None)
+limit_order_basis = _env_flag("STATBOT_LIMIT_ORDER_BASIS", True)  # Place entries with limit orders when True.
+tradeable_capital_usdt = _env_float("STATBOT_TRADEABLE_CAPITAL_USDT", 2000.0, minimum=0.0)
 
 # SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
 ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
 ENTRY_Z_MAX = 3.0  # Maximum threshold - don't enter if too extreme (regime break)
+ENTRY_Z = _env_float("STATBOT_ENTRY_Z", ENTRY_Z, minimum=0.0)
+ENTRY_Z_MAX = _env_float("STATBOT_ENTRY_Z_MAX", ENTRY_Z_MAX, minimum=0.0)
+if ENTRY_Z_MAX < ENTRY_Z:
+    ENTRY_Z_MAX = ENTRY_Z
 
 # Fee-adjusted exit calculation
 # OKX fees: taker ~0.05%, slippage ~0.02% = 0.07% round-trip per leg
@@ -197,6 +219,9 @@ MIN_PERSIST_BARS = 4  # Require signal to persist for 4 bars before entering (4 
                       # Increased from 3 to reduce false entries and improve conviction
 MAX_CONSECUTIVE_LOSSES = 2  # Move pair to graveyard after 2 consecutive losses
                             # Prevents repeated losses on deteriorating pairs
+EXIT_Z = _env_float("STATBOT_EXIT_Z", EXIT_Z, minimum=0.0)
+MIN_PERSIST_BARS = _env_int("STATBOT_MIN_PERSIST_BARS", MIN_PERSIST_BARS, minimum=1)
+MAX_CONSECUTIVE_LOSSES = _env_int("STATBOT_MAX_CONSECUTIVE_LOSSES", MAX_CONSECUTIVE_LOSSES, minimum=1)
 
 # PAIR HEALTH & MONITORING (conintegration_pair_switching.txt recommendations)
 HEALTH_CHECK_INTERVAL = 3600  # Check health every 1 hour (3600 seconds)
@@ -208,9 +233,22 @@ TREND_CRITICAL = 0.002        # Maximum allowed spread trend
 Z_SCORE_CRITICAL = 6.0        # Maximum allowed Z-score before switching
 
 max_drawdown_pct = 0.05  # Circuit breaker: exit if cumulative loss exceeds 5% of capital
+HEALTH_CHECK_INTERVAL = _env_int("STATBOT_HEALTH_CHECK_INTERVAL", HEALTH_CHECK_INTERVAL, minimum=1)
+STATUS_UPDATE_INTERVAL = _env_int("STATBOT_STATUS_UPDATE_INTERVAL", STATUS_UPDATE_INTERVAL, minimum=1)
+P_VALUE_CRITICAL = _env_float("STATBOT_P_VALUE_CRITICAL", P_VALUE_CRITICAL, minimum=0.0)
+if P_VALUE_CRITICAL > 1.0:
+    P_VALUE_CRITICAL = 1.0
+ZERO_CROSSINGS_MIN = _env_int("STATBOT_ZERO_CROSSINGS_MIN", ZERO_CROSSINGS_MIN, minimum=0)
+CORRELATION_MIN = _env_float("STATBOT_CORRELATION_MIN", CORRELATION_MIN, minimum=0.0)
+if CORRELATION_MIN > 1.0:
+    CORRELATION_MIN = 1.0
+TREND_CRITICAL = _env_float("STATBOT_TREND_CRITICAL", TREND_CRITICAL, minimum=0.0)
+Z_SCORE_CRITICAL = _env_float("STATBOT_Z_SCORE_CRITICAL", Z_SCORE_CRITICAL, minimum=0.0)
+max_drawdown_pct = _env_float("STATBOT_MAX_DRAWDOWN_PCT", max_drawdown_pct, minimum=0.0)
+if max_drawdown_pct > 1.0:
+    max_drawdown_pct = 1.0
 
 # ENVIRONMENT SETTINGS
-flag = "1" if mode == "demo" else "0"  # "1" = demo, "0" = live
 ws_url = "wss://wspap.okx.com:8443/ws/v5/public" if mode == "demo" else "wss://ws.okx.com:8443/ws/v5/public"
 
 api_key = os.getenv("OKX_API_KEY", "")
@@ -236,13 +274,14 @@ trade_session = TradeAPI(
     debug=False
 )
 
-# Added 10s timeout to prevent hanging on network issues
+# Added env-backed timeout to prevent hanging on network issues
 # Since the SDK constructor doesn't accept requests_options/timeout, 
 # we set it directly on the session objects (which are httpx.Client subclasses).
+session_timeout_seconds = _env_float("STATBOT_OKX_SESSION_TIMEOUT_SECONDS", 10.0, minimum=0.1)
 for session in [public_session, market_session, account_session, trade_session]:
-    session.timeout = 10.0
+    session.timeout = session_timeout_seconds
 
-skip_instrument_fetch = os.getenv("STATBOT_SKIP_INSTRUMENT_FETCH") == "1"
+skip_instrument_fetch = _env_flag("STATBOT_SKIP_INSTRUMENT_FETCH", False)
 
 # DYNAMIC ROUNDING FETCH
 if not skip_instrument_fetch:

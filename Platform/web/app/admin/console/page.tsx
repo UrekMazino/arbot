@@ -1164,6 +1164,45 @@ export default function AdminConsolePage() {
                 </table>
               </TableFrame>
             </PanelCard>
+
+            <PanelCard
+              title="Ticker Graveyard"
+              subtitle={`${pairsHealth?.restricted_tickers?.length || 0} excluded tickers`}
+            >
+              <TableFrame>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Ticker</th>
+                      <th>Reason</th>
+                      <th>Detail</th>
+                      <th>Source</th>
+                      <th>Added</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pairsHealth?.restricted_tickers?.map((entry) => (
+                      <tr key={entry.ticker}>
+                        <td className="font-mono text-xs">{entry.ticker}</td>
+                        <td className="text-xs">{entry.reason}</td>
+                        <td className="text-xs">{entry.message || entry.code || "n/a"}</td>
+                        <td className="text-xs">{entry.source}</td>
+                        <td className="text-xs">
+                          {entry.added_at ? new Date(entry.added_at * 1000).toLocaleDateString() : "n/a"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!pairsHealth?.restricted_tickers?.length ? (
+                      <tr>
+                        <td colSpan={5} className="text-sm text-gray-500 dark:text-gray-400">
+                          No restricted tickers
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </TableFrame>
+            </PanelCard>
           </section>
         )}
       </div>

@@ -34,9 +34,7 @@ from config_execution_api import (
     account_session,
     trade_session,
     lock_on_pair,
-    allowed_settle_ccy,
-    is_permanently_blacklisted,
-    get_blacklist_reason
+    allowed_settle_ccy
 )
 from func_position_calls import (
     open_position_confirmation, 
@@ -96,6 +94,7 @@ from func_pair_state import (
     get_entry_strategy,
     get_entry_regime,
     is_restricted_ticker,
+    get_restricted_ticker_reason,
     reset_health_failure,
     cleanup_expired_graveyard
 )
@@ -1227,14 +1226,24 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             if not sym_1 or not sym_2:
                 continue
 
-            # Skip permanently blacklisted tickers
-            if is_permanently_blacklisted(sym_1):
-                logger.info("Skipping pair %s/%s - %s is permanently blacklisted: %s",
-                           sym_1, sym_2, sym_1, get_blacklist_reason(sym_1))
+            # Skip restricted tickers from persistent ticker graveyard/state.
+            if is_restricted_ticker(sym_1):
+                logger.info(
+                    "Skipping pair %s/%s - %s is ticker-restricted: %s",
+                    sym_1,
+                    sym_2,
+                    sym_1,
+                    get_restricted_ticker_reason(sym_1) or "restricted",
+                )
                 continue
-            if is_permanently_blacklisted(sym_2):
-                logger.info("Skipping pair %s/%s - %s is permanently blacklisted: %s",
-                           sym_1, sym_2, sym_2, get_blacklist_reason(sym_2))
+            if is_restricted_ticker(sym_2):
+                logger.info(
+                    "Skipping pair %s/%s - %s is ticker-restricted: %s",
+                    sym_1,
+                    sym_2,
+                    sym_2,
+                    get_restricted_ticker_reason(sym_2) or "restricted",
+                )
                 continue
 
             # Skip pairs with zero/missing liquidity data (dead orderbooks)
@@ -1329,7 +1338,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                     continue
             if is_restricted_ticker(t1) or is_restricted_ticker(t2):
                 logger.info(
-                    "Skipping pair %s/%s: compliance restricted ticker.",
+                    "Skipping pair %s/%s: restricted ticker present.",
                     t1,
                     t2,
                 )
@@ -1933,25 +1942,26 @@ if __name__ == "__main__":
             in_position_or_orders = not is_manage_new_trades
 
             if is_restricted_ticker(signal_positive_ticker) or is_restricted_ticker(signal_negative_ticker):
+                restricted_switch_reason = "restricted_ticker"
                 if lock_on_pair:
                     logger.error(
-                        "Compliance restricted ticker in active pair; lock_on_pair enabled (pair=%s/%s).",
+                        "Restricted ticker in active pair; lock_on_pair enabled (pair=%s/%s).",
                         ticker_1,
                         ticker_2,
                     )
-                    status_dict["message"] = "Compliance restricted; lock_on_pair enabled"
+                    status_dict["message"] = "Restricted ticker; lock_on_pair enabled"
                     save_status(status_dict)
                 else:
                     if is_manage_new_trades:
                         logger.error(
-                            "Compliance restricted ticker in active pair; switching (pair=%s/%s).",
+                            "Restricted ticker in active pair; switching (pair=%s/%s).",
                             ticker_1,
                             ticker_2,
                         )
-                        status_dict["message"] = "Compliance restricted; switching pair..."
+                        status_dict["message"] = "Restricted ticker; switching pair..."
                         save_status(status_dict)
-                        set_last_switch_reason("compliance_restricted")
-                        switch_result = _switch_to_next_pair(health_score=0, switch_reason="compliance_restricted")
+                        set_last_switch_reason(restricted_switch_reason)
+                        switch_result = _switch_to_next_pair(health_score=0, switch_reason=restricted_switch_reason)
                         if switch_result == SWITCH_RESULT_SWITCHED:
                             logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                             print("Restarting to apply new pair...")
@@ -1959,12 +1969,12 @@ if __name__ == "__main__":
                         if switch_result == SWITCH_RESULT_HARD_STOP:
                             status_dict["message"] = "Hard stop: no replacement pairs available"
                             save_status(status_dict)
-                            logger.critical("No replacement pairs available after compliance restriction. Hard stop.")
+                            logger.critical("No replacement pairs available after restricted ticker block. Hard stop.")
                             sys.exit(1)
                         logger.error("Pair switch blocked. Will retry next cycle.")
                     else:
                         logger.warning(
-                            "Compliance restricted ticker in active pair, but positions/orders are open. "
+                            "Restricted ticker in active pair, but positions/orders are open. "
                             "Deferring switch."
                         )
 

@@ -31,21 +31,41 @@ from decimal import Decimal, ROUND_UP
 from itertools import combinations
 from func_strategy_log import get_strategy_logger
 
-def _load_restricted_tickers():
-    state_path = Path(__file__).resolve().parents[1] / "Execution" / "state" / "pair_strategy_state.json"
-    if not state_path.exists():
-        return set()
+
+def _read_json_object(path):
+    if not path.exists():
+        return {}
     try:
-        with state_path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except Exception:
-        return set()
-    restricted = data.get("restricted_tickers", {})
-    if isinstance(restricted, dict):
-        return {str(key) for key in restricted.keys() if key}
-    if isinstance(restricted, list):
-        return {str(item) for item in restricted if item}
-    return set()
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_restricted_tickers():
+    restricted = set()
+    state_path = Path(__file__).resolve().parents[1] / "Execution" / "state" / "pair_strategy_state.json"
+    data = _read_json_object(state_path)
+    graveyard = data.get("graveyard", {})
+    if isinstance(graveyard, dict):
+        for key in graveyard.keys():
+            key_text = str(key or "")
+            if key_text.startswith("ticker::"):
+                ticker = key_text[len("ticker::"):]
+                if ticker:
+                    restricted.add(ticker)
+
+    state_restricted = data.get("restricted_tickers", {})
+    if isinstance(state_restricted, dict):
+        restricted.update(str(key) for key in state_restricted.keys() if key)
+    elif isinstance(state_restricted, list):
+        restricted.update(str(item) for item in state_restricted if item)
+
+    seeded_path = Path(__file__).resolve().parents[1] / "Execution" / "state" / "graveyard_tickers.json"
+    seeded_restricted = _read_json_object(seeded_path)
+    restricted.update(str(key) for key in seeded_restricted.keys() if key)
+    return restricted
 
 
 # Calculate Z-score
@@ -469,23 +489,6 @@ def get_cointegrated_pairs(
     else:
         corr_min = corr_min_filter if fast_path_enabled else 0.0
 
-    # Load permanent blacklist
-    permanent_blacklist = set()
-    try:
-        config_path = Path(__file__).resolve().parent.parent / "Execution" / "config_execution_api.py"
-        with open(config_path, 'r') as f:
-            content = f.read()
-            # Extract permanent blacklist tickers
-            if 'PERMANENT_BLACKLIST' in content:
-                import re
-                # Match ticker patterns like 'BIO-USDT-SWAP'
-                blacklist_matches = re.findall(r"'([A-Z0-9]+-USDT-SWAP)':", content)
-                permanent_blacklist = set(blacklist_matches)
-                if permanent_blacklist:
-                    logger.info(f"Loaded {len(permanent_blacklist)} permanently blacklisted tickers: {', '.join(sorted(permanent_blacklist))}")
-    except Exception as e:
-        logger.warning(f"Could not load permanent blacklist: {e}")
-
     # Load graveyard to exclude failed pairs
     graveyard_pairs = set()
     try:
@@ -636,11 +639,6 @@ def get_cointegrated_pairs(
         series_2_log = log_series_by_symbol[sym_2]
 
         total_comparisons += 1
-
-        # Skip permanently blacklisted tickers
-        if sym_1 in permanent_blacklist or sym_2 in permanent_blacklist:
-            filtered_breakdown["permanent_blacklist"] = filtered_breakdown.get("permanent_blacklist", 0) + 1
-            continue
 
         # Skip graveyard pairs
         pair_key = f"{sym_1}/{sym_2}"

@@ -497,12 +497,27 @@ def _latest_run_log_file() -> tuple[str | None, Path | None]:
     return run_key, log_file
 
 
+def _resolve_run_directory(root: Path, run_key: str | None) -> Path | None:
+    selected = str(run_key or "").strip()
+    if not selected:
+        return None
+    candidate = (root / selected).resolve()
+    root_resolved = root.resolve()
+    if candidate.parent != root_resolved:
+        return None
+    if not candidate.exists() or not candidate.is_dir():
+        return None
+    if not candidate.name.startswith("run_"):
+        return None
+    return candidate
+
+
 def _resolve_run_log_file(run_key: str | None) -> tuple[str | None, Path | None]:
     selected = str(run_key or "").strip()
     if not selected or selected.lower() == "latest":
         return _latest_run_log_file()
-    run_dir = LOGS_ROOT / selected
-    if not run_dir.exists() or not run_dir.is_dir():
+    run_dir = _resolve_run_directory(LOGS_ROOT, selected)
+    if not run_dir:
         return None, None
     logs = sorted(run_dir.glob("log_*.log"))
     if not logs:
@@ -953,6 +968,64 @@ def list_log_runs(limit: int = 100) -> list[dict]:
             continue
     rows.sort(key=lambda item: item.get("mtime_ts", 0.0), reverse=True)
     return rows[: max(min(int(limit), 500), 1)]
+
+
+def read_run_log(run_key: str) -> dict:
+    resolved_run_key, log_file = _resolve_run_log_file(run_key)
+    if not resolved_run_key or not log_file:
+        raise FileNotFoundError("Log run not found")
+
+    try:
+        content = log_file.read_text(encoding="utf-8", errors="ignore")
+        stat = log_file.stat()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to read log file: {exc}") from exc
+
+    line_count = content.count("\n")
+    if content and not content.endswith("\n"):
+        line_count += 1
+
+    return {
+        "run_key": resolved_run_key,
+        "log_file": str(log_file),
+        "content": content,
+        "size_bytes": int(stat.st_size),
+        "line_count": int(line_count),
+        "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+    }
+
+
+def delete_log_run(run_key: str) -> dict:
+    resolved_run_key, log_file = _resolve_run_log_file(run_key)
+    if not resolved_run_key or not log_file:
+        raise FileNotFoundError("Log run not found")
+
+    status = get_bot_status()
+    active_run_key = str(status.get("run_key") or "").strip()
+    latest_run_key = str(status.get("latest_run_key") or "").strip()
+    if status.get("running") and resolved_run_key in {active_run_key, latest_run_key}:
+        raise RuntimeError("Cannot delete the active log run while the bot is running")
+
+    run_dir = _resolve_run_directory(LOGS_ROOT, resolved_run_key)
+    if not run_dir:
+        raise FileNotFoundError("Log run directory not found")
+
+    removed_files = 0
+    for path in run_dir.rglob("*"):
+        if path.is_file():
+            removed_files += 1
+
+    try:
+        shutil.rmtree(run_dir)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to delete log run: {exc}") from exc
+
+    return {
+        "deleted": True,
+        "run_key": resolved_run_key,
+        "log_file": str(log_file),
+        "removed_files": removed_files,
+    }
 
 
 def list_report_runs(limit: int = 100) -> list[dict]:

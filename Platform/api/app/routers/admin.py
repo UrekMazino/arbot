@@ -7,11 +7,13 @@ from ..deps import get_current_user, get_user_permission_ids, require_permission
 from ..models import User
 from ..services.bot_control import (
     clear_logs_and_reports,
+    delete_log_run,
     get_bot_status,
     get_pair_health_data,
     list_log_runs,
     list_report_runs,
     read_env_settings,
+    read_run_log,
     start_bot,
     stop_bot,
     tail_run_log,
@@ -124,6 +126,32 @@ def admin_log_runs(
     _: User = Depends(require_permissions("view_logs")),
 ):
     return list_log_runs(limit=limit)
+
+
+@router.get("/logs/runs/{run_key}")
+def admin_log_run_detail(
+    run_key: str,
+    _: User = Depends(require_permissions("view_logs")),
+):
+    try:
+        return read_run_log(run_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.delete("/logs/runs/{run_key}")
+def admin_log_run_delete(
+    run_key: str,
+    _: User = Depends(require_permissions("manage_bot")),
+):
+    try:
+        return delete_log_run(run_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/reports/runs")

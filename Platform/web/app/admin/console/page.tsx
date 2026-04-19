@@ -1,18 +1,21 @@
 "use client";
 
-import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
   AdminBotStatus,
+  AdminLogFile,
   AdminLogTail,
   AdminLogRun,
   AdminPairsHealth,
   AdminReportRun,
   UserRecord,
   clearAdminLogs,
+  deleteAdminLogRun,
   getAdminBotLogTail,
   getAdminBotStatus,
+  getAdminLogFile,
   getAdminLogRuns,
   getAdminPairsHealth,
   getAdminReportRuns,
@@ -34,6 +37,180 @@ import { useBotStatus, useLogRuns, useDashboardWebSocket, useLogStream } from ".
 import { useFloatingTerminal } from "../../../context/floating-terminal-context";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";
+
+type SearchMatch = {
+  start: number;
+  end: number;
+  matchIndex: number;
+};
+
+type SearchModel = {
+  totalMatches: number;
+  matchesByLine: Map<number, SearchMatch[]>;
+};
+
+function buildSearchModel(lines: string[], query: string): SearchModel {
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) {
+    return { totalMatches: 0, matchesByLine: new Map<number, SearchMatch[]>() };
+  }
+
+  const matchesByLine = new Map<number, SearchMatch[]>();
+  let totalMatches = 0;
+
+  lines.forEach((line, lineIndex) => {
+    const lineLower = line.toLowerCase();
+    let searchFrom = 0;
+    const lineMatches: SearchMatch[] = [];
+
+    while (searchFrom <= lineLower.length) {
+      const foundAt = lineLower.indexOf(trimmed, searchFrom);
+      if (foundAt === -1) break;
+      lineMatches.push({
+        start: foundAt,
+        end: foundAt + trimmed.length,
+        matchIndex: totalMatches,
+      });
+      totalMatches += 1;
+      searchFrom = foundAt + Math.max(trimmed.length, 1);
+    }
+
+    if (lineMatches.length > 0) {
+      matchesByLine.set(lineIndex, lineMatches);
+    }
+  });
+
+  return { totalMatches, matchesByLine };
+}
+
+function nextSearchIndex(currentIndex: number, totalMatches: number, direction: 1 | -1): number {
+  if (totalMatches <= 0) return -1;
+  if (currentIndex < 0 || currentIndex >= totalMatches) {
+    return direction === 1 ? 0 : totalMatches - 1;
+  }
+  return (currentIndex + direction + totalMatches) % totalMatches;
+}
+
+function SearchBar({
+  query,
+  onQueryChange,
+  totalMatches,
+  activeMatchIndex,
+  onPrev,
+  onNext,
+  inputRef,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  totalMatches: number;
+  activeMatchIndex: number;
+  onPrev: () => void;
+  onNext: () => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  const hasQuery = query.trim().length > 0;
+  const hasMatches = totalMatches > 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input
+        ref={inputRef}
+        type="search"
+        value={query}
+        onChange={(event) => onQueryChange(event.target.value)}
+        placeholder="Search terminal..."
+        className="w-48 rounded border border-gray-600 bg-gray-900 px-2 py-1 text-xs text-white placeholder:text-gray-500 focus:border-brand-500 focus:outline-none"
+      />
+      <span className="min-w-[68px] text-right text-xs text-gray-400">
+        {hasQuery ? (hasMatches ? `${activeMatchIndex + 1}/${totalMatches}` : "0 matches") : "Search"}
+      </span>
+      <button
+        type="button"
+        onClick={onPrev}
+        disabled={!hasMatches}
+        className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Prev
+      </button>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={!hasMatches}
+        className="rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+const SearchableTerminalContent = memo(function SearchableTerminalContent({
+  lines,
+  emptyText,
+  searchModel,
+  activeMatchIndex,
+  className,
+}: {
+  lines: string[];
+  emptyText: string;
+  searchModel: SearchModel;
+  activeMatchIndex: number;
+  className: string;
+}) {
+  const activeMatchRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (searchModel.totalMatches <= 0 || activeMatchIndex < 0) return;
+    activeMatchRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [searchModel.totalMatches, activeMatchIndex]);
+
+  return (
+    <pre className={className} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+      {lines.length > 0 ? (
+        lines.map((line, lineIndex) => {
+          const lineMatches = searchModel.matchesByLine.get(lineIndex) || [];
+          let cursor = 0;
+          const parts: React.ReactNode[] = [];
+
+          lineMatches.forEach((match) => {
+            if (match.start > cursor) {
+              parts.push(line.slice(cursor, match.start));
+            }
+            const isActive = match.matchIndex === activeMatchIndex;
+            parts.push(
+              <mark
+                key={`match-${lineIndex}-${match.matchIndex}`}
+                ref={isActive ? (node) => { activeMatchRef.current = node; } : undefined}
+                className={isActive ? "rounded bg-amber-300 px-0.5 text-gray-950" : "rounded bg-emerald-700/60 px-0.5 text-white"}
+              >
+                {line.slice(match.start, match.end)}
+              </mark>,
+            );
+            cursor = match.end;
+          });
+
+          if (cursor < line.length) {
+            parts.push(line.slice(cursor));
+          }
+
+          const lineHasActiveMatch = lineMatches.some((match) => match.matchIndex === activeMatchIndex);
+
+          return (
+            <span
+              key={lineIndex}
+              className={lineHasActiveMatch ? "block rounded bg-white/5" : undefined}
+            >
+              {parts.length > 0 ? parts : line}
+              <br />
+            </span>
+          );
+        })
+      ) : (
+        emptyText
+      )}
+    </pre>
+  );
+});
 
 function fmtDate(value: string | null | undefined): string {
   if (!value) return "n/a";
@@ -106,10 +283,20 @@ export default function AdminConsolePage() {
   const [me, setMe] = useState<UserRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
+  const [logViewerRun, setLogViewerRun] = useState<AdminLogRun | null>(null);
+  const [logViewerData, setLogViewerData] = useState<AdminLogFile | null>(null);
+  const [logViewerBusy, setLogViewerBusy] = useState(false);
+  const [logViewerError, setLogViewerError] = useState("");
+  const [terminalSearchQuery, setTerminalSearchQuery] = useState("");
+  const [terminalActiveMatchIndex, setTerminalActiveMatchIndex] = useState(-1);
+  const [logViewerSearchQuery, setLogViewerSearchQuery] = useState("");
+  const [logViewerActiveMatchIndex, setLogViewerActiveMatchIndex] = useState(-1);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
+  const terminalSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const logViewerSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Use custom hooks for bot and log management
   const {
@@ -131,6 +318,15 @@ export default function AdminConsolePage() {
   // SSE for real-time log streaming
   const { logLines: streamLogLines, isStreaming, startStream, stopStream } = useLogStream(selectedRunKey);
 
+  const closeLogViewer = useCallback(() => {
+    setLogViewerRun(null);
+    setLogViewerData(null);
+    setLogViewerError("");
+    setLogViewerBusy(false);
+    setLogViewerSearchQuery("");
+    setLogViewerActiveMatchIndex(-1);
+  }, []);
+
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
     setStatus(reason);
@@ -142,6 +338,8 @@ export default function AdminConsolePage() {
     setReportRuns([]);
     setLocalLogTail(null);
     setPairsHealth(null);
+    closeLogViewer();
+    setTerminalFullscreen(false);
     if (isFloating) setSharedLogTail(null);
     setFloating(false);
     if (redirectToLogin) {
@@ -159,6 +357,8 @@ export default function AdminConsolePage() {
     setReportRuns,
     setLocalLogTail,
     setPairsHealth,
+    closeLogViewer,
+    setTerminalFullscreen,
     isFloating,
     setSharedLogTail,
   ]);
@@ -177,6 +377,18 @@ export default function AdminConsolePage() {
   // Use SSE streamed lines when available and not floating
   const displayLines = (!isFloating && streamLogLines.length > 0) ? streamLogLines : displayLogTail?.lines || [];
   const showingControlLog = displayLogTail?.run_key === "__control__";
+  const logViewerLines = useMemo(
+    () => (logViewerData?.content ? logViewerData.content.split(/\r?\n/) : []),
+    [logViewerData?.content],
+  );
+  const terminalSearchModel = useMemo(
+    () => buildSearchModel(displayLines, terminalSearchQuery),
+    [displayLines, terminalSearchQuery],
+  );
+  const logViewerSearchModel = useMemo(
+    () => buildSearchModel(logViewerLines, logViewerSearchQuery),
+    [logViewerLines, logViewerSearchQuery],
+  );
 
   // Memoize run key options for dropdown to prevent recalculation
   const runKeyOptions = useMemo(
@@ -352,6 +564,131 @@ export default function AdminConsolePage() {
       setSelectedRunKey,
       applyTailMetrics,
     ]);
+
+  const handleOpenLogViewer = useCallback(async (row: AdminLogRun) => {
+    if (!canViewLogs) return;
+    setLogViewerRun(row);
+    setLogViewerData(null);
+    setLogViewerError("");
+    setLogViewerBusy(true);
+    try {
+      const next = await getAdminLogFile(row.run_key);
+      setLogViewerData(next);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setLogViewerError("Insufficient permissions to view this log.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Failed to load log file";
+      setLogViewerError(msg);
+    } finally {
+      setLogViewerBusy(false);
+    }
+  }, [canViewLogs, clearAdminSession, setError]);
+
+  const handleDeleteLog = useCallback(async (row: AdminLogRun) => {
+    if (!canManageBot) return;
+    if (!window.confirm(`Delete log run ${row.run_key}? This only removes the log files for this run.`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await deleteAdminLogRun(row.run_key);
+      if (logViewerRun?.run_key === row.run_key) {
+        closeLogViewer();
+      }
+      await loadAdminData();
+      setStatus(`Deleted ${row.run_key}`);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to delete this log.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Delete failed";
+      setError(msg);
+      window.alert(`Failed to delete ${row.run_key}: ${msg}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [canManageBot, logViewerRun, closeLogViewer, loadAdminData, clearAdminSession, setError]);
+
+  useEffect(() => {
+    if (!terminalFullscreen) {
+      setTerminalSearchQuery("");
+      setTerminalActiveMatchIndex(-1);
+      return;
+    }
+    if (terminalSearchModel.totalMatches <= 0) {
+      setTerminalActiveMatchIndex(-1);
+      return;
+    }
+    setTerminalActiveMatchIndex((current) => (
+      current >= 0 && current < terminalSearchModel.totalMatches ? current : 0
+    ));
+  }, [terminalFullscreen, terminalSearchModel.totalMatches]);
+
+  useEffect(() => {
+    setTerminalActiveMatchIndex(
+      terminalSearchQuery.trim() && terminalSearchModel.totalMatches > 0 ? 0 : -1,
+    );
+  }, [terminalSearchQuery, terminalSearchModel.totalMatches]);
+
+  useEffect(() => {
+    if (!logViewerRun) {
+      setLogViewerSearchQuery("");
+      setLogViewerActiveMatchIndex(-1);
+      return;
+    }
+    if (logViewerSearchModel.totalMatches <= 0) {
+      setLogViewerActiveMatchIndex(-1);
+      return;
+    }
+    setLogViewerActiveMatchIndex((current) => (
+      current >= 0 && current < logViewerSearchModel.totalMatches ? current : 0
+    ));
+  }, [logViewerRun, logViewerSearchModel.totalMatches]);
+
+  useEffect(() => {
+    setLogViewerActiveMatchIndex(
+      logViewerSearchQuery.trim() && logViewerSearchModel.totalMatches > 0 ? 0 : -1,
+    );
+  }, [logViewerSearchQuery, logViewerSearchModel.totalMatches]);
+
+  useEffect(() => {
+    if (!terminalFullscreen && !logViewerRun) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        if (logViewerRun) {
+          logViewerSearchInputRef.current?.focus();
+          return;
+        }
+        if (terminalFullscreen) {
+          terminalSearchInputRef.current?.focus();
+        }
+        return;
+      }
+      if (event.key !== "Escape") return;
+      if (logViewerRun) {
+        closeLogViewer();
+        return;
+      }
+      setTerminalFullscreen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [terminalFullscreen, logViewerRun, closeLogViewer]);
 
   // Effect to poll for new run when bot is starting
   useEffect(() => {
@@ -913,9 +1250,20 @@ export default function AdminConsolePage() {
             className="fixed inset-0 z-50 flex flex-col bg-gray-900"
           >
             <div
-              className="flex items-center justify-between border-b border-gray-700 bg-gray-800 px-4 py-3"
+              className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 bg-gray-800 px-4 py-3"
             >
-              <h3 className="text-lg font-semibold text-white">Terminal</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-lg font-semibold text-white">Terminal</h3>
+                <SearchBar
+                  query={terminalSearchQuery}
+                  onQueryChange={setTerminalSearchQuery}
+                  totalMatches={terminalSearchModel.totalMatches}
+                  activeMatchIndex={terminalActiveMatchIndex}
+                  onPrev={() => setTerminalActiveMatchIndex((current) => nextSearchIndex(current, terminalSearchModel.totalMatches, -1))}
+                  onNext={() => setTerminalActiveMatchIndex((current) => nextSearchIndex(current, terminalSearchModel.totalMatches, 1))}
+                  inputRef={terminalSearchInputRef}
+                />
+              </div>
               <button
                 onClick={() => setTerminalFullscreen(false)}
                 className="rounded px-3 py-1 text-sm font-medium text-gray-300 hover:bg-gray-700"
@@ -933,14 +1281,71 @@ export default function AdminConsolePage() {
                   Showing current startup/control output until a fresh run log is created.
                 </p>
               ) : null}
-              <pre className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {displayLines.length > 0 ? displayLines.map((line, i) => <span key={i}>{line}<br /></span>) : "No log lines yet."}
-              </pre>
+              <SearchableTerminalContent
+                lines={displayLines}
+                emptyText="No log lines yet."
+                searchModel={terminalSearchModel}
+                activeMatchIndex={terminalActiveMatchIndex}
+                className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100"
+              />
             </div>
           </div>
         ) : null}
+
         </>
         )}
+
+        {logViewerRun ? (
+          <div className="fixed inset-0 z-[60] flex flex-col bg-gray-900">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-700 bg-gray-800 px-4 py-3">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Log Viewer</h3>
+                <p className="mt-1 font-mono text-xs text-gray-400">
+                  {logViewerRun.run_key}
+                  {logViewerData?.updated_at ? ` | Updated ${fmtDate(logViewerData.updated_at)}` : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <SearchBar
+                  query={logViewerSearchQuery}
+                  onQueryChange={setLogViewerSearchQuery}
+                  totalMatches={logViewerSearchModel.totalMatches}
+                  activeMatchIndex={logViewerActiveMatchIndex}
+                  onPrev={() => setLogViewerActiveMatchIndex((current) => nextSearchIndex(current, logViewerSearchModel.totalMatches, -1))}
+                  onNext={() => setLogViewerActiveMatchIndex((current) => nextSearchIndex(current, logViewerSearchModel.totalMatches, 1))}
+                  inputRef={logViewerSearchInputRef}
+                />
+                <button
+                  onClick={closeLogViewer}
+                  className="rounded px-3 py-1 text-sm font-medium text-gray-300 hover:bg-gray-700"
+                >
+                  Exit Fullscreen
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-1 flex-col overflow-hidden p-4">
+              {logViewerBusy ? (
+                <p className="text-sm text-gray-300">Loading full log...</p>
+              ) : logViewerError ? (
+                <p className="text-sm text-red-300">{logViewerError}</p>
+              ) : (
+                <>
+                  <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                    <span>{fmtBytes(logViewerData?.size_bytes ?? logViewerRun.size_bytes)}</span>
+                    <span>{(logViewerData?.line_count ?? 0).toLocaleString()} lines</span>
+                  </div>
+                  <SearchableTerminalContent
+                    lines={logViewerLines}
+                    emptyText="No log content found."
+                    searchModel={logViewerSearchModel}
+                    activeMatchIndex={logViewerActiveMatchIndex}
+                    className="custom-scrollbar flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 font-mono text-xs leading-relaxed text-emerald-100"
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         {activeTab === "logs" && (
           <section className="flex flex-1 min-h-0 flex-col gap-2 overflow-hidden">
@@ -985,25 +1390,53 @@ export default function AdminConsolePage() {
             <div className="grid flex-1 min-h-0 overflow-hidden gap-2 xl:grid-cols-2 xl:auto-rows-fr">
               <PanelCard title="All Logs" className="flex h-full min-h-0 flex-col overflow-hidden">
                 <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
-                  <table>
+                  <table className="text-xs">
                     <thead>
                       <tr>
                         <th>Run</th>
                         <th>Size</th>
                         <th>Updated</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {logRuns.map((row) => (
                         <tr key={row.run_key}>
-                          <td>{row.run_key}</td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenLogViewer(row)}
+                              className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
+                              title={`View ${row.run_key}`}
+                            >
+                              {row.run_key}
+                            </button>
+                          </td>
                           <td>{fmtBytes(row.size_bytes)}</td>
                           <td>{fmtUnix(row.mtime_ts)}</td>
+                          <td>
+                            {canManageBot ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteLog(row)}
+                                disabled={busy}
+                                className="inline-flex items-center justify-center rounded-md border border-red-300 px-2 py-1 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
+                                title={`Delete ${row.run_key}`}
+                                aria-label={`Delete ${row.run_key}`}
+                              >
+                                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6m-8 4h10m-9 0l.6 11.2A2 2 0 0 0 10.6 20h2.8a2 2 0 0 0 2-1.8L16 7m-6 0V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2" />
+                                </svg>
+                              </button>
+                            ) : (
+                              <span className="text-xs text-gray-400">n/a</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                       {!logRuns.length ? (
                         <tr>
-                          <td colSpan={3} className="text-sm text-gray-500 dark:text-gray-400">
+                          <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
                             No log runs found.
                           </td>
                         </tr>
@@ -1015,7 +1448,7 @@ export default function AdminConsolePage() {
 
               <PanelCard title="All Reports" className="flex h-full min-h-0 flex-col overflow-hidden">
                 <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
-                  <table>
+                  <table className="text-xs">
                     <thead>
                       <tr>
                         <th>Run</th>
@@ -1027,7 +1460,7 @@ export default function AdminConsolePage() {
                     <tbody>
                       {reportRuns.map((row) => (
                         <tr key={row.run_key}>
-                          <td>{row.run_key}</td>
+                          <td className="font-mono text-xs">{row.run_key}</td>
                           <td>{row.file_count}</td>
                           <td>
                             <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
@@ -1037,7 +1470,7 @@ export default function AdminConsolePage() {
                       ))}
                       {!reportRuns.length ? (
                         <tr>
-                          <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                          <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
                             No report runs found.
                           </td>
                         </tr>

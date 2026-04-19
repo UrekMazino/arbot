@@ -204,6 +204,15 @@ export type AdminLogRun = {
   mtime_ts: number;
 };
 
+export type AdminLogFile = {
+  run_key: string;
+  log_file: string;
+  content: string;
+  size_bytes: number;
+  line_count: number;
+  updated_at: string;
+};
+
 export type AdminReportRun = {
   run_key: string;
   path: string;
@@ -396,6 +405,16 @@ export async function getAdminBotLogTail(
 
 export async function getAdminLogRuns(limit = 100): Promise<AdminLogRun[]> {
   return apiRequest<AdminLogRun[]>(`/admin/logs/runs?limit=${limit}`, { method: "GET" });
+}
+
+export async function getAdminLogFile(runKey: string): Promise<AdminLogFile> {
+  const key = encodeURIComponent(runKey);
+  return apiRequest<AdminLogFile>(`/admin/logs/runs/${key}`, { method: "GET" });
+}
+
+export async function deleteAdminLogRun(runKey: string): Promise<{ deleted: boolean; run_key: string; log_file: string; removed_files: number }> {
+  const key = encodeURIComponent(runKey);
+  return apiRequest<{ deleted: boolean; run_key: string; log_file: string; removed_files: number }>(`/admin/logs/runs/${key}`, { method: "DELETE" });
 }
 
 export async function getAdminReportRuns(limit = 100): Promise<AdminReportRun[]> {

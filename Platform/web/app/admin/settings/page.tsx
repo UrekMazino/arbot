@@ -716,12 +716,12 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="grid gap-6 xl:grid-cols-2">
+                <div className="grid items-start gap-6 xl:grid-cols-2">
                   {groupedBotSettingSections.map((group) => {
                     const isCollapsed = isBotSearchActive ? false : (collapsedBotGroups[group.id] ?? true);
 
                     return (
-                      <div key={group.id} className="rounded-xl border border-gray-200 bg-white/70 dark:border-gray-700 dark:bg-gray-900/40">
+                      <div key={group.id} className="self-start rounded-xl border border-gray-200 bg-white/70 dark:border-gray-700 dark:bg-gray-900/40">
                         <button
                           type="button"
                           onClick={() => toggleBotGroup(group.id)}

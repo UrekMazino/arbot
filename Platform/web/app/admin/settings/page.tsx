@@ -347,6 +347,7 @@ export default function SettingsPage() {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [tooltipKey, setTooltipKey] = useState<string | null>(null);
+  const [collapsedBotGroups, setCollapsedBotGroups] = useState<Record<string, boolean>>({});
   const navItems = useMemo(() => getAdminNavItems(me), [me]);
   const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
   const canEditSettings = hasPermission(me, "edit_settings");
@@ -476,10 +477,58 @@ export default function SettingsPage() {
     () => buildSettingGroups(botEnvKeys, searchTerm, BOT_SETTING_GROUPS),
     [botEnvKeys, searchTerm],
   );
+  const isBotSearchActive = searchTerm.trim().length > 0;
 
   const filteredKeys = useMemo(() => {
     return apiEnvKeys.filter((key) => key.toLowerCase().includes(searchTerm.toLowerCase()));
   }, [apiEnvKeys, searchTerm]);
+
+  useEffect(() => {
+    setCollapsedBotGroups((prev) => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+
+      for (const group of groupedBotSettingSections) {
+        if (Object.prototype.hasOwnProperty.call(prev, group.id)) {
+          next[group.id] = prev[group.id];
+        } else {
+          next[group.id] = true;
+          changed = true;
+        }
+      }
+
+      const prevKeys = Object.keys(prev);
+      if (prevKeys.length !== Object.keys(next).length) {
+        changed = true;
+      } else {
+        for (const key of prevKeys) {
+          if (!(key in next) || next[key] !== prev[key]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [groupedBotSettingSections]);
+
+  const toggleBotGroup = useCallback((groupId: string) => {
+    setCollapsedBotGroups((prev) => ({
+      ...prev,
+      [groupId]: !(prev[groupId] ?? true),
+    }));
+  }, []);
+
+  const setAllBotGroupsCollapsed = useCallback((collapsed: boolean) => {
+    setCollapsedBotGroups((prev) => {
+      const next = { ...prev };
+      for (const group of groupedBotSettingSections) {
+        next[group.id] = collapsed;
+      }
+      return next;
+    });
+  }, [groupedBotSettingSections]);
 
   async function saveEnvKey(key: string) {
     if (!me) return;
@@ -635,122 +684,166 @@ export default function SettingsPage() {
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white/90">Bot Configuration</h3>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Grouped runtime settings. Updates `Execution/.env` directly.</p>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Grouped runtime settings. Updates `Execution/.env` directly.
+                      {isBotSearchActive ? " Matching categories expand automatically while searching." : " Categories start collapsed for quicker scanning."}
+                    </p>
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Search settings..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-500 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400"
-                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className={secondaryButtonClasses}
+                      onClick={() => setAllBotGroupsCollapsed(false)}
+                      disabled={!groupedBotSettingSections.length || isBotSearchActive}
+                    >
+                      Expand all
+                    </button>
+                    <button
+                      type="button"
+                      className={secondaryButtonClasses}
+                      onClick={() => setAllBotGroupsCollapsed(true)}
+                      disabled={!groupedBotSettingSections.length || isBotSearchActive}
+                    >
+                      Collapse all
+                    </button>
+                    <input
+                      type="text"
+                      placeholder="Search settings..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-500 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder-gray-400"
+                    />
+                  </div>
                 </div>
 
                 <div className="grid gap-6 xl:grid-cols-2">
-                  {groupedBotSettingSections.map((group) => (
-                    <div key={group.id}>
-                      <div className="mb-3">
-                        <h4 className="text-base font-semibold text-gray-900 dark:text-white/90">{group.title}</h4>
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{group.description}</p>
+                  {groupedBotSettingSections.map((group) => {
+                    const isCollapsed = isBotSearchActive ? false : (collapsedBotGroups[group.id] ?? true);
+
+                    return (
+                      <div key={group.id} className="rounded-xl border border-gray-200 bg-white/70 dark:border-gray-700 dark:bg-gray-900/40">
+                        <button
+                          type="button"
+                          onClick={() => toggleBotGroup(group.id)}
+                          disabled={isBotSearchActive}
+                          aria-expanded={!isCollapsed}
+                          className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left disabled:cursor-default"
+                        >
+                          <div>
+                            <h4 className="text-base font-semibold text-gray-900 dark:text-white/90">{group.title}</h4>
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{group.description}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">{group.settingKeys.length} setting{group.settingKeys.length === 1 ? "" : "s"}</p>
+                            <p className="mt-1 text-xs text-brand-600 dark:text-brand-400">
+                              {isBotSearchActive ? "Open for search" : (isCollapsed ? "Expand" : "Collapse")}
+                            </p>
+                          </div>
+                        </button>
+
+                        {!isCollapsed ? (
+                          <div className="border-t border-gray-200 dark:border-gray-700">
+                            <div className="overflow-x-auto rounded-b-xl">
+                              <table className="w-full border-collapse">
+                                <thead>
+                                  <tr className="bg-gray-50 dark:bg-gray-800">
+                                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Key</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-32">Value</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-16">Action</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {group.settingKeys.map((key) => {
+                                    const isEditing = editingEnvKeys.has(key);
+                                    const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
+                                    const tooltipInfo = getTooltipInfo(key);
+                                    return (
+                                      <tr key={key} className="border-t border-gray-100 dark:border-gray-800">
+                                        <td className="relative px-3 py-2 text-xs text-gray-600 dark:text-gray-400 font-mono">
+                                          <div className="flex items-center gap-1">
+                                            <span title={key}>{formatSettingLabel(key)}</span>
+                                            {tooltipInfo && (
+                                              <button
+                                                type="button"
+                                                onClick={() => setTooltipKey(tooltipKey === key ? null : key)}
+                                                onMouseEnter={() => setTooltipKey(key)}
+                                                onMouseLeave={() => setTooltipKey(null)}
+                                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-500 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600"
+                                                title={tooltipInfo.default}
+                                              >
+                                                ?
+                                              </button>
+                                            )}
+                                          </div>
+                                          {tooltipInfo && tooltipKey === key && (
+                                            <div className="absolute z-50 mt-2 w-64 max-w-xs rounded-md bg-gray-900 px-3 py-2 text-xs text-white shadow-lg whitespace-normal break-words">
+                                              <p className="font-semibold">Default: {tooltipInfo.default}</p>
+                                              <p className="mt-1 text-gray-300">{tooltipInfo.description}</p>
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 text-xs">
+                                          {isEditing ? (
+                                            <input
+                                              value={currentValue}
+                                              onChange={(e) =>
+                                                setEnvEdits((prev) => ({
+                                                  ...prev,
+                                                  [key]: e.target.value,
+                                                }))
+                                              }
+                                              className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                                            />
+                                          ) : (
+                                            <span className="text-gray-700 dark:text-gray-300 truncate block max-w-28">{currentValue || "(empty)"}</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          {isEditing ? (
+                                            <div className="flex gap-1">
+                                              <button
+                                                className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700"
+                                                onClick={() => saveEnvKey(key)}
+                                                disabled={busy}
+                                              >
+                                                Save
+                                              </button>
+                                              <button
+                                                className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
+                                                onClick={() => cancelEditMode(key)}
+                                                disabled={busy}
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                                              onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
+                                              disabled={busy}
+                                            >
+                                              Edit
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {!group.settingKeys.length ? (
+                                    <tr>
+                                      <td colSpan={3} className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400 text-center">
+                                        {searchTerm ? "No matches." : "No settings in this group."}
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
-                      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr className="bg-gray-50 dark:bg-gray-800">
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Key</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-32">Value</th>
-                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 w-16">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {group.settingKeys.map((key) => {
-                            const isEditing = editingEnvKeys.has(key);
-                            const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
-                            const tooltipInfo = getTooltipInfo(key);
-                            return (
-                              <tr key={key} className="border-t border-gray-100 dark:border-gray-800">
-                                <td className="relative px-3 py-2 text-xs text-gray-600 dark:text-gray-400 font-mono">
-                                  <div className="flex items-center gap-1">
-                                    <span title={key}>{formatSettingLabel(key)}</span>
-                                    {tooltipInfo && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setTooltipKey(tooltipKey === key ? null : key)}
-                                        onMouseEnter={() => setTooltipKey(key)}
-                                        onMouseLeave={() => setTooltipKey(null)}
-                                        className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-gray-200 text-[10px] font-semibold text-gray-500 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-400 dark:hover:bg-gray-600"
-                                        title={tooltipInfo.default}
-                                      >
-                                        ?
-                                      </button>
-                                    )}
-                                  </div>
-                                  {tooltipInfo && tooltipKey === key && (
-                                    <div className="absolute z-50 mt-2 w-64 max-w-xs rounded-md bg-gray-900 px-3 py-2 text-xs text-white shadow-lg whitespace-normal break-words">
-                                      <p className="font-semibold">Default: {tooltipInfo.default}</p>
-                                      <p className="mt-1 text-gray-300">{tooltipInfo.description}</p>
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-xs">
-                                  {isEditing ? (
-                                    <input
-                                      value={currentValue}
-                                      onChange={(e) =>
-                                        setEnvEdits((prev) => ({
-                                          ...prev,
-                                          [key]: e.target.value,
-                                        }))
-                                      }
-                                      className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                                    />
-                                  ) : (
-                                    <span className="text-gray-700 dark:text-gray-300 truncate block max-w-28">{currentValue || "(empty)"}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {isEditing ? (
-                                    <div className="flex gap-1">
-                                      <button
-                                        className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white hover:bg-blue-700"
-                                        onClick={() => saveEnvKey(key)}
-                                        disabled={busy}
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        className="rounded bg-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500"
-                                        onClick={() => cancelEditMode(key)}
-                                        disabled={busy}
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-                                      onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
-                                      disabled={busy}
-                                    >
-                                      Edit
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {!group.settingKeys.length ? (
-                            <tr>
-                              <td colSpan={3} className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400 text-center">
-                                {searchTerm ? "No matches." : "No settings in this group."}
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                    </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {!groupedBotSettingSections.length ? (
                   <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">

@@ -37,6 +37,7 @@ import { useBotStatus, useLogRuns, useDashboardWebSocket, useLogStream } from ".
 import { useFloatingTerminal } from "../../../context/floating-terminal-context";
 import { DashboardShell } from "../../../components/dashboard-shell";
 import { PanelCard, StatusPill, TableFrame } from "../../../components/panels";
+import { useConfirmDialog } from "../../../components/ui/confirm-dialog";
 
 type SearchMatch = {
   start: number;
@@ -291,12 +292,14 @@ export default function AdminConsolePage() {
   const [terminalActiveMatchIndex, setTerminalActiveMatchIndex] = useState(-1);
   const [logViewerSearchQuery, setLogViewerSearchQuery] = useState("");
   const [logViewerActiveMatchIndex, setLogViewerActiveMatchIndex] = useState(-1);
+  const [selectedArtifactsRunKey, setSelectedArtifactsRunKey] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
   const terminalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const logViewerSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const { ConfirmDialogComponent: actionConfirmDialog, confirm: showActionConfirm } = useConfirmDialog();
 
   // Use custom hooks for bot and log management
   const {
@@ -388,6 +391,10 @@ export default function AdminConsolePage() {
   const logViewerSearchModel = useMemo(
     () => buildSearchModel(logViewerLines, logViewerSearchQuery),
     [logViewerLines, logViewerSearchQuery],
+  );
+  const artifactRunKeys = useMemo(
+    () => Array.from(new Set([...logRuns.map((row) => row.run_key), ...reportRuns.map((row) => row.run_key)])),
+    [logRuns, reportRuns],
   );
 
   // Memoize run key options for dropdown to prevent recalculation
@@ -591,20 +598,19 @@ export default function AdminConsolePage() {
     }
   }, [canViewLogs, clearAdminSession, setError]);
 
-  const handleDeleteLog = useCallback(async (row: AdminLogRun) => {
+  const handleDeleteRun = useCallback(async (runKey: string) => {
     if (!canManageBot) return;
-    if (!window.confirm(`Delete log run ${row.run_key}? This only removes the log files for this run.`)) {
-      return;
-    }
+    const targetRunKey = String(runKey || "").trim();
+    if (!targetRunKey) return;
     setBusy(true);
     setError("");
     try {
-      await deleteAdminLogRun(row.run_key);
-      if (logViewerRun?.run_key === row.run_key) {
+      await deleteAdminLogRun(targetRunKey);
+      if (logViewerRun?.run_key === targetRunKey) {
         closeLogViewer();
       }
       await loadAdminData();
-      setStatus(`Deleted ${row.run_key}`);
+      setStatus(`Deleted ${targetRunKey}`);
     } catch (err) {
       if (isUnauthorizedError(err)) {
         clearAdminSession("Session expired. Please sign in again.", true);
@@ -617,11 +623,88 @@ export default function AdminConsolePage() {
       }
       const msg = err instanceof Error ? err.message : "Delete failed";
       setError(msg);
-      window.alert(`Failed to delete ${row.run_key}: ${msg}`);
+      window.alert(`Failed to delete ${targetRunKey}: ${msg}`);
     } finally {
       setBusy(false);
     }
   }, [canManageBot, logViewerRun, closeLogViewer, loadAdminData, clearAdminSession, setError]);
+
+  const requestDeleteRun = useCallback((runKey: string) => {
+    const targetRunKey = String(runKey || "").trim();
+    if (!targetRunKey) return;
+    showActionConfirm({
+      title: "Delete Run Data",
+      description: `This will remove ${targetRunKey} from Logs & Reports, including its report folder and run history stored in the database.`,
+      confirmLabel: "Delete Run",
+      cancelLabel: "Cancel",
+      variant: "danger",
+      onConfirm: async () => {
+        await handleDeleteRun(targetRunKey);
+      },
+    });
+  }, [showActionConfirm, handleDeleteRun]);
+
+  const handleClearLogsAndReports = useCallback(async () => {
+    setBusy(true);
+    try {
+      const result = await clearAdminLogs(true);
+      const details = [
+        `Cleared ${result.deleted_logs} log runs`,
+        `${result.deleted_reports} report folders`,
+        `${result.deleted_report_rows} report records`,
+      ];
+      if (result.deleted_log_files > 0) {
+        details.push(`${result.deleted_log_files} auxiliary log files`);
+      }
+      if (result.deleted_report_files > 0) {
+        details.push(`${result.deleted_report_files} report file records`);
+      }
+      if (typeof result.deleted_run_rows === "number" && result.deleted_run_rows > 0) {
+        details.push(`${result.deleted_run_rows} run records`);
+      }
+      if (typeof result.deleted_pair_segments === "number" && result.deleted_pair_segments > 0) {
+        details.push(`${result.deleted_pair_segments} pair history rows`);
+      }
+      if (typeof result.deleted_trades === "number" && result.deleted_trades > 0) {
+        details.push(`${result.deleted_trades} trade rows`);
+      }
+      if (result.deleted_indexes > 0) {
+        details.push(`${result.deleted_indexes} derived indexes`);
+      }
+      if (result.errors.length > 0) {
+        details.push(`${result.errors.length} cleanup errors`);
+      }
+      alert(`${details.join(", ")}.`);
+      await loadAdminData();
+    } catch (err) {
+      alert("Failed to clear logs and reports: " + (err instanceof Error ? err.message : "Unknown error"));
+    } finally {
+      setBusy(false);
+    }
+  }, [loadAdminData]);
+
+  const requestClearLogsAndReports = useCallback(() => {
+    showActionConfirm({
+      title: "Clear Logs and Reports",
+      description: "This will remove older log runs and report data while keeping only the most recent run.",
+      confirmLabel: "Clear Data",
+      cancelLabel: "Cancel",
+      variant: "warning",
+      onConfirm: async () => {
+        await handleClearLogsAndReports();
+      },
+    });
+  }, [showActionConfirm, handleClearLogsAndReports]);
+
+  useEffect(() => {
+    if (artifactRunKeys.length === 0) {
+      setSelectedArtifactsRunKey("");
+      return;
+    }
+    if (!selectedArtifactsRunKey || !artifactRunKeys.includes(selectedArtifactsRunKey)) {
+      setSelectedArtifactsRunKey(artifactRunKeys[0] || "");
+    }
+  }, [artifactRunKeys, selectedArtifactsRunKey]);
 
   useEffect(() => {
     if (!terminalFullscreen) {
@@ -1352,134 +1435,129 @@ export default function AdminConsolePage() {
             <div className="shrink-0 flex justify-end">
               <button
                 className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
-                onClick={async () => {
-                  if (!confirm("Clear logs and reports? The most recent run will be kept.")) return;
-                  setBusy(true);
-                  try {
-                    const result = await clearAdminLogs(true);
-                    const details = [
-                      `Cleared ${result.deleted_logs} log runs`,
-                      `${result.deleted_reports} report folders`,
-                      `${result.deleted_report_rows} report records`,
-                    ];
-                    if (result.deleted_log_files > 0) {
-                      details.push(`${result.deleted_log_files} auxiliary log files`);
-                    }
-                    if (result.deleted_report_files > 0) {
-                      details.push(`${result.deleted_report_files} report file records`);
-                    }
-                    if (result.deleted_indexes > 0) {
-                      details.push(`${result.deleted_indexes} derived indexes`);
-                    }
-                    if (result.errors.length > 0) {
-                      details.push(`${result.errors.length} cleanup errors`);
-                    }
-                    alert(`${details.join(", ")}.`);
-                    await loadAdminData();
-                  } catch (err) {
-                    alert("Failed to clear logs and reports: " + (err instanceof Error ? err.message : "Unknown error"));
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
+                onClick={requestClearLogsAndReports}
                 disabled={busy}
               >
                 Clear Logs and Reports
               </button>
             </div>
-            <div className="grid flex-1 min-h-0 overflow-hidden gap-2 xl:grid-cols-2 xl:auto-rows-fr">
-              <PanelCard title="All Logs" className="flex h-full min-h-0 flex-col overflow-hidden">
-                <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
-                  <table className="text-xs">
-                    <thead>
-                      <tr>
-                        <th>Run</th>
-                        <th>Size</th>
-                        <th>Updated</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {logRuns.map((row) => (
-                        <tr key={row.run_key}>
-                          <td>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenLogViewer(row)}
-                              className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
-                              title={`View ${row.run_key}`}
-                            >
-                              {row.run_key}
-                            </button>
-                          </td>
-                          <td>{fmtBytes(row.size_bytes)}</td>
-                          <td>{fmtUnix(row.mtime_ts)}</td>
-                          <td>
-                            {canManageBot ? (
+            <PanelCard
+              title="Logs & Reports"
+              subtitle="View full logs from the run name. Deleting the selected run clears both its log and report data."
+              className="flex h-full min-h-0 flex-col overflow-hidden"
+              actions={
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 py-1 font-mono text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                    {selectedArtifactsRunKey || "No run selected"}
+                  </span>
+                  {canManageBot ? (
+                    <button
+                      type="button"
+                      onClick={() => requestDeleteRun(selectedArtifactsRunKey)}
+                      disabled={busy || !selectedArtifactsRunKey}
+                      className="inline-flex items-center rounded-xl border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                    >
+                      Delete Selected Run
+                    </button>
+                  ) : null}
+                </div>
+              }
+            >
+              <div className="grid flex-1 min-h-0 overflow-hidden gap-2 xl:grid-cols-2 xl:auto-rows-fr">
+                <div className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white/90">All Logs</h4>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Click a run name to open the full terminal log.</p>
+                  </div>
+                  <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                    <table className="text-xs">
+                      <thead>
+                        <tr>
+                          <th>Run</th>
+                          <th>Size</th>
+                          <th>Updated</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logRuns.map((row) => (
+                          <tr
+                            key={row.run_key}
+                            onClick={() => setSelectedArtifactsRunKey(row.run_key)}
+                            className={selectedArtifactsRunKey === row.run_key ? "cursor-pointer bg-brand-50/80 dark:bg-brand-950/20" : "cursor-pointer"}
+                          >
+                            <td>
                               <button
                                 type="button"
-                                onClick={() => handleDeleteLog(row)}
-                                disabled={busy}
-                                className="inline-flex items-center justify-center rounded-md border border-red-300 px-2 py-1 text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-300 dark:hover:bg-red-950/40"
-                                title={`Delete ${row.run_key}`}
-                                aria-label={`Delete ${row.run_key}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedArtifactsRunKey(row.run_key);
+                                  void handleOpenLogViewer(row);
+                                }}
+                                className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
+                                title={`View ${row.run_key}`}
                               >
-                                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 3h6m-8 4h10m-9 0l.6 11.2A2 2 0 0 0 10.6 20h2.8a2 2 0 0 0 2-1.8L16 7m-6 0V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2" />
-                                </svg>
+                                {row.run_key}
                               </button>
-                            ) : (
-                              <span className="text-xs text-gray-400">n/a</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                      {!logRuns.length ? (
-                        <tr>
-                          <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
-                            No log runs found.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </TableFrame>
-              </PanelCard>
+                            </td>
+                            <td>{fmtBytes(row.size_bytes)}</td>
+                            <td>{fmtUnix(row.mtime_ts)}</td>
+                          </tr>
+                        ))}
+                        {!logRuns.length ? (
+                          <tr>
+                            <td colSpan={3} className="text-xs text-gray-500 dark:text-gray-400">
+                              No log runs found.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </div>
 
-              <PanelCard title="All Reports" className="flex h-full min-h-0 flex-col overflow-hidden">
-                <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
-                  <table className="text-xs">
-                    <thead>
-                      <tr>
-                        <th>Run</th>
-                        <th>Files</th>
-                        <th>Summary</th>
-                        <th>Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reportRuns.map((row) => (
-                        <tr key={row.run_key}>
-                          <td className="font-mono text-xs">{row.run_key}</td>
-                          <td>{row.file_count}</td>
-                          <td>
-                            <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
-                          </td>
-                          <td>{fmtUnix(row.mtime_ts)}</td>
-                        </tr>
-                      ))}
-                      {!reportRuns.length ? (
+                <div className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white/90">All Reports</h4>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Select the matching run here when you want the shared delete action to remove both artifacts.</p>
+                  </div>
+                  <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                    <table className="text-xs">
+                      <thead>
                         <tr>
-                          <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
-                            No report runs found.
-                          </td>
+                          <th>Run</th>
+                          <th>Files</th>
+                          <th>Summary</th>
+                          <th>Updated</th>
                         </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </TableFrame>
-              </PanelCard>
-            </div>
+                      </thead>
+                      <tbody>
+                        {reportRuns.map((row) => (
+                          <tr
+                            key={row.run_key}
+                            onClick={() => setSelectedArtifactsRunKey(row.run_key)}
+                            className={selectedArtifactsRunKey === row.run_key ? "cursor-pointer bg-brand-50/80 dark:bg-brand-950/20" : "cursor-pointer"}
+                          >
+                            <td className="font-mono text-xs">{row.run_key}</td>
+                            <td>{row.file_count}</td>
+                            <td>
+                              <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
+                            </td>
+                            <td>{fmtUnix(row.mtime_ts)}</td>
+                          </tr>
+                        ))}
+                        {!reportRuns.length ? (
+                          <tr>
+                            <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
+                              No report runs found.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </div>
+              </div>
+            </PanelCard>
           </section>
         )}
 
@@ -1639,6 +1717,7 @@ export default function AdminConsolePage() {
           </section>
         )}
       </div>
+      {actionConfirmDialog}
     </DashboardShell>
   );
 }

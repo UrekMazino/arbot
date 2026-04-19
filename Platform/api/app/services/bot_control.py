@@ -14,11 +14,24 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
-from ..models import BotInstance, Report, ReportFile, Run
+from ..models import (
+    Alert,
+    BotConfig,
+    BotInstance,
+    PositionSnapshot,
+    RegimeMetric,
+    Report,
+    ReportFile,
+    Run,
+    RunEvent,
+    RunPairSegment,
+    StrategyMetric,
+    Trade,
+)
 from .run_pair_segments import list_run_pair_history_rows_by_run_key
 
 
@@ -995,36 +1008,141 @@ def read_run_log(run_key: str) -> dict:
     }
 
 
+def _clear_deleted_run_state(run_key: str) -> None:
+    selected = str(run_key or "").strip()
+    if not selected:
+        return
+    state = _read_state()
+    if str(state.get("run_key") or "").strip() != selected:
+        return
+    if bool(state.get("running")):
+        return
+    for key in ("run_key", "run_log_file", "starting_equity", "run_start_time"):
+        state.pop(key, None)
+    _write_state(state)
+
+
+def _delete_run_database_records(db: Session, run_key: str) -> dict[str, int]:
+    selected = str(run_key or "").strip()
+    counts = {
+        "deleted_run_rows": 0,
+        "deleted_run_events": 0,
+        "deleted_pair_segments": 0,
+        "deleted_trades": 0,
+        "deleted_strategy_metrics": 0,
+        "deleted_regime_metrics": 0,
+        "deleted_bot_configs": 0,
+        "deleted_alerts": 0,
+        "deleted_position_snapshots": 0,
+        "deleted_report_rows": 0,
+        "deleted_report_files": 0,
+    }
+    if not selected:
+        return counts
+
+    run = db.execute(select(Run).where(Run.run_key == selected)).scalar_one_or_none()
+    if not run:
+        return counts
+
+    report_ids = db.execute(
+        select(Report.id).where(Report.run_id == run.id)
+    ).scalars().all()
+    if report_ids:
+        counts["deleted_report_files"] = int(
+            db.execute(delete(ReportFile).where(ReportFile.report_id.in_(report_ids))).rowcount or 0
+        )
+    counts["deleted_report_rows"] = int(
+        db.execute(delete(Report).where(Report.run_id == run.id)).rowcount or 0
+    )
+
+    for key, model in (
+        ("deleted_run_events", RunEvent),
+        ("deleted_pair_segments", RunPairSegment),
+        ("deleted_trades", Trade),
+        ("deleted_strategy_metrics", StrategyMetric),
+        ("deleted_regime_metrics", RegimeMetric),
+        ("deleted_bot_configs", BotConfig),
+        ("deleted_alerts", Alert),
+        ("deleted_position_snapshots", PositionSnapshot),
+    ):
+        counts[key] = int(db.execute(delete(model).where(model.run_id == run.id)).rowcount or 0)
+
+    counts["deleted_run_rows"] = int(
+        db.execute(delete(Run).where(Run.id == run.id)).rowcount or 0
+    )
+    return counts
+
+
 def delete_log_run(run_key: str) -> dict:
-    resolved_run_key, log_file = _resolve_run_log_file(run_key)
-    if not resolved_run_key or not log_file:
-        raise FileNotFoundError("Log run not found")
+    requested_run_key = str(run_key or "").strip()
+    if not requested_run_key:
+        raise FileNotFoundError("Run data not found")
+
+    resolved_run_key, log_file = _resolve_run_log_file(requested_run_key)
+    effective_run_key = resolved_run_key or requested_run_key
 
     status = get_bot_status()
     active_run_key = str(status.get("run_key") or "").strip()
     latest_run_key = str(status.get("latest_run_key") or "").strip()
-    if status.get("running") and resolved_run_key in {active_run_key, latest_run_key}:
+    if status.get("running") and effective_run_key in {active_run_key, latest_run_key}:
         raise RuntimeError("Cannot delete the active log run while the bot is running")
 
-    run_dir = _resolve_run_directory(LOGS_ROOT, resolved_run_key)
-    if not run_dir:
-        raise FileNotFoundError("Log run directory not found")
+    run_dir = _resolve_run_directory(LOGS_ROOT, effective_run_key)
+    report_dir = _resolve_run_directory(REPORTS_ROOT, effective_run_key)
 
     removed_files = 0
-    for path in run_dir.rglob("*"):
-        if path.is_file():
-            removed_files += 1
+    if run_dir:
+        for path in run_dir.rglob("*"):
+            if path.is_file():
+                removed_files += 1
+    removed_report_files = 0
+    if report_dir:
+        for path in report_dir.rglob("*"):
+            if path.is_file():
+                removed_report_files += 1
 
+    db_counts: dict[str, int] = {}
+    db: Session | None = None
     try:
-        shutil.rmtree(run_dir)
+        db = SessionLocal()
+        db_counts = _delete_run_database_records(db, effective_run_key)
+        has_database_artifacts = any(value > 0 for value in db_counts.values())
+        if not run_dir and not report_dir and not has_database_artifacts:
+            raise FileNotFoundError("Run data not found")
+        db.commit()
+    except FileNotFoundError:
+        if db is not None:
+            db.rollback()
+        raise
     except Exception as exc:
-        raise RuntimeError(f"Failed to delete log run: {exc}") from exc
+        if db is not None:
+            db.rollback()
+        raise RuntimeError(f"Failed to delete database records for {effective_run_key}: {exc}") from exc
+    finally:
+        if db is not None:
+            db.close()
+
+    if run_dir:
+        try:
+            shutil.rmtree(run_dir)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to delete log run: {exc}") from exc
+    if report_dir:
+        try:
+            shutil.rmtree(report_dir)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to delete report run: {exc}") from exc
+
+    _clear_deleted_run_state(effective_run_key)
 
     return {
         "deleted": True,
-        "run_key": resolved_run_key,
-        "log_file": str(log_file),
+        "run_key": effective_run_key,
+        "log_file": str(log_file) if log_file else None,
         "removed_files": removed_files,
+        "removed_report_files": removed_report_files,
+        "deleted_report_dir": bool(report_dir),
+        **db_counts,
     }
 
 
@@ -1069,6 +1187,15 @@ def clear_logs_and_reports(keep_latest: bool = True) -> dict:
     deleted_logs = 0
     deleted_reports = 0
     deleted_log_files = 0
+    deleted_run_rows = 0
+    deleted_run_events = 0
+    deleted_pair_segments = 0
+    deleted_trades = 0
+    deleted_strategy_metrics = 0
+    deleted_regime_metrics = 0
+    deleted_bot_configs = 0
+    deleted_alerts = 0
+    deleted_position_snapshots = 0
     deleted_report_rows = 0
     deleted_report_files = 0
     deleted_indexes = 0
@@ -1107,16 +1234,20 @@ def clear_logs_and_reports(keep_latest: bool = True) -> dict:
                 removed += 1
         return removed
 
-    protected_report_run_keys: set[str] = set()
+    protected_run_keys: set[str] = set()
+    run_keys_to_delete: set[str] = set()
+    log_dirs_to_delete: list[Path] = []
+    report_dirs_to_delete: list[Path] = []
 
     # Handle logs
     if LOGS_ROOT.exists():
         log_runs = get_sorted_runs(LOGS_ROOT)
         for idx, (_, run_dir) in enumerate(log_runs):
             if keep_latest and idx == 0:
+                protected_run_keys.add(run_dir.name)
                 continue  # Keep the newest
-            if remove_path(run_dir):
-                deleted_logs += 1
+            run_keys_to_delete.add(run_dir.name)
+            log_dirs_to_delete.append(run_dir)
         for path in (CONTROL_LOG_FILE,):
             if path.exists() and remove_path(path):
                 deleted_log_files += 1
@@ -1127,49 +1258,79 @@ def clear_logs_and_reports(keep_latest: bool = True) -> dict:
         report_runs = get_sorted_runs(REPORTS_ROOT)
         for idx, (_, run_dir) in enumerate(report_runs):
             if keep_latest and idx == 0:
-                protected_report_run_keys.add(run_dir.name)
+                protected_run_keys.add(run_dir.name)
                 continue  # Keep the newest
-            if remove_path(run_dir):
-                deleted_reports += 1
+            run_keys_to_delete.add(run_dir.name)
+            report_dirs_to_delete.append(run_dir)
         deleted_indexes += clear_index_files(REPORTS_ROOT)
 
     db: Session | None = None
     try:
         db = SessionLocal()
-        report_rows = db.execute(
-            select(Report, Run.run_key)
-            .join(Run, Report.run_id == Run.id)
-            .order_by(Report.requested_at.asc())
-        ).all()
-        reports_to_delete = [
-            row[0]
-            for row in report_rows
-            if (not keep_latest) or (str(row[1] or "") not in protected_report_run_keys)
-        ]
-        if reports_to_delete:
-            report_ids = [row.id for row in reports_to_delete]
-            report_files = db.execute(
-                select(ReportFile).where(ReportFile.report_id.in_(report_ids))
-            ).scalars().all()
-            for row in report_files:
-                db.delete(row)
-            deleted_report_files = len(report_files)
-            for row in reports_to_delete:
-                db.delete(row)
-            deleted_report_rows = len(reports_to_delete)
+        run_keys_from_db = {
+            str(run_key or "").strip()
+            for run_key in db.execute(select(Run.run_key)).scalars().all()
+            if str(run_key or "").strip()
+        }
+        if keep_latest:
+            latest_db_run_key = db.execute(
+                select(Run.run_key).order_by(Run.start_ts.desc()).limit(1)
+            ).scalar_one_or_none()
+            if latest_db_run_key:
+                protected_run_keys.add(str(latest_db_run_key).strip())
+        if not keep_latest:
+            run_keys_to_delete.update(run_keys_from_db)
+        else:
+            run_keys_to_delete.update(run_keys_from_db - protected_run_keys)
+
+        for run_key in sorted(run_keys_to_delete):
+            counts = _delete_run_database_records(db, run_key)
+            deleted_run_rows += counts["deleted_run_rows"]
+            deleted_run_events += counts["deleted_run_events"]
+            deleted_pair_segments += counts["deleted_pair_segments"]
+            deleted_trades += counts["deleted_trades"]
+            deleted_strategy_metrics += counts["deleted_strategy_metrics"]
+            deleted_regime_metrics += counts["deleted_regime_metrics"]
+            deleted_bot_configs += counts["deleted_bot_configs"]
+            deleted_alerts += counts["deleted_alerts"]
+            deleted_position_snapshots += counts["deleted_position_snapshots"]
+            deleted_report_rows += counts["deleted_report_rows"]
+            deleted_report_files += counts["deleted_report_files"]
+
+        for run_key in run_keys_to_delete:
+            _clear_deleted_run_state(run_key)
+
+        if run_keys_to_delete:
             db.commit()
     except Exception as exc:
         if db is not None:
             db.rollback()
-        errors.append(f"Failed to clear report records: {exc}")
+        errors.append(f"Failed to clear run records: {exc}")
     finally:
         if db is not None:
             db.close()
+
+    for run_dir in log_dirs_to_delete:
+        if remove_path(run_dir):
+            deleted_logs += 1
+
+    for run_dir in report_dirs_to_delete:
+        if remove_path(run_dir):
+            deleted_reports += 1
 
     return {
         "deleted_logs": deleted_logs,
         "deleted_reports": deleted_reports,
         "deleted_log_files": deleted_log_files,
+        "deleted_run_rows": deleted_run_rows,
+        "deleted_run_events": deleted_run_events,
+        "deleted_pair_segments": deleted_pair_segments,
+        "deleted_trades": deleted_trades,
+        "deleted_strategy_metrics": deleted_strategy_metrics,
+        "deleted_regime_metrics": deleted_regime_metrics,
+        "deleted_bot_configs": deleted_bot_configs,
+        "deleted_alerts": deleted_alerts,
+        "deleted_position_snapshots": deleted_position_snapshots,
         "deleted_report_rows": deleted_report_rows,
         "deleted_report_files": deleted_report_files,
         "deleted_indexes": deleted_indexes,

@@ -412,9 +412,9 @@ export async function getAdminLogFile(runKey: string): Promise<AdminLogFile> {
   return apiRequest<AdminLogFile>(`/admin/logs/runs/${key}`, { method: "GET" });
 }
 
-export async function deleteAdminLogRun(runKey: string): Promise<{ deleted: boolean; run_key: string; log_file: string; removed_files: number }> {
+export async function deleteAdminLogRun(runKey: string): Promise<{ deleted: boolean; run_key: string; log_file: string | null; removed_files: number; removed_report_files?: number; deleted_report_dir?: boolean }> {
   const key = encodeURIComponent(runKey);
-  return apiRequest<{ deleted: boolean; run_key: string; log_file: string; removed_files: number }>(`/admin/logs/runs/${key}`, { method: "DELETE" });
+  return apiRequest<{ deleted: boolean; run_key: string; log_file: string | null; removed_files: number; removed_report_files?: number; deleted_report_dir?: boolean }>(`/admin/logs/runs/${key}`, { method: "DELETE" });
 }
 
 export async function getAdminReportRuns(limit = 100): Promise<AdminReportRun[]> {
@@ -445,6 +445,15 @@ export interface ClearLogsResult {
   deleted_logs: number;
   deleted_reports: number;
   deleted_log_files: number;
+  deleted_run_rows?: number;
+  deleted_run_events?: number;
+  deleted_pair_segments?: number;
+  deleted_trades?: number;
+  deleted_strategy_metrics?: number;
+  deleted_regime_metrics?: number;
+  deleted_bot_configs?: number;
+  deleted_alerts?: number;
+  deleted_position_snapshots?: number;
   deleted_report_rows: number;
   deleted_report_files: number;
   deleted_indexes: number;

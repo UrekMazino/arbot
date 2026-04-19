@@ -10,7 +10,7 @@ type ConfirmDialogProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "danger" | "warning" | "info";
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   onClose: () => void;
 };
 
@@ -29,7 +29,7 @@ export function ConfirmDialog({
   const handleConfirm = async () => {
     setLoading(true);
     try {
-      onConfirm();
+      await Promise.resolve(onConfirm());
     } finally {
       setLoading(false);
     }
@@ -79,13 +79,19 @@ export function useConfirmDialog() {
     open: boolean;
     title: string;
     description?: string;
-    onConfirm: () => void;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    variant?: "danger" | "warning" | "info";
+    onConfirm: () => void | Promise<void>;
   } | null>(null);
 
   const confirm = (params: {
     title: string;
     description?: string;
-    onConfirm: () => void;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    variant?: "danger" | "warning" | "info";
+    onConfirm: () => void | Promise<void>;
   }) => {
     setConfig({ ...params, open: true });
   };
@@ -100,9 +106,15 @@ export function useConfirmDialog() {
         open={config.open}
         title={config.title}
         description={config.description}
-        onConfirm={() => {
-          config.onConfirm();
-          close();
+        confirmLabel={config.confirmLabel}
+        cancelLabel={config.cancelLabel}
+        variant={config.variant}
+        onConfirm={async () => {
+          try {
+            await Promise.resolve(config.onConfirm());
+          } finally {
+            close();
+          }
         }}
         onClose={close}
       />

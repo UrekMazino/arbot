@@ -185,6 +185,7 @@ from func_execution_calls import (
 from func_close_positions import close_all_positions, get_position_info, place_market_close_order
 from func_order_review import check_order
 from func_fill_logging import log_order_fills
+from func_event_emitter import emit_event
 import time
 import math
 import logging
@@ -441,6 +442,92 @@ def _close_trade_manager():
         trade_manager.close_position()
 
 
+def _active_pair_key():
+    return f"{signal_positive_ticker}/{signal_negative_ticker}"
+
+
+def _emit_entry_reject(
+    reject_type,
+    reason,
+    *,
+    severity="warn",
+    pair=None,
+    strategy=None,
+    regime=None,
+    **extra,
+):
+    payload = {
+        "reject_type": str(reject_type or "").strip().lower() or "unknown",
+        "reason": str(reason or "").strip() or "unknown",
+        "pair": pair or _active_pair_key(),
+        "strategy": strategy,
+        "regime": regime,
+    }
+    for key, value in extra.items():
+        if value is not None:
+            payload[key] = value
+    emit_event("entry_reject", payload=payload, severity=severity, logger=logger)
+
+
+def _emit_liquidity_check(
+    *,
+    status,
+    long_ticker,
+    short_ticker,
+    target_usdt,
+    liquidity_long_usdt,
+    liquidity_short_usdt,
+    ratio_long,
+    ratio_short,
+    min_ratio,
+    selected_ratio=None,
+    fallback_used=False,
+    downsized=False,
+    attempt_count=None,
+    reason=None,
+    strategy=None,
+    regime=None,
+):
+    emit_event(
+        "liquidity_check",
+        payload={
+            "status": str(status or "").strip().lower() or "unknown",
+            "pair": _active_pair_key(),
+            "strategy": strategy,
+            "regime": regime,
+            "long_ticker": long_ticker,
+            "short_ticker": short_ticker,
+            "target_usdt": target_usdt,
+            "liquidity_long_usdt": liquidity_long_usdt,
+            "liquidity_short_usdt": liquidity_short_usdt,
+            "ratio_long": ratio_long,
+            "ratio_short": ratio_short,
+            "min_ratio": min_ratio,
+            "selected_ratio": selected_ratio,
+            "fallback_used": bool(fallback_used),
+            "downsized": bool(downsized),
+            "attempt_count": attempt_count,
+            "reason": reason,
+        },
+        severity="info" if str(status).strip().lower() == "pass" else "warn",
+        logger=logger,
+    )
+
+
+def _calculate_slippage_bps(side, preview_price, fill_price):
+    try:
+        preview = float(preview_price)
+        fill = float(fill_price)
+    except (TypeError, ValueError):
+        return None
+    if preview <= 0 or fill <= 0:
+        return None
+    side_text = str(side or "").strip().lower()
+    if side_text == "short":
+        return (preview - fill) / preview * 10000.0
+    return (fill - preview) / preview * 10000.0
+
+
 def _format_fill_summary(summary):
     if not summary:
         return "none"
@@ -455,7 +542,17 @@ def _format_fill_summary(summary):
     )
 
 
-def _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker):
+def _log_entry_fills(
+    order_long_id,
+    order_short_id,
+    long_ticker,
+    short_ticker,
+    *,
+    long_preview_price=None,
+    short_preview_price=None,
+    strategy=None,
+    regime=None,
+):
     long_summary = log_order_fills(order_long_id, long_ticker, max_wait_seconds=5.0)
     short_summary = log_order_fills(order_short_id, short_ticker, max_wait_seconds=5.0)
     if long_summary or short_summary:
@@ -464,6 +561,37 @@ def _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker):
             _format_fill_summary(long_summary),
             _format_fill_summary(short_summary),
         )
+    for side, summary, preview_price in (
+        ("long", long_summary, long_preview_price),
+        ("short", short_summary, short_preview_price),
+    ):
+        if not summary:
+            continue
+        slippage_bps = _calculate_slippage_bps(side, preview_price, summary.get("avg_px"))
+        abs_slippage_bps = abs(slippage_bps) if slippage_bps is not None else None
+        emit_event(
+            "fill_summary",
+            payload={
+                "fill_kind": "entry",
+                "pair": _active_pair_key(),
+                "strategy": strategy,
+                "regime": regime,
+                "ticker": summary.get("inst_id"),
+                "side": side,
+                "order_id": summary.get("order_id"),
+                "preview_price": preview_price,
+                "fill_price": summary.get("avg_px"),
+                "filled_qty": summary.get("qty"),
+                "fill_count": summary.get("count"),
+                "fee_usdt": summary.get("fee"),
+                "fill_pnl_usdt": summary.get("pnl"),
+                "slippage_bps": slippage_bps,
+                "abs_slippage_bps": abs_slippage_bps,
+            },
+            severity="info",
+            logger=logger,
+        )
+    return {"long": long_summary, "short": short_summary}
 
 
 def _execute_partial_exit(percentage):
@@ -1314,6 +1442,17 @@ def manage_new_trades(
             effective_min_persist_bars,
             int(coint_flag),
         )
+        _emit_entry_reject(
+            "strategy_gate",
+            reason,
+            pair=_active_pair_key(),
+            strategy=strategy_name,
+            regime=regime_name,
+            entry_z=latest_zscore,
+            required_entry_z=effective_entry_z,
+            min_persist_bars=effective_min_persist_bars,
+            coint_flag=int(coint_flag),
+        )
         # Log waiting status
         if abs(latest_zscore) < effective_entry_z:
             _log_waiting("⏳ WAITING: Not at entry threshold yet")
@@ -1517,6 +1656,17 @@ def manage_new_trades(
             )
             print(msg)
             logger.error(msg)
+            _emit_entry_reject(
+                "min_capital_unavailable",
+                "min_capital_requirements_unavailable",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                long_error=min_req_long.get("error"),
+                short_error=min_req_short.get("error"),
+            )
             return kill_switch, signal_detected, trade_placed
 
         min_capital_long = min_req_long.get("min_capital") or 0.0
@@ -1539,6 +1689,20 @@ def manage_new_trades(
                     )
                     print(msg)
                     logger.error(msg)
+                    _emit_entry_reject(
+                        "min_capital_allocation",
+                        "required_floor_exceeds_allocated_capital",
+                        pair=_active_pair_key(),
+                        strategy=strategy_name,
+                        regime=regime_name,
+                        long_ticker=long_ticker,
+                        short_ticker=short_ticker,
+                        required_floor=required_floor,
+                        min_capital_long=min_capital_long,
+                        min_capital_short=min_capital_short,
+                        allocated_capital=capital_long,
+                        action="skip",
+                    )
                     return kill_switch, signal_detected, trade_placed
                 msg = (
                     "ERROR: Minimum per-leg capital exceeds allocation; "
@@ -1548,6 +1712,20 @@ def manage_new_trades(
                 )
                 print(msg)
                 logger.error(msg)
+                _emit_entry_reject(
+                    "min_capital_allocation",
+                    "required_floor_exceeds_allocated_capital",
+                    pair=_active_pair_key(),
+                    strategy=strategy_name,
+                    regime=regime_name,
+                    long_ticker=long_ticker,
+                    short_ticker=short_ticker,
+                    required_floor=required_floor,
+                    min_capital_long=min_capital_long,
+                    min_capital_short=min_capital_short,
+                    allocated_capital=capital_long,
+                    action="switch",
+                )
                 set_last_switch_reason("min_capital")
                 # Force pair switch by using emergency override threshold in main_execution.
                 set_last_health_score(0)
@@ -1613,6 +1791,7 @@ def manage_new_trades(
                 return 0.0
             return liquidity_usdt / target_usdt
 
+        requested_min_liquidity_ratio = min_liquidity_ratio
         ratio_steps = _build_liquidity_ratio_steps(min_liquidity_ratio)
         selected_ratio = min_liquidity_ratio
         selected_target_usdt = base_target_usdt
@@ -1719,6 +1898,39 @@ def manage_new_trades(
                 )
                 print(msg)
                 logger.warning(msg)
+                _emit_liquidity_check(
+                    status="reject",
+                    long_ticker=long_ticker,
+                    short_ticker=short_ticker,
+                    target_usdt=base_target_usdt,
+                    liquidity_long_usdt=liquidity_long_usdt,
+                    liquidity_short_usdt=liquidity_short_usdt,
+                    ratio_long=ratio_long,
+                    ratio_short=ratio_short,
+                    min_ratio=min_liquidity_ratio,
+                    selected_ratio=selected_ratio,
+                    fallback_used=len(ratio_steps) > 1,
+                    downsized=False,
+                    attempt_count=len(ratio_steps),
+                    reason="min_ratio_not_met",
+                    strategy=strategy_name,
+                    regime=regime_name,
+                )
+                _emit_entry_reject(
+                    "liquidity",
+                    "min_liquidity_ratio_not_met",
+                    pair=_active_pair_key(),
+                    strategy=strategy_name,
+                    regime=regime_name,
+                    long_ticker=long_ticker,
+                    short_ticker=short_ticker,
+                    target_usdt=base_target_usdt,
+                    liquidity_long_usdt=liquidity_long_usdt,
+                    liquidity_short_usdt=liquidity_short_usdt,
+                    ratio_long=ratio_long,
+                    ratio_short=ratio_short,
+                    min_ratio=min_liquidity_ratio,
+                )
                 return kill_switch, signal_detected, trade_placed
 
         initial_capital_usdt = selected_target_usdt
@@ -1756,7 +1968,59 @@ def manage_new_trades(
             )
             print(msg)
             logger.warning(msg)
+            _emit_liquidity_check(
+                status="reject",
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                target_usdt=initial_capital_usdt,
+                liquidity_long_usdt=liquidity_long_usdt,
+                liquidity_short_usdt=liquidity_short_usdt,
+                ratio_long=ratio_long,
+                ratio_short=ratio_short,
+                min_ratio=min_liquidity_ratio,
+                selected_ratio=min_liquidity_ratio,
+                fallback_used=False,
+                downsized=initial_capital_usdt < base_target_usdt,
+                attempt_count=len(ratio_steps),
+                reason="post_select_ratio_below_min",
+                strategy=strategy_name,
+                regime=regime_name,
+            )
+            _emit_entry_reject(
+                "liquidity",
+                "post_select_ratio_below_min",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                target_usdt=initial_capital_usdt,
+                liquidity_long_usdt=liquidity_long_usdt,
+                liquidity_short_usdt=liquidity_short_usdt,
+                ratio_long=ratio_long,
+                ratio_short=ratio_short,
+                min_ratio=min_liquidity_ratio,
+            )
             return kill_switch, signal_detected, trade_placed
+
+        _emit_liquidity_check(
+            status="pass",
+            long_ticker=long_ticker,
+            short_ticker=short_ticker,
+            target_usdt=initial_capital_usdt,
+            liquidity_long_usdt=liquidity_long_usdt,
+            liquidity_short_usdt=liquidity_short_usdt,
+            ratio_long=ratio_long,
+            ratio_short=ratio_short,
+            min_ratio=min_liquidity_ratio,
+            selected_ratio=selected_ratio,
+            fallback_used=(selected_ratio != requested_min_liquidity_ratio) or (initial_capital_usdt < base_target_usdt),
+            downsized=initial_capital_usdt < base_target_usdt,
+            attempt_count=len(ratio_steps),
+            reason="entry_precheck",
+            strategy=strategy_name,
+            regime=regime_name,
+        )
 
         # Preflight both legs to avoid one-sided entries on invalid trade details
         preflight_long = preview_entry_details(
@@ -1782,6 +2046,17 @@ def manage_new_trades(
             )
             print(msg)
             logger.error(msg)
+            _emit_entry_reject(
+                "trade_details",
+                "invalid_trade_details",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                long_error=preflight_long.get("error"),
+                short_error=preflight_short.get("error"),
+            )
             return kill_switch, signal_detected, trade_placed
 
         long_entry_price = preflight_long.get("entry_price") or 0.0
@@ -1804,6 +2079,15 @@ def manage_new_trades(
             msg = "ERROR: Contract value unavailable for sizing; skipping entry."
             print(msg)
             logger.error(msg)
+            _emit_entry_reject(
+                "contract_value",
+                "contract_value_unavailable",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+            )
             return kill_switch, signal_detected, trade_placed
 
         long_info = preflight_long.get("instrument_info") or {}
@@ -1838,6 +2122,20 @@ def manage_new_trades(
                 )
                 print(msg)
                 logger.error(msg)
+                _emit_entry_reject(
+                    "notional_limit",
+                    "pre_trade_notional_exceeds_available_balance",
+                    pair=_active_pair_key(),
+                    strategy=strategy_name,
+                    regime=regime_name,
+                    long_ticker=long_ticker,
+                    short_ticker=short_ticker,
+                    long_notional_usdt=long_notional,
+                    short_notional_usdt=short_notional,
+                    total_notional_usdt=total_notional,
+                    available_usdt=available_usdt,
+                    available_label=available_label,
+                )
                 return kill_switch, signal_detected, trade_placed
             logger.info(
                 "Pre-trade notional check: long=%.2f short=%.2f total=%.2f %s=%.2f",
@@ -1902,6 +2200,16 @@ def manage_new_trades(
                     order_long_id = ""
                     order_status_long = "failed"
                     logger.error("Long entry failed; skipping pair entry. Response: %s", result_long)
+                    _emit_entry_reject(
+                        "entry_execution",
+                        "long_entry_failed",
+                        pair=_active_pair_key(),
+                        strategy=strategy_name,
+                        regime=regime_name,
+                        long_ticker=long_ticker,
+                        short_ticker=short_ticker,
+                        response=str(result_long),
+                    )
                     if _handle_compliance_restriction(result_long, long_ticker):
                         return 3, signal_detected, trade_placed
                     return kill_switch, signal_detected, trade_placed
@@ -1954,6 +2262,16 @@ def manage_new_trades(
                     order_short_id = ""
                     order_status_short = "failed"
                     logger.error("Short entry failed; closing any opened leg. Response: %s", result_short)
+                    _emit_entry_reject(
+                        "entry_execution",
+                        "short_entry_failed",
+                        pair=_active_pair_key(),
+                        strategy=strategy_name,
+                        regime=regime_name,
+                        long_ticker=long_ticker,
+                        short_ticker=short_ticker,
+                        response=str(result_short),
+                    )
                     should_switch = _handle_compliance_restriction(result_short, short_ticker)
                     close_all_positions(0)
                     if should_switch:
@@ -1969,7 +2287,16 @@ def manage_new_trades(
                     trade_placed = True
 
                 if not limit_order_basis and order_long_id and order_short_id:
-                    _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
+                    _log_entry_fills(
+                        order_long_id,
+                        order_short_id,
+                        long_ticker,
+                        short_ticker,
+                        long_preview_price=long_entry_price,
+                        short_preview_price=short_entry_price,
+                        strategy=strategy_name,
+                        regime=regime_name,
+                    )
 
                 # Record entry context for close-time attribution and regime break detection.
                 from func_pair_state import (
@@ -2109,7 +2436,16 @@ def manage_new_trades(
                         logger.info(msg)
                         trade_placed = True
                         if order_long_id and order_short_id:
-                            _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
+                            _log_entry_fills(
+                                order_long_id,
+                                order_short_id,
+                                long_ticker,
+                                short_ticker,
+                                long_preview_price=long_entry_price,
+                                short_preview_price=short_entry_price,
+                                strategy=strategy_name,
+                                regime=regime_name,
+                            )
                         kill_switch = 1                        
                     # If position filled, place another trade if capital remains
                     if order_status_long == "Position Filled" and order_status_short == "Position Filled":
@@ -2118,7 +2454,16 @@ def manage_new_trades(
                         logger.info(msg)
                         trade_placed = True
                         if order_long_id and order_short_id:
-                            _log_entry_fills(order_long_id, order_short_id, long_ticker, short_ticker)
+                            _log_entry_fills(
+                                order_long_id,
+                                order_short_id,
+                                long_ticker,
+                                short_ticker,
+                                long_preview_price=long_entry_price,
+                                short_preview_price=short_entry_price,
+                                strategy=strategy_name,
+                                regime=regime_name,
+                            )
                         if remaining_capital_long > 0 and remaining_capital_short > 0:
                             count_long = 0
                             count_short = 0

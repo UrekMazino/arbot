@@ -276,6 +276,160 @@ def _derive_regime_metrics_from_events(db: Session, run: Run) -> list[dict]:
     return output
 
 
+def _event_payload(row: RunEvent) -> dict:
+    return row.payload_json if isinstance(row.payload_json, dict) else {}
+
+
+def _json_text(value: object) -> str:
+    try:
+        return json.dumps(value, sort_keys=True)
+    except Exception:
+        return str(value)
+
+
+def _build_liquidity_check_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "long_ticker": str(payload.get("long_ticker") or "").strip(),
+                "short_ticker": str(payload.get("short_ticker") or "").strip(),
+                "status": str(payload.get("status") or "").strip(),
+                "target_usdt": _coerce_float(payload.get("target_usdt")),
+                "liquidity_long_usdt": _coerce_float(payload.get("liquidity_long_usdt")),
+                "liquidity_short_usdt": _coerce_float(payload.get("liquidity_short_usdt")),
+                "ratio_long": _coerce_float(payload.get("ratio_long")),
+                "ratio_short": _coerce_float(payload.get("ratio_short")),
+                "min_ratio": _coerce_float(payload.get("min_ratio")),
+                "selected_ratio": _coerce_float(payload.get("selected_ratio")),
+                "fallback_used": bool(payload.get("fallback_used")),
+                "downsized": bool(payload.get("downsized")),
+                "attempt_count": payload.get("attempt_count"),
+                "reason": str(payload.get("reason") or "").strip(),
+            }
+        )
+    return output
+
+
+def _build_fill_summary_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "ticker": str(payload.get("ticker") or "").strip(),
+                "side": str(payload.get("side") or "").strip(),
+                "order_id": str(payload.get("order_id") or "").strip(),
+                "preview_price": _coerce_float(payload.get("preview_price")),
+                "fill_price": _coerce_float(payload.get("fill_price")),
+                "filled_qty": _coerce_float(payload.get("filled_qty")),
+                "fill_count": payload.get("fill_count"),
+                "fee_usdt": _coerce_float(payload.get("fee_usdt")),
+                "fill_pnl_usdt": _coerce_float(payload.get("fill_pnl_usdt")),
+                "slippage_bps": _coerce_float(payload.get("slippage_bps")),
+                "abs_slippage_bps": _coerce_float(payload.get("abs_slippage_bps")),
+            }
+        )
+    return output
+
+
+def _build_reconciliation_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "entry_ts": str(payload.get("entry_ts") or "").strip(),
+                "exit_reason": str(payload.get("exit_reason") or "").strip(),
+                "trade_pnl": _coerce_float(payload.get("trade_pnl")),
+                "equity_change": _coerce_float(payload.get("equity_change")),
+                "difference": _coerce_float(payload.get("difference")),
+                "fees": _coerce_float(payload.get("fees")),
+                "slippage": _coerce_float(payload.get("slippage")),
+                "funding": _coerce_float(payload.get("funding")),
+                "unexplained": _coerce_float(payload.get("unexplained")),
+                "basis": str(payload.get("basis") or "").strip(),
+                "delta_warn_threshold": _coerce_float(payload.get("delta_warn_threshold")),
+                "unexplained_warn_threshold": _coerce_float(payload.get("unexplained_warn_threshold")),
+                "unexplained_pct_warn_threshold": _coerce_float(payload.get("unexplained_pct_warn_threshold")),
+                "unexplained_pct": _coerce_float(payload.get("unexplained_pct")),
+                "large_delta_warning": bool(payload.get("large_delta_warning")),
+                "large_unexplained_warning": bool(payload.get("large_unexplained_warning")),
+                "post_close_equity_available": bool(payload.get("post_close_equity_available")),
+                "pass_fail": str(payload.get("pass_fail") or "").strip(),
+            }
+        )
+    return output
+
+
+def _build_entry_rejection_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "reject_type": str(payload.get("reject_type") or "").strip(),
+                "reason": str(payload.get("reason") or "").strip(),
+                "long_ticker": str(payload.get("long_ticker") or "").strip(),
+                "short_ticker": str(payload.get("short_ticker") or "").strip(),
+                "target_usdt": _coerce_float(payload.get("target_usdt")),
+                "liquidity_long_usdt": _coerce_float(payload.get("liquidity_long_usdt")),
+                "liquidity_short_usdt": _coerce_float(payload.get("liquidity_short_usdt")),
+                "ratio_long": _coerce_float(payload.get("ratio_long")),
+                "ratio_short": _coerce_float(payload.get("ratio_short")),
+                "min_ratio": _coerce_float(payload.get("min_ratio")),
+                "available_usdt": _coerce_float(payload.get("available_usdt")),
+                "total_notional_usdt": _coerce_float(payload.get("total_notional_usdt")),
+                "action": str(payload.get("action") or "").strip(),
+                "long_error": str(payload.get("long_error") or "").strip(),
+                "short_error": str(payload.get("short_error") or "").strip(),
+            }
+        )
+    return output
+
+
+def _build_alert_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "event_type": str(row.event_type or "").strip(),
+                "severity": str(row.severity or "").strip(),
+                "pair": str(payload.get("pair") or "").strip(),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "alert_type": str(payload.get("alert_type") or "").strip(),
+                "warning_type": str(payload.get("warning_type") or "").strip(),
+                "message": str(payload.get("message") or "").strip(),
+                "basis": str(payload.get("basis") or "").strip(),
+                "difference": _coerce_float(payload.get("difference")),
+                "unexplained": _coerce_float(payload.get("unexplained")),
+                "unexplained_pct": _coerce_float(payload.get("unexplained_pct")),
+                "details_json": _json_text(payload),
+            }
+        )
+    return output
+
+
 def materialize_live_run_report(db: Session, run: Run) -> dict:
     run_key = str(run.run_key or "").strip()
     if not run_key:
@@ -350,6 +504,50 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     else:
         trade_rows = _build_trade_rows_from_events(trade_close_events)
         trades_source = "trade_close_events"
+
+    liquidity_check_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "liquidity_check")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    liquidity_check_rows = _build_liquidity_check_rows(liquidity_check_events)
+
+    fill_summary_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "fill_summary")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    fill_summary_rows = _build_fill_summary_rows(
+        [
+            row
+            for row in fill_summary_events
+            if str(_event_payload(row).get("fill_kind") or "").strip().lower() == "entry"
+        ]
+    )
+
+    reconciliation_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "reconciliation_check")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    reconciliation_rows = _build_reconciliation_rows(reconciliation_events)
+
+    entry_reject_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "entry_reject")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    entry_rejection_rows = _build_entry_rejection_rows(entry_reject_events)
+
+    alert_events = db.execute(
+        select(RunEvent)
+        .where(
+            RunEvent.run_id == run.id,
+            RunEvent.event_type.in_(("risk_alert", "data_quality_warning", "reconciliation_warning")),
+        )
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    alert_rows = _build_alert_rows(alert_events)
 
     wins = 0
     losses = 0
@@ -476,6 +674,11 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "strategy_metrics": strategy_metrics_source,
         "regime_metrics": regime_metrics_source,
         "position_snapshots": position_snapshots_source,
+        "liquidity_checks": "liquidity_check_events" if liquidity_check_rows else "none",
+        "entry_slippage": "fill_summary_events" if fill_summary_rows else "none",
+        "reconciliation_checks": "reconciliation_check_events" if reconciliation_rows else "none",
+        "entry_rejections": "entry_reject_events" if entry_rejection_rows else "none",
+        "alerts": "risk_and_warning_events" if alert_rows else "none",
     }
     summary = {
         "report_version": "v2-live",
@@ -505,6 +708,11 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "strategy_metric_rows": len(strategy_metric_rows),
         "regime_metric_rows": len(regime_metric_rows),
         "position_snapshot_rows": len(position_snapshot_rows),
+        "liquidity_check_rows": len(liquidity_check_rows),
+        "entry_slippage_rows": len(fill_summary_rows),
+        "reconciliation_rows": len(reconciliation_rows),
+        "entry_rejection_rows": len(entry_rejection_rows),
+        "alert_rows": len(alert_rows),
         "event_counts": event_counts,
         "severity_counts": severity_counts,
         "data_sources": data_sources,
@@ -520,6 +728,11 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     strategy_metrics_path = report_dir / "strategy_metrics.csv"
     regime_metrics_path = report_dir / "regime_metrics.csv"
     position_snapshots_path = report_dir / "position_snapshots.csv"
+    liquidity_checks_path = report_dir / "liquidity_checks.csv"
+    entry_slippage_path = report_dir / "entry_slippage.csv"
+    reconciliation_checks_path = report_dir / "reconciliation_checks.csv"
+    entry_rejections_path = report_dir / "entry_rejections.csv"
+    risk_alerts_path = report_dir / "risk_alerts.csv"
     manifest_path = report_dir / "report_manifest.json"
 
     _write_csv(
@@ -629,6 +842,149 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         artifact_entries.append(_artifact(position_snapshots_path, "csv", len(position_snapshot_rows)))
     else:
         _remove_if_exists(position_snapshots_path)
+
+    if liquidity_check_rows:
+        _write_csv(
+            liquidity_checks_path,
+            liquidity_check_rows,
+            [
+                "timestamp",
+                "pair",
+                "strategy",
+                "regime",
+                "long_ticker",
+                "short_ticker",
+                "status",
+                "target_usdt",
+                "liquidity_long_usdt",
+                "liquidity_short_usdt",
+                "ratio_long",
+                "ratio_short",
+                "min_ratio",
+                "selected_ratio",
+                "fallback_used",
+                "downsized",
+                "attempt_count",
+                "reason",
+            ],
+        )
+        artifact_entries.append(_artifact(liquidity_checks_path, "csv", len(liquidity_check_rows)))
+    else:
+        _remove_if_exists(liquidity_checks_path)
+
+    if fill_summary_rows:
+        _write_csv(
+            entry_slippage_path,
+            fill_summary_rows,
+            [
+                "timestamp",
+                "pair",
+                "strategy",
+                "regime",
+                "ticker",
+                "side",
+                "order_id",
+                "preview_price",
+                "fill_price",
+                "filled_qty",
+                "fill_count",
+                "fee_usdt",
+                "fill_pnl_usdt",
+                "slippage_bps",
+                "abs_slippage_bps",
+            ],
+        )
+        artifact_entries.append(_artifact(entry_slippage_path, "csv", len(fill_summary_rows)))
+    else:
+        _remove_if_exists(entry_slippage_path)
+
+    if reconciliation_rows:
+        _write_csv(
+            reconciliation_checks_path,
+            reconciliation_rows,
+            [
+                "timestamp",
+                "pair",
+                "strategy",
+                "regime",
+                "entry_ts",
+                "exit_reason",
+                "trade_pnl",
+                "equity_change",
+                "difference",
+                "fees",
+                "slippage",
+                "funding",
+                "unexplained",
+                "basis",
+                "delta_warn_threshold",
+                "unexplained_warn_threshold",
+                "unexplained_pct_warn_threshold",
+                "unexplained_pct",
+                "large_delta_warning",
+                "large_unexplained_warning",
+                "post_close_equity_available",
+                "pass_fail",
+            ],
+        )
+        artifact_entries.append(_artifact(reconciliation_checks_path, "csv", len(reconciliation_rows)))
+    else:
+        _remove_if_exists(reconciliation_checks_path)
+
+    if entry_rejection_rows:
+        _write_csv(
+            entry_rejections_path,
+            entry_rejection_rows,
+            [
+                "timestamp",
+                "pair",
+                "strategy",
+                "regime",
+                "reject_type",
+                "reason",
+                "long_ticker",
+                "short_ticker",
+                "target_usdt",
+                "liquidity_long_usdt",
+                "liquidity_short_usdt",
+                "ratio_long",
+                "ratio_short",
+                "min_ratio",
+                "available_usdt",
+                "total_notional_usdt",
+                "action",
+                "long_error",
+                "short_error",
+            ],
+        )
+        artifact_entries.append(_artifact(entry_rejections_path, "csv", len(entry_rejection_rows)))
+    else:
+        _remove_if_exists(entry_rejections_path)
+
+    if alert_rows:
+        _write_csv(
+            risk_alerts_path,
+            alert_rows,
+            [
+                "timestamp",
+                "event_type",
+                "severity",
+                "pair",
+                "strategy",
+                "regime",
+                "alert_type",
+                "warning_type",
+                "message",
+                "basis",
+                "difference",
+                "unexplained",
+                "unexplained_pct",
+                "details_json",
+            ],
+        )
+        artifact_entries.append(_artifact(risk_alerts_path, "csv", len(alert_rows)))
+    else:
+        _remove_if_exists(risk_alerts_path)
 
     manifest_path.write_text(
         json.dumps(

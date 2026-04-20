@@ -23,6 +23,9 @@ _KNOWN_EVENT_TYPES = {
     "risk_alert",
     "report_status",
     "entry_reject",
+    "liquidity_check",
+    "fill_summary",
+    "reconciliation_check",
     "gate_enforced",
     "reconciliation_warning",
     "data_quality_warning",
@@ -401,4 +404,3 @@ def emit_event(
 def flush_events(force: bool = False, logger: Any = None) -> None:
     emitter = get_event_emitter(logger=logger)
     emitter.flush(force=force)
-

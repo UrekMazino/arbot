@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..deps import get_current_user, get_db_session, get_user_permission_ids, require_permissions
 from ..models import User
 from ..services.bot_control import (
+    build_report_run_zip,
     clear_logs_and_reports,
     delete_log_run,
     get_bot_status,
     get_pair_health_data,
+    get_report_run_file,
+    get_report_run_summary,
     list_log_runs,
     list_report_runs,
     read_env_settings,
@@ -171,6 +174,48 @@ def admin_report_runs(
     _: User = Depends(require_permissions("view_reports")),
 ):
     return list_report_runs(limit=limit)
+
+
+@router.get("/reports/runs/{run_key}/summary")
+def admin_report_run_summary(
+    run_key: str,
+    _: User = Depends(require_permissions("view_reports")),
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return get_report_run_summary(db, run_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/reports/runs/{run_key}/files/{file_name:path}/download")
+def admin_report_run_file_download(
+    run_key: str,
+    file_name: str,
+    _: User = Depends(require_permissions("view_reports")),
+):
+    try:
+        file_info = get_report_run_file(run_key, file_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return FileResponse(
+        path=file_info["path"],
+        filename=file_info["filename"],
+        media_type=file_info["media_type"],
+    )
+
+
+@router.get("/reports/runs/{run_key}/download")
+def admin_report_run_download(
+    run_key: str,
+    _: User = Depends(require_permissions("view_reports")),
+):
+    try:
+        payload, filename = build_report_run_zip(run_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(iter([payload]), media_type="application/zip", headers=headers)
 
 
 @router.get("/settings/env")

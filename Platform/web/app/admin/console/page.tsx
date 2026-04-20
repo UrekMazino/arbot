@@ -9,16 +9,21 @@ import {
   AdminLogTail,
   AdminLogRun,
   AdminPairsHealth,
+  AdminReportArtifactFile,
   AdminReportRun,
+  AdminReportSummary,
   AdminRunRuntime,
   UserRecord,
   clearAdminLogs,
   deleteAdminLogRun,
+  downloadAdminReportFile,
+  downloadAdminReportZip,
   getAdminBotLogTail,
   getAdminBotStatus,
   getAdminLogFile,
   getAdminLogRuns,
   getAdminPairsHealth,
+  getAdminReportRunSummary,
   getAdminReportRuns,
   getAdminRunRuntime,
   getMe,
@@ -274,6 +279,62 @@ function fmtDuration(seconds: number): string {
   return `${s}s`;
 }
 
+function fmtNumber(value: number | null | undefined, maximumFractionDigits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
+}
+
+function fmtCurrency(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)} USDT`;
+}
+
+function fmtPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+function readRecordString(record: Record<string, unknown> | null | undefined, key: string): string | null {
+  if (!record) return null;
+  const value = record[key];
+  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+  return text || null;
+}
+
+function readRecordNumber(record: Record<string, unknown> | null | undefined, key: string): number | null {
+  if (!record) return null;
+  return coerceNumber(record[key]);
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readRecordObject(record: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> | null {
+  if (!record) return null;
+  const value = record[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function artifactTone(file: AdminReportArtifactFile): "success" | "info" | "neutral" {
+  const fmt = String(file.format || "").toLowerCase();
+  if (fmt === "csv") return "info";
+  if (fmt === "json") return "success";
+  return "neutral";
+}
+
 export default function AdminConsolePage() {
   const router = useRouter();
   const { isFloating, setFloating, logTail: sharedLogTail, setLogTail: setSharedLogTail } = useFloatingTerminal();
@@ -290,6 +351,11 @@ export default function AdminConsolePage() {
   const [logViewerData, setLogViewerData] = useState<AdminLogFile | null>(null);
   const [logViewerBusy, setLogViewerBusy] = useState(false);
   const [logViewerError, setLogViewerError] = useState("");
+  const [reportViewerRunKey, setReportViewerRunKey] = useState("");
+  const [reportViewerData, setReportViewerData] = useState<AdminReportSummary | null>(null);
+  const [reportViewerBusy, setReportViewerBusy] = useState(false);
+  const [reportViewerError, setReportViewerError] = useState("");
+  const [reportDownloadKey, setReportDownloadKey] = useState("");
   const [terminalSearchQuery, setTerminalSearchQuery] = useState("");
   const [terminalActiveMatchIndex, setTerminalActiveMatchIndex] = useState(-1);
   const [logViewerSearchQuery, setLogViewerSearchQuery] = useState("");
@@ -333,6 +399,14 @@ export default function AdminConsolePage() {
     setLogViewerActiveMatchIndex(-1);
   }, []);
 
+  const closeReportViewer = useCallback(() => {
+    setReportViewerRunKey("");
+    setReportViewerData(null);
+    setReportViewerBusy(false);
+    setReportViewerError("");
+    setReportDownloadKey("");
+  }, []);
+
   const clearAdminSession = useCallback((reason = "Signed out", redirectToLogin = false) => {
     clearStoredAdminSession();
     setStatus(reason);
@@ -345,6 +419,7 @@ export default function AdminConsolePage() {
     setLocalLogTail(null);
     setPairsHealth(null);
     closeLogViewer();
+    closeReportViewer();
     setTerminalFullscreen(false);
     if (isFloating) setSharedLogTail(null);
     setFloating(false);
@@ -364,6 +439,7 @@ export default function AdminConsolePage() {
     setLocalLogTail,
     setPairsHealth,
     closeLogViewer,
+    closeReportViewer,
     setTerminalFullscreen,
     isFloating,
     setSharedLogTail,
@@ -376,6 +452,7 @@ export default function AdminConsolePage() {
   const navItems = useMemo(() => getAdminNavItems(me), [me]);
   const fallbackHref = useMemo(() => getFirstAccessibleAdminPath(me), [me]);
   const canViewLogs = hasPermission(me, "view_logs");
+  const canViewReports = hasPermission(me, "view_reports");
   const canManageBot = hasPermission(me, "manage_bot");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
   // Use shared logTail from context when floating, otherwise use local state + SSE stream
@@ -399,6 +476,25 @@ export default function AdminConsolePage() {
     () => Array.from(new Set([...logRuns.map((row) => row.run_key), ...reportRuns.map((row) => row.run_key)])),
     [logRuns, reportRuns],
   );
+  const reportSummary = reportViewerData?.summary ?? null;
+  const reportDataSources = useMemo(() => {
+    const dataSources = readRecordObject(reportSummary, "data_sources");
+    return Object.entries(dataSources || {});
+  }, [reportSummary]);
+  const reportEventCounts = useMemo(() => {
+    const counts = readRecordObject(reportSummary, "event_counts");
+    return Object.entries(counts || {})
+      .map(([key, value]) => ({ key, count: coerceNumber(value) ?? 0 }))
+      .filter((row) => Number.isFinite(row.count) && row.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [reportSummary]);
+  const reportSeverityCounts = useMemo(() => {
+    const counts = readRecordObject(reportSummary, "severity_counts");
+    return Object.entries(counts || {})
+      .map(([key, value]) => ({ key, count: coerceNumber(value) ?? 0 }))
+      .filter((row) => Number.isFinite(row.count) && row.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [reportSummary]);
   const runtimeUpdatedAt = runtimeSnapshot?.updated_at || localLogTail?.updated_at;
 
   // Memoize run key options for dropdown to prevent recalculation
@@ -603,6 +699,63 @@ export default function AdminConsolePage() {
     }
   }, [canViewLogs, clearAdminSession, setError]);
 
+  const handleOpenReportViewer = useCallback(async (runKey: string) => {
+    if (!canViewReports) return;
+    const targetRunKey = String(runKey || "").trim();
+    if (!targetRunKey) return;
+    setReportViewerRunKey(targetRunKey);
+    setReportViewerData(null);
+    setReportViewerError("");
+    setReportViewerBusy(true);
+    try {
+      const next = await getAdminReportRunSummary(targetRunKey);
+      setReportViewerData(next);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setReportViewerError("Insufficient permissions to view this report.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Failed to load report summary";
+      setReportViewerError(msg);
+    } finally {
+      setReportViewerBusy(false);
+    }
+  }, [canViewReports, clearAdminSession, setError]);
+
+  const handleDownloadReportFile = useCallback(async (runKey: string, fileName: string) => {
+    const targetRunKey = String(runKey || "").trim();
+    const targetFileName = String(fileName || "").trim();
+    if (!targetRunKey || !targetFileName) return;
+    setReportDownloadKey(targetFileName);
+    try {
+      await downloadAdminReportFile(targetRunKey, targetFileName);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Download failed";
+      window.alert(`Failed to download ${targetFileName}: ${message}`);
+    } finally {
+      setReportDownloadKey("");
+    }
+  }, []);
+
+  const handleDownloadReportZip = useCallback(async (runKey: string) => {
+    const targetRunKey = String(runKey || "").trim();
+    if (!targetRunKey) return;
+    setReportDownloadKey("__zip__");
+    try {
+      await downloadAdminReportZip(targetRunKey);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Download failed";
+      window.alert(`Failed to download ${targetRunKey} report bundle: ${message}`);
+    } finally {
+      setReportDownloadKey("");
+    }
+  }, []);
+
   const handleDeleteRun = useCallback(async (runKey: string) => {
     if (!canManageBot) return;
     const targetRunKey = String(runKey || "").trim();
@@ -613,6 +766,9 @@ export default function AdminConsolePage() {
       await deleteAdminLogRun(targetRunKey);
       if (logViewerRun?.run_key === targetRunKey) {
         closeLogViewer();
+      }
+      if (reportViewerRunKey === targetRunKey) {
+        closeReportViewer();
       }
       await loadAdminData();
       setStatus(`Deleted ${targetRunKey}`);
@@ -632,7 +788,7 @@ export default function AdminConsolePage() {
     } finally {
       setBusy(false);
     }
-  }, [canManageBot, logViewerRun, closeLogViewer, loadAdminData, clearAdminSession, setError]);
+  }, [canManageBot, logViewerRun, reportViewerRunKey, closeLogViewer, closeReportViewer, loadAdminData, clearAdminSession, setError]);
 
   const requestDeleteRun = useCallback((runKey: string) => {
     const targetRunKey = String(runKey || "").trim();
@@ -680,17 +836,18 @@ export default function AdminConsolePage() {
         details.push(`${result.errors.length} cleanup errors`);
       }
       alert(`${details.join(", ")}.`);
+      closeReportViewer();
       await loadAdminData();
     } catch (err) {
       alert("Failed to clear logs and reports: " + (err instanceof Error ? err.message : "Unknown error"));
     } finally {
       setBusy(false);
     }
-  }, [loadAdminData]);
+  }, [closeReportViewer, loadAdminData]);
 
   const requestClearLogsAndReports = useCallback(() => {
     showActionConfirm({
-      title: "Clear Logs and Reports",
+      title: "Clear All",
       description: "This will permanently remove all log runs, all report folders, and their related database history, including the most recent run.",
       confirmLabel: "Clear Everything",
       cancelLabel: "Cancel",
@@ -754,7 +911,7 @@ export default function AdminConsolePage() {
   }, [logViewerSearchQuery, logViewerSearchModel.totalMatches]);
 
   useEffect(() => {
-    if (!terminalFullscreen && !logViewerRun) return;
+    if (!terminalFullscreen && !logViewerRun && !reportViewerRunKey) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
@@ -768,6 +925,10 @@ export default function AdminConsolePage() {
         return;
       }
       if (event.key !== "Escape") return;
+      if (reportViewerRunKey) {
+        closeReportViewer();
+        return;
+      }
       if (logViewerRun) {
         closeLogViewer();
         return;
@@ -776,7 +937,7 @@ export default function AdminConsolePage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [terminalFullscreen, logViewerRun, closeLogViewer]);
+  }, [terminalFullscreen, logViewerRun, reportViewerRunKey, closeLogViewer, closeReportViewer]);
 
   // Effect to poll for new run when bot is starting
   useEffect(() => {
@@ -1429,6 +1590,332 @@ export default function AdminConsolePage() {
           </div>
         ) : null}
 
+        {reportViewerRunKey ? (
+          <div className="fixed inset-0 z-[60] flex flex-col bg-gray-100 dark:bg-gray-950">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-800 dark:bg-gray-900">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Report Summary</h3>
+                <p className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
+                  {reportViewerRunKey}
+                  {reportViewerData?.generated_at ? ` | Generated ${fmtDate(reportViewerData.generated_at)}` : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadReportZip(reportViewerRunKey)}
+                  disabled={reportViewerBusy || !!reportViewerError || reportDownloadKey === "__zip__"}
+                  className="inline-flex items-center rounded-xl border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-900 dark:bg-brand-950/30 dark:text-brand-300 dark:hover:bg-brand-950/40"
+                >
+                  {reportDownloadKey === "__zip__" ? "Preparing ZIP..." : "Download All ZIP"}
+                </button>
+                <button
+                  onClick={closeReportViewer}
+                  className="rounded px-3 py-1 text-sm font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  Exit Fullscreen
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-1 flex-col overflow-hidden p-4">
+              {reportViewerBusy ? (
+                <p className="text-sm text-gray-600 dark:text-gray-300">Loading report summary...</p>
+              ) : reportViewerError ? (
+                <p className="text-sm text-red-600 dark:text-red-300">{reportViewerError}</p>
+              ) : !reportViewerData ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400">No report summary available.</p>
+              ) : (
+                <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
+                  <div className="flex min-h-0 flex-col gap-4">
+                    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
+                        <div className="mt-2 flex items-center gap-2">
+                          <StatusPill
+                            label={readRecordString(reportSummary, "status") || "unknown"}
+                            tone={readRecordString(reportSummary, "status") === "running" ? "success" : "neutral"}
+                          />
+                          {reportViewerData.refreshed ? <StatusPill label="refreshed" tone="info" /> : null}
+                        </div>
+                        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                          {reportViewerData.report_version || "report version unavailable"}
+                        </p>
+                      </article>
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Session PnL</p>
+                        <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
+                          {fmtCurrency(readRecordNumber(reportSummary, "session_pnl"))}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {fmtPercent(readRecordNumber(reportSummary, "session_pnl_pct"))}
+                        </p>
+                      </article>
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Duration</p>
+                        <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
+                          {fmtDuration(readRecordNumber(reportSummary, "duration_seconds") ?? 0)}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Started {fmtDate(readRecordString(reportSummary, "start_time"))}
+                        </p>
+                      </article>
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Trades</p>
+                        <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
+                          {fmtNumber(readRecordNumber(reportSummary, "trades_total"), 0)}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Win rate {fmtPercent(readRecordNumber(reportSummary, "win_rate_pct"))}
+                        </p>
+                      </article>
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pair Activity</p>
+                        <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
+                          {fmtNumber(readRecordNumber(reportSummary, "pair_switches"), 0)} switches
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {fmtNumber(readRecordNumber(reportSummary, "pair_count"), 0)} pairs tracked
+                        </p>
+                      </article>
+                      <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Alerts</p>
+                        <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
+                          {fmtNumber(readRecordNumber(reportSummary, "alert_rows"), 0)}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Gate blocks {fmtNumber(readRecordNumber(reportSummary, "gate_blocks"), 0)}
+                        </p>
+                      </article>
+                    </section>
+
+                    <PanelCard
+                      title="Overview"
+                      subtitle="This summary comes from the live event-backed report pack for the selected run."
+                      className="shrink-0"
+                    >
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Current Pair</p>
+                          <p className="mt-1 font-mono text-xs text-gray-900 dark:text-white/90">{readRecordString(reportSummary, "current_pair") || "n/a"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Strategy</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{readRecordString(reportSummary, "latest_strategy") || "n/a"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Regime</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{readRecordString(reportSummary, "latest_regime") || "n/a"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
+                          <p className="mt-1 font-mono text-sm text-gray-900 dark:text-white/90">{fmtCurrency(readRecordNumber(reportSummary, "starting_equity"))}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Ending Equity</p>
+                          <p className="mt-1 font-mono text-sm text-gray-900 dark:text-white/90">{fmtCurrency(readRecordNumber(reportSummary, "ending_equity"))}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Report Source</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{reportViewerData.report_source || "n/a"}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Wins</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(readRecordNumber(reportSummary, "wins"), 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Losses</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(readRecordNumber(reportSummary, "losses"), 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Updated At</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">
+                            {fmtDate(readRecordString(reportSummary, "updated_at") || reportViewerData.generated_at)}
+                          </p>
+                        </div>
+                      </div>
+                    </PanelCard>
+
+                    <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-2">
+                      <PanelCard title="Data Sources" subtitle="Each section shows where the report data came from." className="flex min-h-0 flex-col overflow-hidden">
+                        <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                          <table className="text-xs">
+                            <thead>
+                              <tr>
+                                <th>Section</th>
+                                <th>Source</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {reportDataSources.map(([section, source]) => (
+                                <tr key={section}>
+                                  <td className="font-medium">{section.replace(/_/g, " ")}</td>
+                                  <td>
+                                    <StatusPill
+                                      label={String(source || "none")}
+                                      tone={String(source || "").toLowerCase() === "none" ? "neutral" : "info"}
+                                    />
+                                  </td>
+                                </tr>
+                              ))}
+                              {!reportDataSources.length ? (
+                                <tr>
+                                  <td colSpan={2} className="text-xs text-gray-500 dark:text-gray-400">
+                                    No data-source metadata available.
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </tbody>
+                          </table>
+                        </TableFrame>
+                      </PanelCard>
+
+                      <PanelCard title="Event Signals" subtitle="Quick counts from the live event stream." className="flex min-h-0 flex-col overflow-hidden">
+                        <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-2">
+                          <div className="flex min-h-0 flex-col overflow-hidden">
+                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Top Events</h4>
+                            <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                              <table className="text-xs">
+                                <thead>
+                                  <tr>
+                                    <th>Event</th>
+                                    <th>Count</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {reportEventCounts.slice(0, 8).map((row) => (
+                                    <tr key={row.key}>
+                                      <td className="font-medium">{row.key}</td>
+                                      <td>{fmtNumber(row.count, 0)}</td>
+                                    </tr>
+                                  ))}
+                                  {!reportEventCounts.length ? (
+                                    <tr>
+                                      <td colSpan={2} className="text-xs text-gray-500 dark:text-gray-400">
+                                        No event counts available.
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                </tbody>
+                              </table>
+                            </TableFrame>
+                          </div>
+                          <div className="flex min-h-0 flex-col overflow-hidden">
+                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Severity Mix</h4>
+                            <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                              <table className="text-xs">
+                                <thead>
+                                  <tr>
+                                    <th>Severity</th>
+                                    <th>Count</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {reportSeverityCounts.map((row) => (
+                                    <tr key={row.key}>
+                                      <td>
+                                        <StatusPill
+                                          label={row.key}
+                                          tone={row.key === "error" || row.key === "critical" ? "danger" : row.key === "warn" ? "warn" : "info"}
+                                        />
+                                      </td>
+                                      <td>{fmtNumber(row.count, 0)}</td>
+                                    </tr>
+                                  ))}
+                                  {!reportSeverityCounts.length ? (
+                                    <tr>
+                                      <td colSpan={2} className="text-xs text-gray-500 dark:text-gray-400">
+                                        No severity counts available.
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                </tbody>
+                              </table>
+                            </TableFrame>
+                          </div>
+                        </div>
+                      </PanelCard>
+                    </div>
+                  </div>
+
+                  <div className="flex min-h-0 flex-col gap-4">
+                    <PanelCard
+                      title="Artifacts"
+                      subtitle="Download the generated source files for this run individually, or take the whole pack as a ZIP."
+                      className="flex min-h-0 flex-col overflow-hidden"
+                    >
+                      <TableFrame compact maxHeightClass="max-h-full" className="min-h-0 flex-1">
+                        <table className="text-xs">
+                          <thead>
+                            <tr>
+                              <th>File</th>
+                              <th>Format</th>
+                              <th>Rows</th>
+                              <th>Size</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportViewerData.files.map((file) => (
+                              <tr key={file.name}>
+                                <td className="font-mono text-[11px] text-gray-700 dark:text-gray-300">{file.name}</td>
+                                <td>
+                                  <StatusPill label={String(file.format || "file")} tone={artifactTone(file)} />
+                                </td>
+                                <td>{file.rows === null || file.rows === undefined ? "n/a" : fmtNumber(file.rows, 0)}</td>
+                                <td>{fmtBytes(file.size_bytes)}</td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadReportFile(reportViewerRunKey, file.name)}
+                                    disabled={!!reportDownloadKey}
+                                    className="inline-flex items-center rounded-lg border border-gray-300 px-2.5 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                                  >
+                                    {reportDownloadKey === file.name ? "Downloading..." : "Download"}
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                            {!reportViewerData.files.length ? (
+                              <tr>
+                                <td colSpan={5} className="text-xs text-gray-500 dark:text-gray-400">
+                                  No downloadable report artifacts found for this run.
+                                </td>
+                              </tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </TableFrame>
+                    </PanelCard>
+
+                    <PanelCard title="Report Notes" subtitle="Quick metadata for this pack." className="shrink-0">
+                      <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Path</span>
+                          <span className="max-w-[70%] break-all font-mono text-[11px] text-right text-gray-700 dark:text-gray-300">
+                            {reportViewerData.path}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Files</span>
+                          <span className="font-mono text-sm text-gray-900 dark:text-white">{fmtNumber(reportViewerData.files.length, 0)}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Summary</span>
+                          <StatusPill label={reportViewerData.summary_available ? "available" : "missing"} tone={reportViewerData.summary_available ? "success" : "warn"} />
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Created</span>
+                          <span className="text-right text-sm text-gray-900 dark:text-white">{fmtDate(reportViewerData.generated_at)}</span>
+                        </div>
+                      </div>
+                    </PanelCard>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {activeTab === "logs" && (
           <section className="flex flex-1 min-h-0 flex-col gap-2 overflow-hidden">
             <div className="shrink-0 flex justify-end">
@@ -1536,7 +2023,20 @@ export default function AdminConsolePage() {
                             onClick={() => setSelectedArtifactsRunKey(row.run_key)}
                             className={selectedArtifactsRunKey === row.run_key ? "cursor-pointer bg-brand-50/80 dark:bg-brand-950/20" : "cursor-pointer"}
                           >
-                            <td className="font-mono text-xs">{row.run_key}</td>
+                            <td>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedArtifactsRunKey(row.run_key);
+                                  void handleOpenReportViewer(row.run_key);
+                                }}
+                                className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
+                                title={`View ${row.run_key} report`}
+                              >
+                                {row.run_key}
+                              </button>
+                            </td>
                             <td>{row.file_count}</td>
                             <td>
                               <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />

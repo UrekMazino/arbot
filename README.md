@@ -213,6 +213,11 @@ Reports are generated from structured bot events from the start of the run and u
 - `equity_curve.csv` (equity/session/PNL timeline)
 - `pair_history.csv` (pair switch chronology with durations)
 - `trade_closes.csv` (trade closes with strategy/regime attribution and exit context)
+- `liquidity_checks.csv` (entry-time liquidity ratios, fallback/downsize decisions, and rejects when available)
+- `entry_slippage.csv` (entry preview vs realized fill prices/slippage when available)
+- `reconciliation_checks.csv` (post-close estimate vs realized equity reconciliation when available)
+- `entry_rejections.csv` (structured reasons for skipped entries when available)
+- `risk_alerts.csv` (risk alerts plus structured runtime/reconciliation/data-quality warnings when available)
 - `event_counts.json` (event/severity totals)
 - `config_snapshot.json` (startup config snapshot, when available)
 - `strategy_metrics.csv` (strategy-level trade outcomes, when available)
@@ -221,7 +226,7 @@ Reports are generated from structured bot events from the start of the run and u
 - `report_manifest.json` (machine-readable file inventory, schema version, row counts)
 
 Legacy/manual artifacts:
-- `report_generator.py` remains available for manual backfill/analysis runs.
+- `report_generator.py` is retained as a legacy/manual backfill tool only.
 - Legacy files such as `summary.txt`, `trades.csv`, `strategy_switches.csv`, `data_quality_checks.csv`, and `alerts.txt` may still exist for older runs produced by the log-parser path.
 
 At `OKXStatBot/Reports/v1`, an index is maintained for quick review:

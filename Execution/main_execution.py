@@ -643,7 +643,7 @@ def _start_command_listener():
 def _run_report_generator():
     disable = str(os.getenv("STATBOT_REPORT_ENABLE", "1")).strip().lower()
     if disable in ("0", "false", "no", "off"):
-        logger.info("Report generator disabled via STATBOT_REPORT_ENABLE.")
+        logger.info("Live report refresh disabled via STATBOT_REPORT_ENABLE.")
         return False
 
     event_mode = str(os.getenv("STATBOT_EVENT_EMITTER_MODE", "active") or "").strip().lower()
@@ -665,23 +665,11 @@ def _run_report_generator():
         logger.info("Report refresh requested via live event pipeline.")
         return True
 
-    report_script = Path(__file__).resolve().parent / "report_generator.py"
-    if not report_script.exists():
-        logger.warning("Report generator script missing: %s", report_script)
-        return False
-
-    try:
-        ret = subprocess.call([sys.executable, str(report_script)], env=os.environ.copy())
-    except Exception as exc:
-        logger.warning("Report generator failed to run: %s", exc)
-        return False
-
-    if ret != 0:
-        logger.warning("Report generator returned non-zero exit code: %s", ret)
-        return False
-
-    logger.info("Report generator completed.")
-    return True
+    logger.warning(
+        "Live report refresh skipped: event pipeline is unavailable. "
+        "Execution/report_generator.py is legacy/manual backfill only."
+    )
+    return False
 
 
 def _get_report_uptime_hours():
@@ -2578,6 +2566,28 @@ if __name__ == "__main__":
                         drift,
                         other_note,
                     )
+                    emit_event(
+                        "data_quality_warning",
+                        payload={
+                            "warning_type": "equity_drift",
+                            "message": "Equity delta diverged from pair PnL delta",
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "equity_delta_usdt": equity_delta,
+                            "pair_pnl_delta_usdt": pair_pnl_delta,
+                            "drift_usdt": drift,
+                            "other_positions_count": len(other_positions),
+                            "other_positions_sample": other_positions[:5],
+                            "other_orders_count": len(other_orders),
+                            "other_orders_sample": other_orders[:5],
+                            "pair_orders_count": pair_orders,
+                            "pnl_source": pnl_info.get("source") if isinstance(pnl_info, dict) else None,
+                            "pnl_fallback_basis": (
+                                pnl_info.get("fallback_basis") if isinstance(pnl_info, dict) else None
+                            ),
+                        },
+                        severity="warn",
+                        logger=logger,
+                    )
 
             prev_equity_usdt = equity_usdt
             prev_total_pnl = total_pnl
@@ -2981,10 +2991,36 @@ if __name__ == "__main__":
                     logger.warning(
                         "Post-close equity unavailable; using pre-close equity delta for trade result."
                     )
+                    emit_event(
+                        "data_quality_warning",
+                        payload={
+                            "warning_type": "post_close_equity_unavailable",
+                            "message": "Post-close equity unavailable; using pre-close equity delta",
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "strategy": entry_strategy,
+                            "regime": entry_regime,
+                            "pre_close_equity_change": pre_close_equity_change,
+                        },
+                        severity="warn",
+                        logger=logger,
+                    )
                 else:
                     actual_pnl = total_pnl
                     logger.warning(
                         "Entry/post-close equity unavailable; falling back to pair PnL for trade result."
+                    )
+                    emit_event(
+                        "data_quality_warning",
+                        payload={
+                            "warning_type": "trade_result_fallback_pair_pnl",
+                            "message": "Entry/post-close equity unavailable; using pair PnL fallback",
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "strategy": entry_strategy,
+                            "regime": entry_regime,
+                            "pair_pnl": total_pnl,
+                        },
+                        severity="warn",
+                        logger=logger,
                     )
 
                 hold_minutes = None
@@ -3055,9 +3091,17 @@ if __name__ == "__main__":
                         recon_unexplained_warn_threshold,
                     )
 
+                    large_delta_warning = False
+                    large_unexplained_warning = False
+                    unexplained_pct = (
+                        abs(reconciliation["unexplained"] / reconciliation["difference"]) * 100
+                        if reconciliation["difference"] != 0
+                        else 0
+                    )
                     if post_equity_usdt is not None:
                         pnl_diff = abs(reconciliation["difference"])
                         if pnl_diff > recon_delta_warn_threshold:
+                            large_delta_warning = True
                             logger.warning(
                                 "Large realized-vs-estimated PnL delta: basis=%s position_pnl=%.2f "
                                 "realized_equity_change=%.2f diff=%.2f threshold=%.2f",
@@ -3068,15 +3112,11 @@ if __name__ == "__main__":
                                 recon_delta_warn_threshold,
                             )
 
-                        unexplained_pct = (
-                            abs(reconciliation["unexplained"] / reconciliation["difference"]) * 100
-                            if reconciliation["difference"] != 0
-                            else 0
-                        )
                         if (
                             abs(reconciliation["unexplained"]) > recon_unexplained_warn_threshold
                             and unexplained_pct > recon_unexplained_pct_warn_threshold
                         ):
+                            large_unexplained_warning = True
                             logger.warning(
                                 "Large unexplained reconciliation component (post-close): %.2f USDT "
                                 "(%.1f%% of difference) basis=%s threshold=%.2f pct_threshold=%.1f",
@@ -3086,6 +3126,58 @@ if __name__ == "__main__":
                                 recon_unexplained_warn_threshold,
                                 recon_unexplained_pct_warn_threshold,
                             )
+
+                    reconciliation_status = (
+                        "fail"
+                        if (large_delta_warning or large_unexplained_warning)
+                        else ("warn" if post_equity_usdt is None else "pass")
+                    )
+                    emit_event(
+                        "reconciliation_check",
+                        payload={
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "strategy": entry_strategy,
+                            "regime": entry_regime,
+                            "entry_ts": entry_time_ts,
+                            "exit_reason": switch_reason_after_close or "normal",
+                            "trade_pnl": reconciliation["trade_pnl"],
+                            "equity_change": reconciliation["equity_change"],
+                            "difference": reconciliation["difference"],
+                            "fees": reconciliation["fees"],
+                            "slippage": reconciliation["slippage"],
+                            "funding": reconciliation["funding"],
+                            "unexplained": reconciliation["unexplained"],
+                            "basis": recon_basis,
+                            "delta_warn_threshold": recon_delta_warn_threshold,
+                            "unexplained_warn_threshold": recon_unexplained_warn_threshold,
+                            "unexplained_pct_warn_threshold": recon_unexplained_pct_warn_threshold,
+                            "unexplained_pct": unexplained_pct,
+                            "large_delta_warning": large_delta_warning,
+                            "large_unexplained_warning": large_unexplained_warning,
+                            "pass_fail": reconciliation_status,
+                            "post_close_equity_available": post_equity_usdt is not None,
+                        },
+                        severity="warn" if reconciliation_status != "pass" else "info",
+                        logger=logger,
+                    )
+                    if large_delta_warning or large_unexplained_warning:
+                        emit_event(
+                            "reconciliation_warning",
+                            payload={
+                                "warning_type": "post_close_reconciliation",
+                                "pair": f"{ticker_1}/{ticker_2}",
+                                "strategy": entry_strategy,
+                                "regime": entry_regime,
+                                "basis": recon_basis,
+                                "difference": reconciliation["difference"],
+                                "unexplained": reconciliation["unexplained"],
+                                "unexplained_pct": unexplained_pct,
+                                "large_delta_warning": large_delta_warning,
+                                "large_unexplained_warning": large_unexplained_warning,
+                            },
+                            severity="warn",
+                            logger=logger,
+                        )
 
                 is_win = actual_pnl > 0
                 result_label = "WIN" if is_win else "LOSS"

@@ -244,6 +244,29 @@ export type AdminReportRun = {
   mtime_ts: number;
 };
 
+export type AdminReportArtifactFile = {
+  name: string;
+  format: string | null;
+  rows: number | null;
+  size_bytes: number | null;
+  mtime_ts: number | null;
+  mime_type: string | null;
+};
+
+export type AdminReportSummary = {
+  run_key: string;
+  run_id: string | null;
+  path: string;
+  refreshed: boolean;
+  summary_available: boolean;
+  generated_at: string | null;
+  report_version: string | null;
+  report_source: string | null;
+  summary: Record<string, unknown> | null;
+  manifest: Record<string, unknown> | null;
+  files: AdminReportArtifactFile[];
+};
+
 export type AdminEnvSettings = {
   path: string;
   values: Record<string, string>;
@@ -335,6 +358,58 @@ async function apiRequest<T>(
   }
 
   return (await response.json()) as T;
+}
+
+function parseContentDispositionFilename(value: string | null): string | null {
+  if (!value) return null;
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const basicMatch = value.match(/filename="?([^"]+)"?/i);
+  return basicMatch?.[1] ?? null;
+}
+
+async function downloadApiFile(path: string, fallbackFilename: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === "object") {
+        const parsedRecord = parsed as Record<string, unknown>;
+        if (typeof parsedRecord.detail === "string") {
+          message = parsedRecord.detail;
+        } else if (typeof parsedRecord.message === "string") {
+          message = parsedRecord.message;
+        }
+      }
+    } catch {
+      // ignore parse errors and keep raw text
+    }
+    throw new Error(`HTTP ${response.status}: ${message}`);
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const filename = parseContentDispositionFilename(response.headers.get("Content-Disposition")) || fallbackFilename;
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 export async function login(email: string, password: string, rememberMe = true): Promise<MessageResponse> {
@@ -447,6 +522,22 @@ export async function deleteAdminLogRun(runKey: string): Promise<{ deleted: bool
 
 export async function getAdminReportRuns(limit = 100): Promise<AdminReportRun[]> {
   return apiRequest<AdminReportRun[]>(`/admin/reports/runs?limit=${limit}`, { method: "GET" });
+}
+
+export async function getAdminReportRunSummary(runKey: string): Promise<AdminReportSummary> {
+  const key = encodeURIComponent(runKey);
+  return apiRequest<AdminReportSummary>(`/admin/reports/runs/${key}/summary`, { method: "GET" });
+}
+
+export async function downloadAdminReportFile(runKey: string, fileName: string): Promise<void> {
+  const key = encodeURIComponent(runKey);
+  const name = encodeURIComponent(fileName);
+  await downloadApiFile(`/admin/reports/runs/${key}/files/${name}/download`, fileName);
+}
+
+export async function downloadAdminReportZip(runKey: string): Promise<void> {
+  const key = encodeURIComponent(runKey);
+  await downloadApiFile(`/admin/reports/runs/${key}/download`, `${runKey}_report.zip`);
 }
 
 export async function getAdminEnvSettings(): Promise<AdminEnvSettings> {

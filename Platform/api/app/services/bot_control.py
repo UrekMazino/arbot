@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import shlex
@@ -10,8 +11,10 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
 from collections import deque
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 from sqlalchemy import delete, select
@@ -1173,6 +1176,175 @@ def list_report_runs(limit: int = 100) -> list[dict]:
         )
     rows.sort(key=lambda item: item.get("mtime_ts", 0.0), reverse=True)
     return rows[: max(min(int(limit), 500), 1)]
+
+
+def _read_json_object(path: Path) -> dict | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return {"_value": parsed}
+
+
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _report_file_sort_key(name: str) -> tuple[int, str]:
+    priority = {
+        "summary.json": 0,
+        "report_manifest.json": 1,
+        "trade_closes.csv": 2,
+        "pair_history.csv": 3,
+        "equity_curve.csv": 4,
+        "event_counts.json": 5,
+    }
+    return priority.get(name, 100), name.lower()
+
+
+def get_report_run_summary(db: Session, run_key: str) -> dict:
+    selected = str(run_key or "").strip()
+    if not selected:
+        raise FileNotFoundError("Report run not found")
+
+    run = db.execute(select(Run).where(Run.run_key == selected)).scalar_one_or_none()
+    report_dir = _resolve_run_directory(REPORTS_ROOT, selected)
+    summary_path = report_dir / "summary.json" if report_dir else None
+    manifest_path = report_dir / "report_manifest.json" if report_dir else None
+    should_refresh = bool(
+        run and (
+            run.status == "running"
+            or summary_path is None
+            or not summary_path.exists()
+            or manifest_path is None
+            or not manifest_path.exists()
+        )
+    )
+    refreshed = False
+
+    if should_refresh:
+        from .live_report import materialize_live_run_report
+
+        result = materialize_live_run_report(db, run)
+        refreshed = bool(result.get("saved"))
+        report_dir = _resolve_run_directory(REPORTS_ROOT, selected)
+        summary_path = report_dir / "summary.json" if report_dir else None
+        manifest_path = report_dir / "report_manifest.json" if report_dir else None
+
+    if not report_dir:
+        raise FileNotFoundError("Report run not found")
+
+    summary = _read_json_object(summary_path) if summary_path else None
+    manifest = _read_json_object(manifest_path) if manifest_path else None
+    manifest_entries = manifest.get("files") if isinstance(manifest, dict) else None
+    manifest_by_name: dict[str, dict] = {}
+    if isinstance(manifest_entries, list):
+        for entry in manifest_entries:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name") or "").strip()
+            if name:
+                manifest_by_name[name] = entry
+
+    files: list[dict] = []
+    for path in sorted(report_dir.glob("*"), key=lambda item: _report_file_sort_key(item.name)):
+        if not path.is_file():
+            continue
+        manifest_entry = manifest_by_name.get(path.name, {})
+        mime_type, _ = mimetypes.guess_type(str(path))
+        rows = _coerce_int(manifest_entry.get("rows")) if isinstance(manifest_entry, dict) else None
+        if rows is None and path.suffix.lower() == ".json":
+            rows = 1
+        try:
+            stat = path.stat()
+            size_bytes = int(stat.st_size)
+            mtime_ts = float(stat.st_mtime)
+        except Exception:
+            size_bytes = None
+            mtime_ts = None
+        files.append(
+            {
+                "name": path.name,
+                "format": str(manifest_entry.get("format") or path.suffix.lstrip(".") or "").strip() or None,
+                "rows": rows,
+                "size_bytes": size_bytes,
+                "mtime_ts": mtime_ts,
+                "mime_type": mime_type,
+            }
+        )
+
+    generated_at = None
+    if isinstance(manifest, dict):
+        generated_at = str(manifest.get("generated_at") or "").strip() or None
+    if not generated_at and isinstance(summary, dict):
+        generated_at = str(summary.get("report_created_at") or "").strip() or None
+
+    report_version = None
+    report_source = None
+    if isinstance(summary, dict):
+        report_version = str(summary.get("report_version") or "").strip() or None
+        report_source = str(summary.get("report_source") or "").strip() or None
+    if not report_version and isinstance(manifest, dict):
+        report_version = str(manifest.get("report_version") or "").strip() or None
+    if not report_source and isinstance(manifest, dict):
+        report_source = str(manifest.get("report_source") or "").strip() or None
+
+    return {
+        "run_key": selected,
+        "run_id": run.id if run else None,
+        "path": str(report_dir),
+        "refreshed": refreshed,
+        "summary_available": summary is not None,
+        "generated_at": generated_at,
+        "report_version": report_version,
+        "report_source": report_source,
+        "summary": summary,
+        "manifest": manifest,
+        "files": files,
+    }
+
+
+def get_report_run_file(run_key: str, file_name: str) -> dict:
+    report_dir = _resolve_run_directory(REPORTS_ROOT, run_key)
+    if not report_dir:
+        raise FileNotFoundError("Report run not found")
+    requested_name = str(file_name or "").strip()
+    if not requested_name:
+        raise FileNotFoundError("Report file not found")
+    candidate = (report_dir / requested_name).resolve()
+    if candidate.parent != report_dir.resolve():
+        raise FileNotFoundError("Report file not found")
+    if not candidate.exists() or not candidate.is_file():
+        raise FileNotFoundError("Report file not found")
+    mime_type, _ = mimetypes.guess_type(str(candidate))
+    return {
+        "path": str(candidate),
+        "filename": candidate.name,
+        "media_type": mime_type or "application/octet-stream",
+    }
+
+
+def build_report_run_zip(run_key: str) -> tuple[bytes, str]:
+    report_dir = _resolve_run_directory(REPORTS_ROOT, run_key)
+    if not report_dir:
+        raise FileNotFoundError("Report run not found")
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(report_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            archive.write(path, arcname=f"{report_dir.name}/{path.relative_to(report_dir).as_posix()}")
+    return buffer.getvalue(), f"{report_dir.name}_report.zip"
 
 
 def clear_logs_and_reports(keep_latest: bool = False) -> dict:

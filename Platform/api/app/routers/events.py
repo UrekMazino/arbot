@@ -13,6 +13,7 @@ from ..deps import get_db_session, get_event_ingest_principal
 from ..models import Alert, BotInstance, Run, RunEvent
 from ..realtime import publish_bot_event
 from ..schemas import EventBatchIn, EventIngestResultOut
+from ..services.live_report import materialize_live_run_report
 from ..services.run_pair_segments import sync_run_pair_segments_for_event
 
 router = APIRouter(prefix="/bots", tags=["events"])
@@ -133,6 +134,16 @@ def ingest_events_batch(
                 db.add(alert)
                 db.flush()
             db.commit()
+            try:
+                materialize_live_run_report(db, run)
+            except Exception as report_exc:
+                logger.warning(
+                    "Live report materialization failed: bot=%s run=%s type=%s err=%s",
+                    bot_instance_id,
+                    event.run_id,
+                    event.event_type,
+                    report_exc,
+                )
 
             publish_bot_event(
                 bot_instance_id,

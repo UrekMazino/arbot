@@ -10,6 +10,7 @@ import {
   AdminLogRun,
   AdminPairsHealth,
   AdminReportRun,
+  AdminRunRuntime,
   UserRecord,
   clearAdminLogs,
   deleteAdminLogRun,
@@ -19,6 +20,7 @@ import {
   getAdminLogRuns,
   getAdminPairsHealth,
   getAdminReportRuns,
+  getAdminRunRuntime,
   getMe,
   isUnauthorizedError,
   isForbiddenError,
@@ -297,6 +299,7 @@ export default function AdminConsolePage() {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<AdminRunRuntime | null>(null);
   const terminalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const logViewerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const { ConfirmDialogComponent: actionConfirmDialog, confirm: showActionConfirm } = useConfirmDialog();
@@ -396,6 +399,7 @@ export default function AdminConsolePage() {
     () => Array.from(new Set([...logRuns.map((row) => row.run_key), ...reportRuns.map((row) => row.run_key)])),
     [logRuns, reportRuns],
   );
+  const runtimeUpdatedAt = runtimeSnapshot?.updated_at || localLogTail?.updated_at;
 
   // Memoize run key options for dropdown to prevent recalculation
   const runKeyOptions = useMemo(
@@ -407,46 +411,46 @@ export default function AdminConsolePage() {
     [logRuns],
   );
 
-  const applyTailMetrics = useCallback(
+  const applyRuntimeMetrics = useCallback(
     (
-      tail: AdminLogTail | null,
+      runtime: AdminRunRuntime | null,
       options?: {
         preserveStartingEquity?: boolean;
         preserveRunningEquity?: boolean;
         preserveRunUptime?: boolean;
       },
     ) => {
-      if (!tail) return;
+      if (!runtime) return;
 
-      if (tail.starting_equity !== null) {
-        setStartingEquity(tail.starting_equity);
+      if (runtime.starting_equity !== null) {
+        setStartingEquity(runtime.starting_equity);
       } else if (!options?.preserveStartingEquity) {
         setStartingEquity(null);
       }
 
-      if (tail.equity !== null) {
-        setRunningEquity(tail.equity);
-      } else if (tail.starting_equity !== null) {
-        setRunningEquity(tail.starting_equity);
+      if (runtime.equity !== null) {
+        setRunningEquity(runtime.equity);
+      } else if (runtime.starting_equity !== null) {
+        setRunningEquity(runtime.starting_equity);
       } else if (!options?.preserveRunningEquity) {
         setRunningEquity(null);
       }
 
-      if (tail.session_pnl !== null && tail.session_pnl_pct !== null) {
-        setSessionPnl({ amount: tail.session_pnl, pct: tail.session_pnl_pct });
+      if (runtime.session_pnl !== null && runtime.session_pnl_pct !== null) {
+        setSessionPnl({ amount: runtime.session_pnl, pct: runtime.session_pnl_pct });
       } else {
         setSessionPnl(null);
       }
 
-      if (tail.run_start_time !== null) {
-        setRunUptime(tail.run_start_time);
+      if (runtime.run_start_time !== null) {
+        setRunUptime(runtime.run_start_time);
       } else if (!options?.preserveRunUptime) {
         setRunUptime(null);
       }
 
-      if (tail.pair_history) {
-        setPairHistory(tail.pair_history);
-        setPairCount(tail.pair_count || 0);
+      if (runtime.pair_history) {
+        setPairHistory(runtime.pair_history);
+        setPairCount(runtime.pair_count || 0);
       } else {
         setPairHistory([]);
         setPairCount(0);
@@ -471,6 +475,7 @@ export default function AdminConsolePage() {
         setLogRuns([]);
         setReportRuns([]);
         setLocalLogTail(null);
+        setRuntimeSnapshot(null);
         setPairsHealth(null);
         return;
       }
@@ -505,17 +510,23 @@ export default function AdminConsolePage() {
 
       // Load the log tail for the determined run key
       if (canLoadLogs) {
-        const displayLogTailData = await getAdminBotLogTail(runKeyToLoad, 320);
+        const [displayLogTailData, runtimeData] = await Promise.all([
+          getAdminBotLogTail(runKeyToLoad, 320),
+          getAdminRunRuntime(runKeyToLoad),
+        ]);
         setLocalLogTail(displayLogTailData);
-        applyTailMetrics(displayLogTailData);
-        if (displayLogTailData?.run_key && displayLogTailData.run_key !== "__control__") {
+        setRuntimeSnapshot(runtimeData);
+        applyRuntimeMetrics(runtimeData);
+        if (runtimeData?.run_key) {
+          setSelectedRunKey(runtimeData.run_key);
+        } else if (displayLogTailData?.run_key && displayLogTailData.run_key !== "__control__") {
           setSelectedRunKey(displayLogTailData.run_key);
         } else {
           setSelectedRunKey(runKeyToLoad);
         }
       }
     },
-    [applyTailMetrics],
+    [applyRuntimeMetrics],
   );
 
   const refreshLogTail = useCallback(
@@ -527,11 +538,6 @@ export default function AdminConsolePage() {
       }
       const next = await getAdminBotLogTail(runKey || "latest", 320);
       setLocalLogTail(next);
-      applyTailMetrics(next, {
-        preserveStartingEquity: true,
-        preserveRunningEquity: true,
-        preserveRunUptime: true,
-      });
       // Also update shared context when floating
       if (isFloating) setSharedLogTail(next);
 
@@ -569,7 +575,6 @@ export default function AdminConsolePage() {
       setPairHistory,
       setPairCount,
       setSelectedRunKey,
-      applyTailMetrics,
     ]);
 
   const handleOpenLogViewer = useCallback(async (row: AdminLogRun) => {
@@ -784,14 +789,16 @@ export default function AdminConsolePage() {
 
       // Check if there's a new run that's different from what we had
       if (runs.length > 0) {
-        const latestRunKey = runs[0]?.run_key;
-        if (latestRunKey && latestRunKey !== lastKnownRunKey && latestRunKey !== "__control__") {
-          // New run detected! Fetch its log tail
-          const tail = await getAdminBotLogTail(latestRunKey, 320);
+          const latestRunKey = runs[0]?.run_key;
+          if (latestRunKey && latestRunKey !== lastKnownRunKey && latestRunKey !== "__control__") {
+          const [tail, runtimeData, statusData] = await Promise.all([
+            getAdminBotLogTail(latestRunKey, 320),
+            getAdminRunRuntime(latestRunKey),
+            getAdminBotStatus(),
+          ]);
           setLocalLogTail(tail);
-          applyTailMetrics(tail);
-          // Also update the bot status to get latest_run_key updated
-          const statusData = await getAdminBotStatus();
+          setRuntimeSnapshot(runtimeData);
+          applyRuntimeMetrics(runtimeData);
           setBotStatus(statusData);
           setSelectedRunKey(latestRunKey);
           setWaitingForRun(false);
@@ -808,6 +815,7 @@ export default function AdminConsolePage() {
     selectedRunKey,
     setLogRuns,
     setLocalLogTail,
+    setRuntimeSnapshot,
     setRunningEquity,
     setStartingEquity,
     setSessionPnl,
@@ -816,7 +824,7 @@ export default function AdminConsolePage() {
     setPairCount,
     setBotStatus,
     setSelectedRunKey,
-    applyTailMetrics,
+    applyRuntimeMetrics,
   ]);
 
   useEffect(() => {
@@ -867,6 +875,7 @@ export default function AdminConsolePage() {
     setLogRuns([]);
     setReportRuns([]);
     setLocalLogTail(null);
+    setRuntimeSnapshot(null);
     if (fallbackHref && fallbackHref !== "/admin/console") {
       setStatus("Redirecting");
       setError("Console access is not enabled for your account.");
@@ -883,6 +892,7 @@ export default function AdminConsolePage() {
     setLogRuns,
     setReportRuns,
     setLocalLogTail,
+    setRuntimeSnapshot,
     setStatus,
     setError,
   ]);
@@ -894,34 +904,22 @@ export default function AdminConsolePage() {
     return () => stopStream();
   }, [canViewConsole, canViewLogs, selectedRunKey, isFloating, startStream, stopStream]);
 
-  // Poll log tail metadata (equity, pair_count) while using SSE for real-time logs
+  // Poll structured runtime metadata from the event/DB pipeline while SSE handles terminal lines.
   useEffect(() => {
     if (!canViewConsole || !canViewLogs || isFloating) return;
 
     let isMounted = true;
     let inFlight = false;
 
-    const pollMetadata = async () => {
+    const pollRuntime = async () => {
       if (inFlight) return;
       inFlight = true;
 
       try {
-        const tail = await getAdminBotLogTail(selectedRunKey || "latest", 50);
+        const runtimeData = await getAdminRunRuntime(selectedRunKey || "latest");
         if (!isMounted) return;
-
-        // Update localLogTail with fresh metadata (but keep existing lines if SSE is active)
-        if (streamLogLines.length > 0) {
-          // SSE is active, merge new metadata with SSE lines
-          setLocalLogTail({
-            ...tail,
-            lines: streamLogLines, // Keep SSE lines
-          });
-        } else {
-          // No SSE, use full tail data
-          setLocalLogTail(tail);
-        }
-
-        applyTailMetrics(tail, {
+        setRuntimeSnapshot(runtimeData);
+        applyRuntimeMetrics(runtimeData, {
           preserveStartingEquity: true,
           preserveRunningEquity: true,
           preserveRunUptime: true,
@@ -934,8 +932,8 @@ export default function AdminConsolePage() {
     };
 
     // Poll immediately then every 5 seconds
-    pollMetadata();
-    const timer = window.setInterval(pollMetadata, 5000);
+    pollRuntime();
+    const timer = window.setInterval(pollRuntime, 5000);
 
     return () => {
       isMounted = false;
@@ -946,9 +944,8 @@ export default function AdminConsolePage() {
     canViewLogs,
     selectedRunKey,
     isFloating,
-    streamLogLines,
-    setLocalLogTail,
-    applyTailMetrics,
+    setRuntimeSnapshot,
+    applyRuntimeMetrics,
   ]);
 
   // Poll pairs health data
@@ -1253,7 +1250,7 @@ export default function AdminConsolePage() {
                     </div>
                     <div className="pt-1">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Run Uptime</p>
-                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{fmtUptime(runUptime, Boolean(selectedRunKey === "latest" || selectedRunKey === botStatus?.latest_run_key), Boolean(botStatus?.running), localLogTail?.updated_at)}</p>
+                      <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{fmtUptime(runUptime, Boolean(selectedRunKey === "latest" || selectedRunKey === botStatus?.latest_run_key), Boolean(runtimeSnapshot?.running ?? botStatus?.running), runtimeUpdatedAt)}</p>
                     </div>
                     <div className="pt-1">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Pairs Used</p>
@@ -1261,22 +1258,24 @@ export default function AdminConsolePage() {
                     </div>
                     <div className="pt-1">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Started</p>
-                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.started_at || null)}</p>
+                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(runtimeSnapshot?.started_at || botStatus?.started_at || null)}</p>
                     </div>
                     <div className="pt-1">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Stopped</p>
-                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(botStatus?.stopped_at || null)}</p>
+                      <p className="mt-1.5 font-mono text-xs text-gray-600 dark:text-gray-400">{fmtDate(runtimeSnapshot?.stopped_at || botStatus?.stopped_at || null)}</p>
                     </div>
                     <div className="col-span-2">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Select Run</p>
                       <select className="mt-1.5 w-full min-w-[180px] rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-white/90" value={selectedRunKey} onChange={async (e) => {
                         const newKey = e.target.value;
                         setSelectedRunKey(newKey);
-                        // Fetch equity for newly selected run
-                        if (newKey !== "latest") {
-                          const tail = await getAdminBotLogTail(newKey, 320);
-                          applyTailMetrics(tail);
-                        }
+                        const [tail, runtimeData] = await Promise.all([
+                          getAdminBotLogTail(newKey, 320),
+                          getAdminRunRuntime(newKey),
+                        ]);
+                        setLocalLogTail(tail);
+                        setRuntimeSnapshot(runtimeData);
+                        applyRuntimeMetrics(runtimeData);
                       }}>
                         <option value="latest">latest</option>
                         {runKeyOptions}
@@ -1301,8 +1300,8 @@ export default function AdminConsolePage() {
                           </thead>
                           <tbody>
                             {pairHistory.map((entry, idx) => {
-                              const totalDuration = runUptime && localLogTail?.updated_at
-                                ? (new Date(localLogTail.updated_at).getTime() / 1000 - runUptime)
+                              const totalDuration = runtimeSnapshot?.duration_seconds
+                                ? runtimeSnapshot.duration_seconds
                                 : pairHistory.reduce((sum, p) => sum + p.duration_seconds, 0);
                               const pct = totalDuration > 0 ? (entry.duration_seconds / totalDuration) * 100 : 0;
                               return (

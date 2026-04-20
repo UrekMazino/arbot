@@ -197,6 +197,29 @@ export type AdminLogTail = {
   pair_count: number;
 };
 
+export type AdminRunRuntime = {
+  run_id: string | null;
+  run_key: string | null;
+  status: string;
+  running: boolean;
+  detail: string;
+  started_at: string | null;
+  stopped_at: string | null;
+  updated_at: string | null;
+  duration_seconds: number;
+  starting_equity: number | null;
+  equity: number | null;
+  session_pnl: number | null;
+  session_pnl_pct: number | null;
+  run_start_time: number | null;
+  pair_history: Array<{ pair: string; duration_seconds: number }>;
+  pair_count: number;
+  current_pair: string | null;
+  latest_regime: string | null;
+  latest_strategy: string | null;
+  source: string;
+};
+
 export type AdminLogRun = {
   run_key: string;
   log_file: string;
@@ -401,6 +424,11 @@ export async function getAdminBotLogTail(
 ): Promise<AdminLogTail> {
   const key = encodeURIComponent(runKey || "latest");
   return apiRequest<AdminLogTail>(`/admin/bot/logs/tail?run_key=${key}&lines=${lines}`, { method: "GET" });
+}
+
+export async function getAdminRunRuntime(runKey: string): Promise<AdminRunRuntime> {
+  const key = encodeURIComponent(runKey || "latest");
+  return apiRequest<AdminRunRuntime>(`/admin/runs/runtime?run_key=${key}`, { method: "GET" });
 }
 
 export async function getAdminLogRuns(limit = 100): Promise<AdminLogRun[]> {

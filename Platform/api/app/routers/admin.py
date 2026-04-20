@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
-from ..deps import get_current_user, get_user_permission_ids, require_permissions
+from ..deps import get_current_user, get_db_session, get_user_permission_ids, require_permissions
 from ..models import User
 from ..services.bot_control import (
     clear_logs_and_reports,
@@ -19,6 +20,7 @@ from ..services.bot_control import (
     tail_run_log,
     update_env_setting,
 )
+from ..services.run_runtime import get_run_runtime_snapshot
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 API_ENV_KEYS = {"OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"}
@@ -64,6 +66,15 @@ def admin_bot_logs_tail(
     _: User = Depends(require_permissions("view_logs")),
 ):
     return tail_run_log(run_key=run_key, lines=lines)
+
+
+@router.get("/runs/runtime")
+def admin_run_runtime(
+    run_key: str | None = Query(default=None),
+    _: User = Depends(require_permissions("view_logs", "manage_bot")),
+    db: Session = Depends(get_db_session),
+):
+    return get_run_runtime_snapshot(db, run_key=run_key, include_pair_history=True)
 
 
 @router.get("/bot/logs/stream")

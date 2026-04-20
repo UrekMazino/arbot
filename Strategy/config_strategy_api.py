@@ -6,6 +6,7 @@
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 import okx.Account as Account
 import okx.MarketData as MarketData
@@ -14,12 +15,12 @@ import okx.PublicData as PublicData
 from func_strategy_log import get_strategy_logger
 
 # Load environment variables
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / "Execution" / ".env"
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
+else:
+    load_dotenv()
 
-# CONFIG
-mode = "demo"  # "demo" or "live"
-time_frame = "1m"  # Timeframe for klines (1m, 5m, 15m, 1H, 1D, etc.)
-z_score_window = 60  # Z-score calculation window (increased from 21 for stability)
 def _env_float(name, default):
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
@@ -35,9 +36,16 @@ def _env_int(name, default):
     if raw is None or str(raw).strip() == "":
         return int(default)
     try:
-        return int(raw)
+        return int(float(raw))
     except (TypeError, ValueError):
         return int(default)
+
+
+def _env_str(name, default=""):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return str(default)
+    return str(raw).strip()
 
 
 def _env_list(name, default=""):
@@ -55,6 +63,21 @@ def _env_bool(name, default=False):
     if raw is None or str(raw).strip() == "":
         return bool(default)
     return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+# CONFIG
+flag = _env_str("OKX_FLAG", "1")  # "0" = live, "1" = demo
+mode = "demo" if flag == "1" else "live"
+time_frame = _env_str("STATBOT_STRATEGY_TIMEFRAME", "1m")
+z_score_window = max(2, _env_int("STATBOT_STRATEGY_Z_SCORE_WINDOW", 60))
+shared_coint_pvalue_threshold = _env_float("STATBOT_P_VALUE_CRITICAL", 0.15)
+if shared_coint_pvalue_threshold < 0:
+    shared_coint_pvalue_threshold = 0.0
+if shared_coint_pvalue_threshold > 1:
+    shared_coint_pvalue_threshold = 1.0
+cointegration_zero_cross_threshold_ratio = _env_float("STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO", 0.1)
+if cointegration_zero_cross_threshold_ratio < 0:
+    cointegration_zero_cross_threshold_ratio = 0.0
 
 kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 10080)  # 7 days @ 1m bars (increased from 1440 for statistical validity)
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
@@ -83,10 +106,9 @@ corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)
 api_key = os.getenv("OKX_API_KEY", "")
 api_secret = os.getenv("OKX_API_SECRET", "")
 passphrase = os.getenv("OKX_PASSPHRASE", "")
-flag = os.getenv("OKX_FLAG", "1")  # "0" = live, "1" = demo
 
 # Determine if using demo/simulated trading
-is_demo = (flag == "1" or mode == "demo")
+is_demo = flag == "1"
 
 # SESSION ACTIVATION
 # Public endpoints (no auth required)
@@ -125,6 +147,7 @@ def log_strategy_config(logger=None, to_console=False):
         f"Timeframe: {time_frame}",
         f"Kline limit: {kline_limit}",
         f"Z-score window: {z_score_window}",
+        f"Coint threshold: {shared_coint_pvalue_threshold}",
     ]
     if min_equity_filter_usdt > 0:
         lines.append(f"Min equity filter: {min_equity_filter_usdt:.2f} USDT")

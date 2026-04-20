@@ -1,18 +1,29 @@
 import math
 import os
-import warnings
 import threading
 import time
-import logging
+import sys
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
-import statsmodels.api as sm
-from statsmodels.tsa.stattools import coint
 
-from config_execution_api import depth, market_session, ticker_1, ticker_2, z_score_window, P_VALUE_CRITICAL
+from config_execution_api import (
+    COINT_ZERO_CROSS_THRESHOLD_RATIO,
+    P_VALUE_CRITICAL,
+    depth,
+    market_session,
+    ticker_1,
+    ticker_2,
+    z_score_window,
+)
 from func_price_calls import get_latest_klines
 from func_log_setup import get_logger
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from shared_cointegration_validator import calculate_zscore_series, evaluate_cointegration
 
 # Setup logging
 logger = get_logger("func_get_zscore")
@@ -57,13 +68,7 @@ def _set_backoff(inst_id, seconds, reason):
 
 
 def _compute_zscore(spread, window):
-    series = pd.Series(spread, dtype=float)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        mean = series.rolling(window=window).mean()
-        std = series.rolling(window=window).std()
-        zscore = (series - mean) / std
-    return zscore.astype(float).values
+    return calculate_zscore_series(spread, window=window)
 
 
 # Issue #14 Fix: API timeout protection
@@ -295,68 +300,42 @@ def get_latest_zscore(
     if np.any(series_1 <= 0) or np.any(series_2 <= 0):
         return [], False, metrics
 
-    series_1_log = np.log(series_1)
-    series_2_log = np.log(series_2)
-    if np.std(series_1_log) == 0 or np.std(series_2_log) == 0:
+    try:
+        coint_metrics = evaluate_cointegration(
+            series_1,
+            series_2,
+            window=window_val,
+            pvalue_threshold=P_VALUE_CRITICAL,
+            zero_cross_threshold_ratio=COINT_ZERO_CROSS_THRESHOLD_RATIO,
+            already_logged=False,
+        )
+    except Exception as e:
+        logger.warning(f"Cointegration evaluation failed ({inst_1} vs {inst_2}): {e}")
         return [], False, metrics
 
-    coint_flag = 0
+    metrics.update(
+        {
+            "coint_flag": int(coint_metrics.get("coint_flag", 0) or 0),
+            "p_value": float(coint_metrics.get("p_value", 1.0) or 1.0),
+            "adf_stat": float(coint_metrics.get("adf_stat", 0.0) or 0.0),
+            "critical_value": float(coint_metrics.get("critical_value", 0.0) or 0.0),
+            "zero_crossings": int(coint_metrics.get("zero_crossings", 0) or 0),
+            "spread_trend": float(coint_metrics.get("spread_trend", 0.0) or 0.0),
+            "correlation": float(coint_metrics.get("correlation", 0.0) or 0.0),
+            "returns_correlation": float(coint_metrics.get("returns_correlation", 0.0) or 0.0),
+            "hedge_ratio": float(coint_metrics.get("hedge_ratio", 0.0) or 0.0),
+        }
+    )
 
-    try:
-        series_2_const = sm.add_constant(series_2_log)
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning)
-            from statsmodels.tools.sm_exceptions import CollinearityWarning
-            warnings.filterwarnings("ignore", category=CollinearityWarning)
-            model = sm.OLS(series_1_log, series_2_const).fit()
+    zscore_values = coint_metrics.get("zscore_values")
+    if isinstance(zscore_values, np.ndarray):
+        zscore_list = zscore_values.tolist()
+    else:
+        zscore_list = list(zscore_values or [])
 
-            # Perform cointegration test
-            adf_statistic, p_value, critical_values = sm.tsa.stattools.coint(series_1_log, series_2_log)
-            coint_flag = 1 if (p_value < P_VALUE_CRITICAL and adf_statistic < critical_values[1]) else 0
-            
-            # Calculate correlation
-            correlation = np.corrcoef(series_1_log, series_2_log)[0, 1]
-            
-            metrics.update({
-                "coint_flag": coint_flag,
-                "p_value": float(p_value),
-                "adf_stat": float(adf_statistic),
-                "critical_value": float(critical_values[1]),
-                "correlation": float(correlation)
-            })
-    except (ValueError, np.linalg.LinAlgError) as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"OLS/cointegration calculation failed ({inst_1} vs {inst_2}): {e}")
-        return [], False, metrics
-    except (AttributeError, IndexError, TypeError) as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"Cointegration test error ({inst_1} vs {inst_2}): {e}")
-        return [], False, metrics
-
-    hedge_ratio = float(model.params[1] if len(model.params) > 1 else model.params[0])
-    spread = series_1_log - (hedge_ratio * series_2_log)
-    
-    # Calculate spread trend
-    try:
-        x = np.arange(len(spread))
-        coeffs = np.polyfit(x, spread, 1)
-        metrics["spread_trend"] = float(coeffs[0])
-    except Exception:
-        metrics["spread_trend"] = 0.0
-
-    zscore_values = _compute_zscore(spread, window_val)
-    zscore_list = zscore_values.tolist()
-    
-    # Calculate zero crossings
-    try:
-        z_series = pd.Series(zscore_list).dropna()
-        metrics["zero_crossings"] = int(((z_series.shift(1) * z_series) < 0).sum())
-    except Exception:
-        metrics["zero_crossings"] = 0
-
-    latest = _latest_finite(zscore_list)
+    latest = coint_metrics.get("latest_zscore")
+    if latest is None:
+        latest = _latest_finite(zscore_list)
     if latest is None:
         return [], False, metrics
     return zscore_list, latest > 0, metrics

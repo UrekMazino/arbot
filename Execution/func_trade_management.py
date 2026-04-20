@@ -914,16 +914,27 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
 
     # ADAPTIVE thresholds: Relax during active profitable trades
     # Rationale: Don't kill winning trades due to temporary statistical drift
-    MIN_PROFIT_FOR_PROTECTION_PCT = 0.10  # Protect trades at +0.1% or better
+    MIN_PROFIT_FOR_PROTECTION_PCT = _env_float("STATBOT_HEALTH_PROFIT_PROTECTION_MIN_PNL_PCT", 0.10)
+    if MIN_PROFIT_FOR_PROTECTION_PCT is None or MIN_PROFIT_FOR_PROTECTION_PCT < 0:
+        MIN_PROFIT_FOR_PROTECTION_PCT = 0.10
+    BREAKEVEN_PROTECTION_PNL_PCT = _env_float("STATBOT_HEALTH_BREAKEVEN_PROTECTION_MIN_PNL_PCT", -0.10)
+    if BREAKEVEN_PROTECTION_PNL_PCT is None:
+        BREAKEVEN_PROTECTION_PNL_PCT = -0.10
+    PROFIT_PROTECTED_PVALUE_THRESHOLD = _env_float("STATBOT_HEALTH_PROFIT_PROTECTED_PVALUE_THRESHOLD", 0.30)
+    if PROFIT_PROTECTED_PVALUE_THRESHOLD is None or PROFIT_PROTECTED_PVALUE_THRESHOLD < 0:
+        PROFIT_PROTECTED_PVALUE_THRESHOLD = 0.30
+    BREAKEVEN_PVALUE_THRESHOLD = _env_float("STATBOT_HEALTH_BREAKEVEN_PVALUE_THRESHOLD", 0.20)
+    if BREAKEVEN_PVALUE_THRESHOLD is None or BREAKEVEN_PVALUE_THRESHOLD < 0:
+        BREAKEVEN_PVALUE_THRESHOLD = 0.20
 
     if in_active_trade and trade_pnl_pct >= MIN_PROFIT_FOR_PROTECTION_PCT:
         # Much more lenient thresholds for profitable trades
-        P_VALUE_CRITICAL_ADJUSTED = 0.30  # Allow higher p-value drift
+        P_VALUE_CRITICAL_ADJUSTED = PROFIT_PROTECTED_PVALUE_THRESHOLD
         health_penalty_modifier = 0.5     # Halve all health penalties
         protection_active = True
-    elif in_active_trade and trade_pnl_pct >= -0.10:  # Near breakeven
+    elif in_active_trade and trade_pnl_pct >= BREAKEVEN_PROTECTION_PNL_PCT:  # Near breakeven
         # Slightly relaxed for near-breakeven trades
-        P_VALUE_CRITICAL_ADJUSTED = 0.20
+        P_VALUE_CRITICAL_ADJUSTED = BREAKEVEN_PVALUE_THRESHOLD
         health_penalty_modifier = 0.75
         protection_active = True
     else:

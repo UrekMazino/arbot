@@ -1,5 +1,7 @@
 from config_strategy_api import (
     z_score_window,
+    shared_coint_pvalue_threshold,
+    cointegration_zero_cross_threshold_ratio,
     min_equity_filter_usdt,
     max_pairs_per_ticker,
     min_p_value_filter,
@@ -21,15 +23,23 @@ from config_strategy_api import (
 import time
 from pathlib import Path
 import json
-from statsmodels.tsa.stattools import coint
-import statsmodels.api as sm
+import sys
 import pandas as pd
 import numpy as np
 import math
-import warnings
 from decimal import Decimal, ROUND_UP
 from itertools import combinations
 from func_strategy_log import get_strategy_logger
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from shared_cointegration_validator import (
+    calculate_zscore_series,
+    count_spread_zero_crossings,
+    evaluate_cointegration,
+)
 
 
 def _read_json_object(path):
@@ -70,33 +80,16 @@ def _load_restricted_tickers():
 
 # Calculate Z-score
 def calculate_zscore(spread):
-    series = pd.Series(spread, dtype=float)
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', category=RuntimeWarning)
-        mean = series.rolling(window=z_score_window).mean()
-        std = series.rolling(window=z_score_window).std()
-        zscore = (series - mean) / std
-    return zscore.astype(float).values
+    return calculate_zscore_series(spread, window=z_score_window)
 
 
 # Count zero crossings
 def count_zero_crossings(spread, threshold=None):
-    spread = pd.Series(spread).dropna()
-
-    if len(spread) < 2:
-        return 0
-
-    if threshold is None:
-        threshold = 0.1 * spread.std()  # noise filter
-
-    prev = spread.shift(1)
-
-    crossings = (
-            ((prev > threshold) & (spread < -threshold)) |
-            ((prev < -threshold) & (spread > threshold))
+    return count_spread_zero_crossings(
+        spread,
+        threshold=threshold,
+        threshold_ratio=cointegration_zero_cross_threshold_ratio,
     )
-
-    return int(crossings.sum())
 
 
 # Calculate spread (input should already be logged)
@@ -128,70 +121,24 @@ def calculate_cointegration(series_1, series_2):
     Returns:
         tuple: (coint_flag, p_value, adf_stat, crit_val, hedge_ratio, zero_crossings)
     """
-    coint_flag = 0
-
-    # Convert to numpy arrays first
-    series_1 = np.array(series_1, dtype=float)
-    series_2 = np.array(series_2, dtype=float)
-
-    min_len = min(len(series_1), len(series_2))
-    if min_len < 2:
+    metrics = evaluate_cointegration(
+        series_1,
+        series_2,
+        window=z_score_window,
+        pvalue_threshold=shared_coint_pvalue_threshold,
+        zero_cross_threshold_ratio=cointegration_zero_cross_threshold_ratio,
+        already_logged=False,
+    )
+    if not metrics.get("critical_value"):
         return 0, None, None, None, None, 0
-
-    if len(series_1) != len(series_2):
-        series_1 = series_1[-min_len:]
-        series_2 = series_2[-min_len:]
-
-    # Safety: skip if any NaN or zero/negative prices
-    if np.any(np.isnan(series_1)) or np.any(np.isnan(series_2)):
-        return 0, None, None, None, None, 0
-    if np.any(series_1 <= 0) or np.any(series_2 <= 0):
-        return 0, None, None, None, None, 0
-
-    # Log transform once (this is correct)
-    series_1_log = np.log(series_1)
-    series_2_log = np.log(series_2)
-
-    # Check for constant series (zero variance)
-    if np.std(series_1_log) == 0 or np.std(series_2_log) == 0:
-        return 0, None, None, None, None, 0
-
-    try:
-        # Cointegration test on log prices
-        adf_statistic, p_value, critical_values = coint(series_1_log, series_2_log)
-
-        # OLS regression on log prices
-        series_2_const = sm.add_constant(series_2_log)
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
-            models = sm.OLS(series_1_log, series_2_const).fit()
-
-        # Get hedge ratio
-        hedge_ratio = float(models.params[1] if len(models.params) > 1 else models.params[0])
-
-        # Pass already-logged prices (do not log again)
-        spread = calculate_spread(series_1_log, series_2_log, hedge_ratio)
-        spread = pd.Series(spread)
-
-        # Count zero crossings
-        zero_crossings = count_zero_crossings(spread)
-
-        # Set cointegration flag
-        if np.isfinite(p_value) and p_value < 0.05 and adf_statistic < critical_values[1]:
-            coint_flag = 1
-
-        return (
-            coint_flag,
-            p_value,
-            adf_statistic,
-            critical_values[1],
-            hedge_ratio,
-            zero_crossings
-        )
-
-    except (ValueError, np.linalg.LinAlgError) as e:
-        # Skip pairs with numerical issues
-        return 0, None, None, None, None, 0
+    return (
+        int(metrics.get("coint_flag", 0) or 0),
+        float(metrics.get("p_value", 1.0)),
+        float(metrics.get("adf_stat", 0.0)),
+        float(metrics.get("critical_value", 0.0)),
+        float(metrics.get("hedge_ratio", 0.0)),
+        int(metrics.get("zero_crossings", 0) or 0),
+    )
 
 
 def calculate_cointegration_from_log(series_1_log, series_2_log):
@@ -205,53 +152,24 @@ def calculate_cointegration_from_log(series_1_log, series_2_log):
     Returns:
         tuple: (coint_flag, p_value, adf_stat, crit_val, hedge_ratio, zero_crossings)
     """
-    coint_flag = 0
-
-    series_1_log = np.array(series_1_log, dtype=float)
-    series_2_log = np.array(series_2_log, dtype=float)
-
-    min_len = min(len(series_1_log), len(series_2_log))
-    if min_len < 2:
+    metrics = evaluate_cointegration(
+        series_1_log,
+        series_2_log,
+        window=z_score_window,
+        pvalue_threshold=shared_coint_pvalue_threshold,
+        zero_cross_threshold_ratio=cointegration_zero_cross_threshold_ratio,
+        already_logged=True,
+    )
+    if not metrics.get("critical_value"):
         return 0, None, None, None, None, 0
-
-    if len(series_1_log) != len(series_2_log):
-        series_1_log = series_1_log[-min_len:]
-        series_2_log = series_2_log[-min_len:]
-
-    if np.any(np.isnan(series_1_log)) or np.any(np.isnan(series_2_log)):
-        return 0, None, None, None, None, 0
-    if np.std(series_1_log) == 0 or np.std(series_2_log) == 0:
-        return 0, None, None, None, None, 0
-
-    try:
-        adf_statistic, p_value, critical_values = coint(series_1_log, series_2_log)
-
-        series_2_const = sm.add_constant(series_2_log)
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=RuntimeWarning)
-            models = sm.OLS(series_1_log, series_2_const).fit()
-
-        hedge_ratio = float(models.params[1] if len(models.params) > 1 else models.params[0])
-
-        spread = calculate_spread(series_1_log, series_2_log, hedge_ratio)
-        spread = pd.Series(spread)
-
-        zero_crossings = count_zero_crossings(spread)
-
-        if np.isfinite(p_value) and p_value < 0.05 and adf_statistic < critical_values[1]:
-            coint_flag = 1
-
-        return (
-            coint_flag,
-            p_value,
-            adf_statistic,
-            critical_values[1],
-            hedge_ratio,
-            zero_crossings
-        )
-
-    except (ValueError, np.linalg.LinAlgError):
-        return 0, None, None, None, None, 0
+    return (
+        int(metrics.get("coint_flag", 0) or 0),
+        float(metrics.get("p_value", 1.0)),
+        float(metrics.get("adf_stat", 0.0)),
+        float(metrics.get("critical_value", 0.0)),
+        float(metrics.get("hedge_ratio", 0.0)),
+        int(metrics.get("zero_crossings", 0) or 0),
+    )
 
 
 def _corrcoef_fast(series_a, series_b):

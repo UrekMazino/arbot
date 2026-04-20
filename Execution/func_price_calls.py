@@ -7,8 +7,30 @@ from collections import deque
 from config_execution_api import depth, market_session, ticker_1, ticker_2
 from func_api_retry import call_with_retries, is_disconnect_error, log_disconnect_once
 
-DEFAULT_BAR = "1m"
-DEFAULT_LIMIT = 200
+
+def _env_str(name, default=""):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return str(default)
+    return str(raw).strip()
+
+
+def _env_int(name, default, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
+DEFAULT_BAR = _env_str("STATBOT_EXECUTION_TIMEFRAME", "1m")
+DEFAULT_LIMIT = _env_int("STATBOT_EXECUTION_KLINE_LIMIT", 200, minimum=2)
 MAX_OKX_CANDLE_LIMIT = 100
 _LIQUIDITY_HISTORY = {}
 

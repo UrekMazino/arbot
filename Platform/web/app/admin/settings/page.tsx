@@ -23,6 +23,7 @@ import { DashboardShell } from "../../../components/dashboard-shell";
 
 type TabType = "bot" | "api";
 type SettingTooltip = { description: string; default: string };
+type SettingOption = { label: string; value: string };
 type SettingGroupDefinition = {
   id: string;
   title: string;
@@ -40,6 +41,8 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   LOCK_PAIR: { description: "Explicit locked pair payload used when lock-on-pair is enabled", default: "(empty)" },
   EXECUTION_SETTLE_CCY: { description: "Allowed settle currencies for execution pair validation", default: "USDT" },
   INST_TYPE: { description: "OKX instrument type used by execution", default: "SWAP" },
+  EXECUTION_TIMEFRAME: { description: "Execution candle timeframe used for live Z-score and cointegration checks", default: "1m" },
+  EXECUTION_KLINE_LIMIT: { description: "Execution candle sample size used for live cointegration and Z-score calculations", default: "200" },
   DEPTH: { description: "Orderbook depth request size; 5 uses books5, other values use books", default: "5" },
   TD_MODE: { description: "Trade mode for order placement: cross or isolated", default: "cross" },
   POS_MODE: { description: "Position mode for execution: net or long_short", default: "long_short" },
@@ -59,14 +62,24 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   EXIT_Z: { description: "Base Z-score threshold used for mean reversion exits", default: "0.35" },
   MIN_PERSIST_BARS: { description: "Minimum consecutive bars a signal must persist before entry", default: "4" },
   MAX_CONSECUTIVE_LOSSES: { description: "Consecutive pair losses allowed before pair retirement logic escalates", default: "2" },
+  COINT_GATE_THRESHOLD: { description: "Consecutive cointegration-gate failures required before execution triggers a pair switch", default: "2" },
   HEALTH_CHECK_INTERVAL: { description: "Seconds between pair health evaluations while running", default: "3600" },
   STATUS_UPDATE_INTERVAL: { description: "Seconds between execution status updates", default: "60" },
   P_VALUE_CRITICAL: { description: "Base p-value threshold used to judge cointegration health", default: "0.15" },
   ZERO_CROSSINGS_MIN: { description: "Minimum zero crossings expected for a healthy pair", default: "15" },
+  COINT_ZERO_CROSS_THRESHOLD_RATIO: { description: "Noise filter ratio used when counting spread zero crossings for shared cointegration validation", default: "0.1" },
   CORRELATION_MIN: { description: "Minimum correlation threshold for pair health", default: "0.60" },
   TREND_CRITICAL: { description: "Maximum allowed spread trend magnitude before health degradation", default: "0.002" },
   Z_SCORE_CRITICAL: { description: "Maximum absolute Z-score tolerated before health degradation", default: "6.0" },
+  SWITCH_PRECHECK_COINT: { description: "Enable cointegration validation before switching into a discovered pair", default: "1" },
+  SWITCH_PRECHECK_FAIL_OPEN: { description: "Allow pair switching to proceed when the pre-check validator errors instead of failing closed", default: "0" },
+  SWITCH_PRECHECK_LIMIT: { description: "Candle count used for switch pre-check cointegration validation", default: "120" },
+  SWITCH_PRECHECK_WINDOW: { description: "Z-score window used during switch pre-check validation", default: "60" },
   MAX_DRAWDOWN_PCT: { description: "Circuit breaker loss threshold as a decimal of capital", default: "0.05" },
+  HEALTH_PROFIT_PROTECTION_MIN_PNL_PCT: { description: "Minimum in-trade PnL percentage that activates profitable-trade health protection", default: "0.10" },
+  HEALTH_BREAKEVEN_PROTECTION_MIN_PNL_PCT: { description: "Minimum in-trade PnL percentage treated as near-breakeven for softer health thresholds", default: "-0.10" },
+  HEALTH_PROFIT_PROTECTED_PVALUE_THRESHOLD: { description: "Relaxed p-value threshold used while a trade is already profit-protected", default: "0.30" },
+  HEALTH_BREAKEVEN_PVALUE_THRESHOLD: { description: "Relaxed p-value threshold used while a trade is near breakeven", default: "0.20" },
   LOCK_ON_PAIR: { description: "Lock to current pair until trade completes", default: "False" },
   LOG_MAX_MB: { description: "Maximum log file size in MB before rotation", default: "4" },
   LOG_BACKUPS: { description: "Number of backup log files to keep", default: "2" },
@@ -81,18 +94,29 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   BLACKLIST_REQUIRE_LOSS_DOMINANCE: { description: "Require loss dominance for blacklisting", default: "1" },
   HOSPITAL_COOLDOWN_SECONDS: { description: "Cooldown time in seconds for pairs in hospital", default: "3600" },
   // Strategy settings (exposed ones)
-  STRATEGY_ROUTER_MODE: { description: "Strategy router mode: active or passive", default: "active" },
+  STRATEGY_TIMEFRAME: { description: "Strategy candle timeframe used for discovery scans", default: "1m" },
+  STRATEGY_Z_SCORE_WINDOW: { description: "Rolling window used for Strategy-side Z-score analytics", default: "60" },
+  STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "10080" },
+  STRATEGY_SETTLE_CCY: { description: "Comma-separated settle currencies Strategy is allowed to scan", default: "USDT" },
+  STRATEGY_MIN_EQUITY: { description: "Maximum recommended pair equity allowed during strategy discovery (0 disables)", default: "0" },
+  STRATEGY_ROUTER_MODE: { description: "Strategy router mode: off, shadow, or active", default: "off" },
+  STRATEGY_FAST_PATH: { description: "Enable return-correlation prefilter before full cointegration scan", default: "1" },
   STRATEGY_LIQUIDITY_PCT: { description: "Minimum liquidity percentage filter", default: "0" },
+  STRATEGY_LIQUIDITY_WINDOW: { description: "Lookback bars used when estimating average quote volume", default: "60" },
+  STRATEGY_MIN_AVG_QUOTE_VOL: { description: "Minimum average quote volume per leg in USDT", default: "0" },
   STRATEGY_CORR_MIN: { description: "Minimum correlation coefficient (0-1)", default: "0.6" },
+  STRATEGY_CORR_LOOKBACK: { description: "Optional return-correlation lookback bars for the Strategy fast path", default: "0" },
   STRATEGY_MIN_CAPITAL_PER_LEG: { description: "Minimum capital per leg in USDT (0=any)", default: "0" },
   STRATEGY_MIN_P_VALUE: { description: "Minimum p-value for cointegration (scientific notation)", default: "1e-08" },
   STRATEGY_MAX_P_VALUE: { description: "Maximum p-value for cointegration", default: "0.01" },
   STRATEGY_MIN_ZERO_CROSSINGS: { description: "Minimum zero crossings for valid pair", default: "3" },
+  STRATEGY_MIN_HEDGE_RATIO: { description: "Minimum absolute hedge ratio allowed for a discovered pair", default: "0.3" },
+  STRATEGY_MAX_HEDGE_RATIO: { description: "Maximum absolute hedge ratio allowed for a discovered pair", default: "3.0" },
   STRATEGY_MAX_PAIRS_PER_TICKER: { description: "Maximum cointegrated pairs per ticker", default: "10" },
-  STRATEGY_MIN_ORDERBOOK_DEPTH: { description: "Minimum orderbook depth in USDT", default: "1000" },
+  STRATEGY_MIN_ORDERBOOK_DEPTH: { description: "Minimum orderbook depth in USDT", default: "5000" },
   STRATEGY_MIN_ORDERBOOK_LEVELS: { description: "Minimum orderbook levels required", default: "10" },
   STRATEGY_EVAL_SECONDS: { description: "Seconds between strategy evaluation", default: "30" },
-  REGIME_ROUTER_MODE: { description: "Regime detection router mode: active or passive", default: "active" },
+  REGIME_ROUTER_MODE: { description: "Regime detection router mode: off, shadow, or active", default: "off" },
   REGIME_EVAL_SECONDS: { description: "Seconds between regime evaluation", default: "30" },
   STRATEGY_SCORE_WINDOW_TRADES: { description: "Number of trades for rolling score window", default: "20" },
   STRATEGY_SCORE_MIN_TRADES: { description: "Minimum trades required for scoring", default: "8" },
@@ -101,7 +125,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   STRATEGY_COOLDOWN_SECONDS: { description: "Cooldown seconds between strategy switches or entries", default: "3600" },
   RANGE_Z_LOOKBACK: { description: "Lookback bars for range Z-score calculation", default: "200" },
   TREND_Z_LOOKBACK: { description: "Lookback bars for trend Z-score calculation", default: "60" },
-  STRATEGY_TREND_DIRECTIONAL_FILTER_MODE: { description: "Trend directional filter mode: shadow, strict, or off", default: "shadow" },
+  STRATEGY_TREND_DIRECTIONAL_FILTER_MODE: { description: "Trend directional filter mode: off, shadow, or active", default: "off" },
   STRATEGY_TREND_DIRECTIONAL_FILTER_STRENGTH: { description: "Trend directional filter strength", default: "1.0" },
   ATM_MR_MAX_HOLD_HOURS: { description: "Max hold hours for mean reversion mode", default: "6" },
   ATM_MR_MAX_HOLD_WARNING_HOURS: { description: "Warning threshold for MR hold hours", default: "4" },
@@ -120,7 +144,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   MOLT_MONITOR: { description: "Enable molt monitor (1=yes, 0=no)", default: "0" },
   COMMAND_LISTENER: { description: "Enable command listener (1=yes, 0=no)", default: "0" },
   BALANCE_FETCH_TIMEOUT_SECONDS: { description: "Timeout for balance fetch in seconds", default: "8" },
-  HARD_STOP_PNL_BASIS: { description: "Hard stop PnL basis: notional or cash", default: "notional" },
+  HARD_STOP_PNL_BASIS: { description: "Hard stop PnL basis: notional or equity", default: "notional" },
   ENABLE_RISKOFF_COINT_EARLY_EXIT: { description: "Enable risk-off early exit on cointegration", default: "1" },
   RISKOFF_COINT_CONFIRM_COUNT: { description: "Confirmations required for risk-off exit", default: "3" },
   RISKOFF_COINT_GRACE_SECONDS: { description: "Grace seconds for risk-off cointegration exit", default: "90" },
@@ -139,6 +163,8 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_LOCK_PAIR",
       "STATBOT_EXECUTION_SETTLE_CCY",
       "STATBOT_INST_TYPE",
+      "STATBOT_EXECUTION_TIMEFRAME",
+      "STATBOT_EXECUTION_KLINE_LIMIT",
       "STATBOT_DEPTH",
       "STATBOT_TD_MODE",
       "STATBOT_POS_MODE",
@@ -160,6 +186,10 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_TRADEABLE_CAPITAL_USDT",
       "STATBOT_STOP_LOSS_FAIL_SAFE",
       "STATBOT_MAX_DRAWDOWN_PCT",
+      "STATBOT_HEALTH_PROFIT_PROTECTION_MIN_PNL_PCT",
+      "STATBOT_HEALTH_BREAKEVEN_PROTECTION_MIN_PNL_PCT",
+      "STATBOT_HEALTH_PROFIT_PROTECTED_PVALUE_THRESHOLD",
+      "STATBOT_HEALTH_BREAKEVEN_PVALUE_THRESHOLD",
       "STATBOT_HARD_STOP_PNL_BASIS",
       "STATBOT_ENABLE_RISKOFF_COINT_EARLY_EXIT",
       "STATBOT_RISKOFF_COINT_CONFIRM_COUNT",
@@ -179,6 +209,7 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_MIN_PERSIST_BARS",
       "STATBOT_P_VALUE_CRITICAL",
       "STATBOT_ZERO_CROSSINGS_MIN",
+      "STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO",
       "STATBOT_CORRELATION_MIN",
       "STATBOT_TREND_CRITICAL",
       "STATBOT_Z_SCORE_CRITICAL",
@@ -194,6 +225,11 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_SWITCH_COOLDOWN_SECONDS",
       "STATBOT_HOSPITAL_COOLDOWN_SECONDS",
       "STATBOT_MAX_CONSECUTIVE_LOSSES",
+      "STATBOT_COINT_GATE_THRESHOLD",
+      "STATBOT_SWITCH_PRECHECK_COINT",
+      "STATBOT_SWITCH_PRECHECK_FAIL_OPEN",
+      "STATBOT_SWITCH_PRECHECK_LIMIT",
+      "STATBOT_SWITCH_PRECHECK_WINDOW",
       "STATBOT_HEALTH_CHECK_INTERVAL",
       "STATBOT_STATUS_UPDATE_INTERVAL",
       "STATBOT_BLACKLIST_ENABLED",
@@ -229,12 +265,23 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
     title: "Strategy Discovery",
     description: "Pair discovery filters used by the strategy scanner.",
     keys: [
+      "STATBOT_STRATEGY_TIMEFRAME",
+      "STATBOT_STRATEGY_Z_SCORE_WINDOW",
+      "STATBOT_STRATEGY_KLINE_LIMIT",
+      "STATBOT_STRATEGY_SETTLE_CCY",
+      "STATBOT_STRATEGY_MIN_EQUITY",
+      "STATBOT_STRATEGY_FAST_PATH",
       "STATBOT_STRATEGY_LIQUIDITY_PCT",
+      "STATBOT_STRATEGY_LIQUIDITY_WINDOW",
+      "STATBOT_STRATEGY_MIN_AVG_QUOTE_VOL",
       "STATBOT_STRATEGY_CORR_MIN",
+      "STATBOT_STRATEGY_CORR_LOOKBACK",
       "STATBOT_STRATEGY_MIN_CAPITAL_PER_LEG",
       "STATBOT_STRATEGY_MIN_P_VALUE",
       "STATBOT_STRATEGY_MAX_P_VALUE",
       "STATBOT_STRATEGY_MIN_ZERO_CROSSINGS",
+      "STATBOT_STRATEGY_MIN_HEDGE_RATIO",
+      "STATBOT_STRATEGY_MAX_HEDGE_RATIO",
       "STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER",
       "STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH",
       "STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS",
@@ -271,6 +318,145 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
     prefixes: ["STATBOT_ATM_"],
   },
 ];
+
+function denormalizeSettingKey(key: string): string {
+  if (key.startsWith("STATBOT_") || key.startsWith("OKX_")) {
+    return key;
+  }
+  return `STATBOT_${key}`;
+}
+
+const KNOWN_API_ENV_KEYS = ["OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"] as const;
+const KNOWN_BOT_ENV_KEYS = Array.from(
+  new Set([
+    ...BOT_SETTING_GROUPS.flatMap((group) => group.keys ?? []),
+    ...Object.keys(SETTING_TOOLTIPS)
+      .map((key) => denormalizeSettingKey(key))
+      .filter((key) => key.startsWith("STATBOT_")),
+  ]),
+).sort((a, b) => a.localeCompare(b));
+
+const BOOLEAN_SETTING_KEYS = new Set<string>([
+  "BLACKLIST_ENABLED",
+  "BLACKLIST_REQUIRE_LOSS_DOMINANCE",
+  "COMMAND_LISTENER",
+  "DRY_RUN",
+  "ENABLE_RISKOFF_COINT_EARLY_EXIT",
+  "LIMIT_ORDER_BASIS",
+  "LOCK_ON_PAIR",
+  "MOLT_MONITOR",
+  "REPORT_ENABLE",
+  "SKIP_INSTRUMENT_FETCH",
+  "STRATEGY_FAST_PATH",
+  "SWITCH_PRECHECK_COINT",
+  "SWITCH_PRECHECK_FAIL_OPEN",
+  "USE_FRESH_ORDERBOOK",
+]);
+
+const TIMEFRAME_OPTIONS: SettingOption[] = [
+  "1m",
+  "3m",
+  "5m",
+  "15m",
+  "30m",
+  "1H",
+  "2H",
+  "4H",
+  "6H",
+  "12H",
+  "1D",
+  "1W",
+  "1M",
+].map((value) => ({ label: value, value }));
+
+const BOOLEAN_OPTIONS: SettingOption[] = [
+  { label: "Enabled", value: "1" },
+  { label: "Disabled", value: "0" },
+];
+
+const SETTING_SELECT_OPTIONS: Record<string, SettingOption[]> = {
+  OKX_FLAG: [
+    { label: "Demo", value: "1" },
+    { label: "Live", value: "0" },
+  ],
+  EXECUTION_TIMEFRAME: TIMEFRAME_OPTIONS,
+  HARD_STOP_PNL_BASIS: [
+    { label: "Notional", value: "notional" },
+    { label: "Equity", value: "equity" },
+  ],
+  INST_TYPE: [
+    { label: "SWAP", value: "SWAP" },
+    { label: "SPOT", value: "SPOT" },
+    { label: "FUTURES", value: "FUTURES" },
+    { label: "OPTION", value: "OPTION" },
+    { label: "MARGIN", value: "MARGIN" },
+  ],
+  POS_MODE: [
+    { label: "Long / Short", value: "long_short" },
+    { label: "Net", value: "net" },
+  ],
+  REGIME_ROUTER_MODE: [
+    { label: "Off", value: "off" },
+    { label: "Shadow", value: "shadow" },
+    { label: "Active", value: "active" },
+  ],
+  STRATEGY_ROUTER_MODE: [
+    { label: "Off", value: "off" },
+    { label: "Shadow", value: "shadow" },
+    { label: "Active", value: "active" },
+  ],
+  STRATEGY_TIMEFRAME: TIMEFRAME_OPTIONS,
+  STRATEGY_TREND_DIRECTIONAL_FILTER_MODE: [
+    { label: "Off", value: "off" },
+    { label: "Shadow", value: "shadow" },
+    { label: "Active", value: "active" },
+  ],
+  TD_MODE: [
+    { label: "Cross", value: "cross" },
+    { label: "Isolated", value: "isolated" },
+  ],
+};
+
+function getSettingOptions(fullKey: string): SettingOption[] | null {
+  const normalized = normalizeSettingKey(fullKey);
+  if (BOOLEAN_SETTING_KEYS.has(normalized)) {
+    return BOOLEAN_OPTIONS;
+  }
+  return SETTING_SELECT_OPTIONS[normalized] || null;
+}
+
+function getOptionLabel(options: SettingOption[] | null, value: string): string {
+  if (!options) {
+    return value;
+  }
+  const match = options.find((option) => option.value.toLowerCase() === String(value || "").toLowerCase());
+  return match?.label || value;
+}
+
+function getControlDefaultValue(fullKey: string): string {
+  const tooltip = getTooltipInfo(fullKey);
+  const options = getSettingOptions(fullKey);
+  const rawDefault = String(tooltip?.default ?? "");
+  if (!rawDefault || rawDefault === "(empty)") {
+    return "";
+  }
+  if (!options?.length) {
+    return rawDefault;
+  }
+
+  const normalizedDefault = rawDefault.trim().toLowerCase();
+  const exact = options.find((option) => option.value.toLowerCase() === normalizedDefault);
+  if (exact) {
+    return exact.value;
+  }
+  if (normalizedDefault === "true") {
+    return options.find((option) => option.value === "1")?.value || rawDefault;
+  }
+  if (normalizedDefault === "false") {
+    return options.find((option) => option.value === "0")?.value || rawDefault;
+  }
+  return rawDefault;
+}
 
 function normalizeSettingKey(fullKey: string): string {
   if (fullKey.startsWith("STATBOT_")) {
@@ -453,13 +639,17 @@ export default function SettingsPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [editingEnvKeys]);
 
-  const sortedEnvKeys = useMemo(
-    () => Object.keys(envSettings.values || {}).sort((a, b) => a.localeCompare(b)),
-    [envSettings.values],
-  );
+  const sortedEnvKeys = useMemo(() => {
+    const knownKeys = new Set<string>([...KNOWN_BOT_ENV_KEYS, ...KNOWN_API_ENV_KEYS]);
+    const savedKeys = Object.keys(envSettings.values || {});
+    for (const key of savedKeys) {
+      knownKeys.add(key);
+    }
+    return [...knownKeys].sort((a, b) => a.localeCompare(b));
+  }, [envSettings.values]);
 
   const apiKeys = useMemo(
-    () => new Set(["OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"]),
+    () => new Set<string>(KNOWN_API_ENV_KEYS),
     [],
   );
 
@@ -530,6 +720,21 @@ export default function SettingsPage() {
     });
   }, [groupedBotSettingSections]);
 
+  const startEditMode = useCallback((key: string) => {
+    const hasStoredValue = Object.prototype.hasOwnProperty.call(envSettings.values || {}, key);
+    const storedValue = hasStoredValue ? (envSettings.values?.[key] ?? "") : "";
+    const nextValue = hasStoredValue ? storedValue : getControlDefaultValue(key);
+    setEnvEdits((prev) => ({
+      ...prev,
+      [key]: nextValue,
+    }));
+    setEditingEnvKeys((prev) => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, [envSettings.values]);
+
   async function saveEnvKey(key: string) {
     if (!me) return;
     const value = envEdits[key] ?? "";
@@ -564,11 +769,15 @@ export default function SettingsPage() {
       next.delete(key);
       return next;
     });
-    // Reset the value to the original
-    setEnvEdits((prev) => ({
-      ...prev,
-      [key]: envSettings.values?.[key] ?? "",
-    }));
+    setEnvEdits((prev) => {
+      const next = { ...prev };
+      if (Object.prototype.hasOwnProperty.call(envSettings.values || {}, key)) {
+        next[key] = envSettings.values?.[key] ?? "";
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
   }
 
   const secondaryButtonClasses = UI_CLASSES.secondaryButton;
@@ -755,8 +964,19 @@ export default function SettingsPage() {
                                 <tbody>
                                   {group.settingKeys.map((key) => {
                                     const isEditing = editingEnvKeys.has(key);
-                                    const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
                                     const tooltipInfo = getTooltipInfo(key);
+                                    const hasStoredValue = Object.prototype.hasOwnProperty.call(envSettings.values || {}, key);
+                                    const storedValue = hasStoredValue ? (envSettings.values?.[key] ?? "") : "";
+                                    const defaultValue = getControlDefaultValue(key);
+                                    const currentValue = isEditing
+                                      ? (envEdits[key] ?? defaultValue)
+                                      : (hasStoredValue ? storedValue : defaultValue);
+                                    const settingOptions = getSettingOptions(key);
+                                    const displayValue = currentValue || "(empty)";
+                                    const displayLabel = currentValue
+                                      ? getOptionLabel(settingOptions, currentValue)
+                                      : "(empty)";
+                                    const sourceLabel = hasStoredValue ? "Saved in .env" : (tooltipInfo ? "Using default" : "");
                                     return (
                                       <tr key={key} className="border-t border-gray-100 dark:border-gray-800">
                                         <td className="relative px-3 py-2 text-xs text-gray-600 dark:text-gray-400 font-mono">
@@ -784,18 +1004,49 @@ export default function SettingsPage() {
                                         </td>
                                         <td className="px-3 py-2 text-xs">
                                           {isEditing ? (
-                                            <input
-                                              value={currentValue}
-                                              onChange={(e) =>
-                                                setEnvEdits((prev) => ({
-                                                  ...prev,
-                                                  [key]: e.target.value,
-                                                }))
-                                              }
-                                              className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                                            />
+                                            settingOptions ? (
+                                              <select
+                                                value={currentValue}
+                                                onChange={(e) =>
+                                                  setEnvEdits((prev) => ({
+                                                    ...prev,
+                                                    [key]: e.target.value,
+                                                  }))
+                                                }
+                                                className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                                              >
+                                                {settingOptions.map((option) => (
+                                                  <option key={option.value} value={option.value}>
+                                                    {option.label}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                            ) : (
+                                              <input
+                                                value={currentValue}
+                                                onChange={(e) =>
+                                                  setEnvEdits((prev) => ({
+                                                    ...prev,
+                                                    [key]: e.target.value,
+                                                  }))
+                                                }
+                                                className="w-full h-6 rounded border border-gray-300 px-1 py-0.5 text-xs text-gray-900 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                                              />
+                                            )
                                           ) : (
-                                            <span className="text-gray-700 dark:text-gray-300 truncate block max-w-28">{currentValue || "(empty)"}</span>
+                                            <div className="max-w-28">
+                                              <span
+                                                className="block truncate text-gray-700 dark:text-gray-300"
+                                                title={displayValue}
+                                              >
+                                                {displayLabel}
+                                              </span>
+                                              {sourceLabel ? (
+                                                <span className="mt-0.5 block text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                                                  {sourceLabel}
+                                                </span>
+                                              ) : null}
+                                            </div>
                                           )}
                                         </td>
                                         <td className="px-3 py-2">
@@ -819,7 +1070,7 @@ export default function SettingsPage() {
                                           ) : (
                                             <button
                                               className="rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
-                                              onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
+                                              onClick={() => startEditMode(key)}
                                               disabled={busy}
                                             >
                                               Edit
@@ -880,30 +1131,63 @@ export default function SettingsPage() {
                     <tbody>
                       {filteredKeys.map((key) => {
                         const isEditing = editingEnvKeys.has(key);
-                        const currentValue = envEdits[key] ?? envSettings.values?.[key] ?? "";
+                        const hasStoredValue = Object.prototype.hasOwnProperty.call(envSettings.values || {}, key);
+                        const storedValue = hasStoredValue ? (envSettings.values?.[key] ?? "") : "";
+                        const defaultValue = getControlDefaultValue(key);
+                        const currentValue = isEditing
+                          ? (envEdits[key] ?? defaultValue)
+                          : (hasStoredValue ? storedValue : defaultValue);
+                        const settingOptions = getSettingOptions(key);
+                        const sourceLabel = hasStoredValue ? "Saved in .env" : (defaultValue ? "Using default" : "");
                         return (
                           <tr key={key} className="h-10 border-b border-gray-100 dark:border-gray-800">
                             <td className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400">{key}</td>
                             <td className="px-4 py-2 text-sm w-96">
                               {isEditing ? (
-                                <input
-                                  value={currentValue}
-                                  onChange={(e) =>
-                                    setEnvEdits((prev) => ({
-                                      ...prev,
-                                      [key]: e.target.value,
-                                    }))
-                                  }
-                                  type="password"
-                                  className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
-                                />
+                                settingOptions ? (
+                                  <select
+                                    value={currentValue}
+                                    onChange={(e) =>
+                                      setEnvEdits((prev) => ({
+                                        ...prev,
+                                        [key]: e.target.value,
+                                      }))
+                                    }
+                                    className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                                  >
+                                    {settingOptions.map((option) => (
+                                      <option key={option.value} value={option.value}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input
+                                    value={currentValue}
+                                    onChange={(e) =>
+                                      setEnvEdits((prev) => ({
+                                        ...prev,
+                                        [key]: e.target.value,
+                                      }))
+                                    }
+                                    type="password"
+                                    className="w-full h-8 rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:placeholder-gray-400"
+                                  />
+                                )
                               ) : (
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-mono text-gray-700 dark:text-gray-300 flex-1 truncate">
-                                    {showPasswordKeys.has(key)
-                                      ? currentValue || "(empty)"
-                                      : currentValue ? "•".repeat(Math.min(currentValue.length, 16)) : "(empty)"}
+                                    {settingOptions
+                                      ? getOptionLabel(settingOptions, currentValue || "(empty)")
+                                      : showPasswordKeys.has(key)
+                                        ? currentValue || "(empty)"
+                                        : currentValue ? "•".repeat(Math.min(currentValue.length, 16)) : "(empty)"}
                                   </span>
+                                  {sourceLabel ? (
+                                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                                      {sourceLabel}
+                                    </span>
+                                  ) : null}
                                 </div>
                               )}
                             </td>
@@ -943,7 +1227,7 @@ export default function SettingsPage() {
                                   </button>
                                   <button
                                     className={secondaryButtonClasses}
-                                    onClick={() => setEditingEnvKeys((prev) => new Set(prev).add(key))}
+                                    onClick={() => startEditMode(key)}
                                     disabled={busy}
                                   >
                                     Edit

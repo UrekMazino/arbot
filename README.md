@@ -208,22 +208,21 @@ Runtime state is stored under `OKXStatBot/Execution/state`:
 - `regime_state.json` (Regime Router state, when enabled)
 
 ### Reports (v1 evidence packs)
-After each run, StatBot can generate a report pack under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS`:
+Reports are generated from structured bot events from the start of the run and updated cumulatively while the bot is active. The live report folder is written under `OKXStatBot/Reports/v1/run_XX_YYYYMMDD_HHMMSS` and includes:
 - `summary.json` (run metadata + performance summary)
-- `summary.txt` (executive summary + files list)
 - `equity_curve.csv` (equity/session/PNL timeline)
-- `trades.csv` (trade closes with PnL and hold time)
-- `strategy_regime_scorecard.csv` (trade outcomes grouped by entry strategy + entry regime)
-- `strategy_performance.csv` (strategy-level PnL, win rate, hold, common exit reason)
-- `strategy_switches.csv` (strategy-router change timeline from logs)
-- `strategy_gates.csv` (strategy gate events: coint/mean-shift/policy and future cooldown/filter events)
-- `data_quality_checks.csv` (structured pass/warn/fail checks for run quality)
-- `reconciliation_checks.csv` (post-close equity reconciliation rows and warning flags)
-- `liquidity_checks.csv` (per-entry liquidity snapshot with ratios + high/low classification)
-- `entry_slippage.csv` (entry fill slippage vs preview price, bps)
-- `alerts.txt` (errors, PNL alerts, critical events)
-- `config_snapshot.json` (redacted .env snapshot)
+- `pair_history.csv` (pair switch chronology with durations)
+- `trade_closes.csv` (trade closes with strategy/regime attribution and exit context)
+- `event_counts.json` (event/severity totals)
+- `config_snapshot.json` (startup config snapshot, when available)
+- `strategy_metrics.csv` (strategy-level trade outcomes, when available)
+- `regime_metrics.csv` (regime exposure/switch/gate totals, when available)
+- `position_snapshots.csv` (heartbeat position snapshots, when available)
 - `report_manifest.json` (machine-readable file inventory, schema version, row counts)
+
+Legacy/manual artifacts:
+- `report_generator.py` remains available for manual backfill/analysis runs.
+- Legacy files such as `summary.txt`, `trades.csv`, `strategy_switches.csv`, `data_quality_checks.csv`, and `alerts.txt` may still exist for older runs produced by the log-parser path.
 
 At `OKXStatBot/Reports/v1`, an index is maintained for quick review:
 - `index.json` (all runs + key metrics)
@@ -241,6 +240,7 @@ Optional uptime trigger:
 ```env
 STATBOT_REPORT_UPTIME_HOURS=24
 ```
+With the event API enabled, these switches drive live report refresh behavior instead of reparsing logs.
 
 Run end tracking:
 - Logs emit `RUN_END: reason=... detail=... exit_code=...`

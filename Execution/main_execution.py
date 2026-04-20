@@ -17,20 +17,33 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 
 # General imports
 from config_execution_api import (
+    ENTRY_Z,
+    ENTRY_Z_MAX,
+    EXIT_Z,
+    P_VALUE_CRITICAL,
+    ZERO_CROSSINGS_MIN,
+    CORRELATION_MIN,
+    TREND_CRITICAL,
+    Z_SCORE_CRITICAL,
     default_leverage,
+    depth,
+    dry_run,
+    inst_type,
+    limit_order_basis,
     max_cycles,
+    max_drawdown_pct,
     pos_mode,
     signal_negative_ticker,
     signal_positive_ticker,
     tradeable_capital_usdt,
     stop_loss_fail_safe,
-    max_drawdown_pct,
     ticker_1,
     ticker_2,
     save_active_pair,
     STATUS_UPDATE_INTERVAL,
     HEALTH_CHECK_INTERVAL,
     td_mode,
+    z_score_window,
     account_session,
     trade_session,
     lock_on_pair,
@@ -90,7 +103,9 @@ from func_pair_state import (
     set_entry_equity,
     get_entry_equity,
     get_entry_time,
+    get_entry_z_score,
     get_entry_notional,
+    get_entry_policy_snapshot,
     get_entry_strategy,
     get_entry_regime,
     is_restricted_ticker,
@@ -101,6 +116,72 @@ from func_pair_state import (
 
 # Setup logging
 logger = get_logger("main_execution")
+
+
+def _env_text(name, default=""):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip()
+    return value if value else default
+
+
+def _build_startup_config_snapshot(regime_mode, strategy_mode):
+    return {
+        "pair": {
+            "ticker_1": ticker_1,
+            "ticker_2": ticker_2,
+            "signal_positive_ticker": signal_positive_ticker,
+            "signal_negative_ticker": signal_negative_ticker,
+            "lock_on_pair": bool(lock_on_pair),
+            "allowed_settle_ccy": list(allowed_settle_ccy or []),
+        },
+        "execution": {
+            "inst_type": inst_type,
+            "depth": depth,
+            "td_mode": td_mode,
+            "pos_mode": pos_mode,
+            "dry_run": bool(dry_run),
+            "execution_timeframe": _env_text("STATBOT_EXECUTION_TIMEFRAME", "1m"),
+            "execution_kline_limit": _env_text("STATBOT_EXECUTION_KLINE_LIMIT", "200"),
+            "default_leverage": default_leverage,
+            "max_cycles": max_cycles,
+            "tradeable_capital_usdt": tradeable_capital_usdt,
+            "stop_loss_fail_safe": stop_loss_fail_safe,
+            "max_drawdown_pct": max_drawdown_pct,
+            "limit_order_basis": bool(limit_order_basis),
+            "status_update_interval": STATUS_UPDATE_INTERVAL,
+            "health_check_interval": HEALTH_CHECK_INTERVAL,
+        },
+        "signals": {
+            "z_score_window": z_score_window,
+            "entry_z": ENTRY_Z,
+            "entry_z_max": ENTRY_Z_MAX,
+            "exit_z": EXIT_Z,
+            "p_value_critical": P_VALUE_CRITICAL,
+            "zero_crossings_min": ZERO_CROSSINGS_MIN,
+            "correlation_min": CORRELATION_MIN,
+            "trend_critical": TREND_CRITICAL,
+            "z_score_critical": Z_SCORE_CRITICAL,
+        },
+        "routers": {
+            "regime_mode": regime_mode,
+            "strategy_mode": strategy_mode,
+            "regime_eval_seconds": _env_text("STATBOT_REGIME_EVAL_SECONDS", "30"),
+            "strategy_eval_seconds": _env_text("STATBOT_STRATEGY_EVAL_SECONDS", "30"),
+            "event_heartbeat_seconds": _env_text("STATBOT_EVENT_HEARTBEAT_SECONDS", "60"),
+        },
+        "strategy": {
+            "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
+            "strategy_kline_limit": _env_text("STATBOT_STRATEGY_KLINE_LIMIT", "10080"),
+            "strategy_z_score_window": _env_text("STATBOT_STRATEGY_Z_SCORE_WINDOW", "21"),
+        },
+        "reporting": {
+            "report_enable": _env_text("STATBOT_REPORT_ENABLE", "1"),
+            "report_uptime_hours": _env_text("STATBOT_REPORT_UPTIME_HOURS", "0"),
+            "max_uptime_hours": _env_text("STATBOT_MAX_UPTIME_HOURS", "0"),
+        },
+    }
 
 
 def _handle_shutdown_signal(signum, _frame):
@@ -564,6 +645,25 @@ def _run_report_generator():
     if disable in ("0", "false", "no", "off"):
         logger.info("Report generator disabled via STATBOT_REPORT_ENABLE.")
         return False
+
+    event_mode = str(os.getenv("STATBOT_EVENT_EMITTER_MODE", "active") or "").strip().lower()
+    event_api_base = str(
+        os.getenv("STATBOT_EVENT_API_BASE", "http://127.0.0.1:8081/api/v2") or ""
+    ).strip()
+    if event_mode == "active" and event_api_base:
+        emit_event(
+            "report_status",
+            payload={
+                "status": "refresh_requested",
+                "report_source": "events_db",
+                "mode": "live",
+            },
+            severity="info",
+            logger=logger,
+        )
+        flush_events(force=True, logger=logger)
+        logger.info("Report refresh requested via live event pipeline.")
+        return True
 
     report_script = Path(__file__).resolve().parent / "report_generator.py"
     if not report_script.exists():
@@ -1840,6 +1940,7 @@ if __name__ == "__main__":
             "regime_mode": regime_mode,
             "strategy_mode": strategy_mode,
             "starting_equity_usdt": starting_equity,
+            "config_snapshot": _build_startup_config_snapshot(regime_mode, strategy_mode),
         },
         severity="info",
         logger=logger,
@@ -1993,7 +2094,7 @@ if __name__ == "__main__":
 
             # 2. Market Data Fetch
             zscore_results = get_latest_zscore()
-            zscore_series, _, metrics = zscore_results
+            zscore_series, signal_sign_positive_live, metrics = zscore_results
             latest_zscore = None
             for z_val in reversed(zscore_series or []):
                 if isinstance(z_val, (int, float)) and math.isfinite(z_val):
@@ -2051,6 +2152,13 @@ if __name__ == "__main__":
 
             _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
             if (current_time - last_event_heartbeat_ts) >= event_heartbeat_seconds:
+                entry_time_ts = get_entry_time()
+                hold_minutes_live = None
+                if entry_time_ts is not None:
+                    try:
+                        hold_minutes_live = max((current_time - float(entry_time_ts)) / 60.0, 0.0)
+                    except (TypeError, ValueError):
+                        hold_minutes_live = None
                 emit_event(
                     "heartbeat",
                     payload={
@@ -2061,6 +2169,11 @@ if __name__ == "__main__":
                         "equity_usdt": equity_usdt,
                         "session_pnl_usdt": session_pnl,
                         "session_pnl_pct": session_pnl_pct,
+                        "entry_notional_usdt": get_entry_notional() if in_position_or_orders else None,
+                        "entry_z": get_entry_z_score() if in_position_or_orders else None,
+                        "current_z": latest_zscore,
+                        "hold_minutes": hold_minutes_live if in_position_or_orders else None,
+                        "unrealized_pnl_usdt": total_pnl if in_position_or_orders else None,
                         "regime": (
                             getattr(last_regime_decision, "regime", None)
                             if last_regime_decision is not None
@@ -2663,11 +2776,23 @@ if __name__ == "__main__":
                         trades_executed += 1
                         if equity_usdt is not None:
                             set_entry_equity(equity_usdt)
+                        entry_policy_snapshot = get_entry_policy_snapshot() or {}
+                        entry_strategy = str(get_entry_strategy() or "").strip().upper() or (
+                            str(getattr(last_strategy_decision, "active_strategy", "") or "").strip().upper() or None
+                        )
+                        entry_regime = str(get_entry_regime() or "").strip().upper() or (
+                            str(getattr(last_regime_decision, "regime", "") or "").strip().upper() or None
+                        )
+                        long_ticker = signal_positive_ticker if signal_sign_positive_live else signal_negative_ticker
+                        short_ticker = signal_negative_ticker if signal_sign_positive_live else signal_positive_ticker
                         emit_event(
                             "trade_open",
                             payload={
                                 "pair": f"{ticker_1}/{ticker_2}",
-                                "side": "unknown",
+                                "side": "long_positive_short_negative" if signal_sign_positive_live else "long_negative_short_positive",
+                                "signal_sign_positive": bool(signal_sign_positive_live),
+                                "long_ticker": long_ticker,
+                                "short_ticker": short_ticker,
                                 "entry_z": latest_zscore,
                                 "strategy": (
                                     getattr(last_strategy_decision, "active_strategy", None)
@@ -2679,6 +2804,13 @@ if __name__ == "__main__":
                                     if last_regime_decision is not None
                                     else None
                                 ),
+                                "entry_strategy": entry_strategy,
+                                "entry_regime": entry_regime,
+                                "entry_z_threshold_used": entry_policy_snapshot.get("entry_z"),
+                                "size_multiplier_used": entry_policy_snapshot.get("size_multiplier"),
+                                "min_persist_bars_used": entry_policy_snapshot.get("min_persist_bars"),
+                                "entry_notional_usdt": get_entry_notional(),
+                                "entry_ts": get_entry_time(),
                             },
                             severity="info",
                             logger=logger,
@@ -2745,6 +2877,7 @@ if __name__ == "__main__":
                 entry_notional = get_entry_notional()
                 entry_strategy = str(get_entry_strategy() or "").strip().upper()
                 entry_regime = str(get_entry_regime() or "").strip().upper()
+                entry_policy_snapshot = get_entry_policy_snapshot() or {}
                 if not entry_strategy and last_strategy_decision is not None:
                     entry_strategy = str(
                         getattr(last_strategy_decision, "active_strategy", "") or ""
@@ -3062,9 +3195,19 @@ if __name__ == "__main__":
                         "pnl_pct": alert_pnl_pct,
                         "strategy": entry_strategy,
                         "regime": entry_regime,
+                        "entry_strategy": entry_strategy,
+                        "entry_regime": entry_regime,
                         "hold_minutes": hold_minutes,
                         "exit_reason": exit_reason,
                         "exit_tier": exit_reason if str(exit_reason).startswith("exit_tier_") else None,
+                        "exit_z": latest_zscore,
+                        "entry_z_threshold_used": entry_policy_snapshot.get("entry_z"),
+                        "size_multiplier_used": entry_policy_snapshot.get("size_multiplier"),
+                        "entry_notional_usdt": entry_notional,
+                        "entry_ts": entry_time_ts,
+                        "ending_equity_usdt": alert_equity,
+                        "session_pnl_usdt": alert_session_pnl,
+                        "session_pnl_pct": alert_session_pnl_pct,
                     },
                     severity="info" if alert_pnl >= 0 else "warn",
                     logger=logger,

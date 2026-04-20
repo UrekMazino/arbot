@@ -28,6 +28,10 @@ def _iso(value: datetime | None) -> str | None:
 def _coerce_float(value) -> float | None:
     if value is None:
         return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -39,10 +43,6 @@ def _parse_iso(value: str | None) -> datetime | None:
     except ValueError:
         return None
     return _as_utc(parsed)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _payload_text(payload: dict, *keys: str) -> str | None:

@@ -12,6 +12,7 @@ from ..config import settings
 from ..deps import get_db_session, get_event_ingest_principal
 from ..models import Alert, BotInstance, Run, RunEvent
 from ..realtime import publish_bot_event
+from ..services.event_materializer import materialize_run_entities_for_event
 from ..schemas import EventBatchIn, EventIngestResultOut
 from ..services.live_report import materialize_live_run_report
 from ..services.run_pair_segments import sync_run_pair_segments_for_event
@@ -121,6 +122,16 @@ def ingest_events_batch(
             db.flush()
             _apply_run_metrics_from_event(run, event)
             sync_run_pair_segments_for_event(db, run, row)
+            try:
+                materialize_run_entities_for_event(db, run, row)
+            except Exception as materialize_exc:
+                logger.warning(
+                    "Event materialization failed: bot=%s run=%s type=%s err=%s",
+                    bot_instance_id,
+                    event.run_id,
+                    event.event_type,
+                    materialize_exc,
+                )
             accepted += 1
 
             if row.severity in {"warn", "error", "critical"}:

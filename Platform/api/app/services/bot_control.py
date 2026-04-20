@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import zipfile
 from collections import deque
 from datetime import datetime, timezone
@@ -180,6 +181,153 @@ def _write_state(data: dict) -> None:
     payload["updated_at"] = _utc_iso_now()
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _run_log_has_run_end(path: Path | None) -> bool:
+    if not path or not path.exists():
+        return False
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            read_size = min(size, 16384)
+            if read_size <= 0:
+                return False
+            handle.seek(-read_size, os.SEEK_END)
+            tail = handle.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+    return "RUN_END:" in tail
+
+
+def _append_fallback_run_end_log(path: Path | None, reason: str, detail: str, exit_code: int = 0) -> bool:
+    if not path:
+        return False
+    try:
+        if _run_log_has_run_end(path):
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = _log_now()
+        timestamp_text = f"{ts.strftime('%Y-%m-%d %H:%M:%S')},{int(ts.microsecond / 1000):03d}"
+        message = f"RUN_END: reason={reason}"
+        detail_text = str(detail or "").strip()
+        if detail_text:
+            message += f" detail={detail_text}"
+        message += f" exit_code={int(exit_code)}"
+        with path.open("a", encoding="utf-8", errors="ignore") as handle:
+            handle.write(f"{timestamp_text} WARNING {message}\n")
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_manual_stop_artifacts(
+    run_key: str | None,
+    run_log_file: str | None,
+    requested_by: str | None = None,
+    started_at_text: str | None = None,
+) -> dict:
+    selected_run_key = str(run_key or "").strip()
+    if not selected_run_key:
+        return {"saved": False, "detail": "missing_run_key"}
+
+    log_path = Path(run_log_file).expanduser() if run_log_file else None
+    fallback_detail = "Ended by user via admin stop fallback"
+    log_written = _append_fallback_run_end_log(log_path, "manual_stop", fallback_detail, exit_code=0)
+
+    db: Session = SessionLocal()
+    try:
+        run = db.execute(select(Run).where(Run.run_key == selected_run_key)).scalar_one_or_none()
+        if run is None:
+            bot_instance = db.execute(
+                select(BotInstance).where(BotInstance.name == "default")
+            ).scalar_one_or_none()
+            if bot_instance is None:
+                bot_instance = BotInstance(name="default", environment="demo")
+                db.add(bot_instance)
+                db.flush()
+
+            parsed_started_at = _parse_iso_timestamp(started_at_text)
+            if parsed_started_at is None:
+                parsed_started_at = datetime.now(timezone.utc)
+            elif parsed_started_at.tzinfo is None:
+                parsed_started_at = parsed_started_at.replace(tzinfo=timezone.utc)
+            else:
+                parsed_started_at = parsed_started_at.astimezone(timezone.utc)
+
+            run = Run(
+                bot_instance_id=bot_instance.id,
+                run_key=selected_run_key,
+                status="stopped",
+                start_ts=parsed_started_at,
+                end_ts=datetime.now(timezone.utc),
+            )
+            db.add(run)
+            db.flush()
+
+        now_utc = datetime.now(timezone.utc)
+        if str(run.status or "").strip().lower() != "stopped":
+            run.status = "stopped"
+        if run.end_ts is None:
+            run.end_ts = now_utc
+
+        stop_event = db.execute(
+            select(RunEvent)
+            .where(RunEvent.run_id == run.id, RunEvent.event_type == "status_update")
+            .order_by(RunEvent.ts.desc(), RunEvent.created_at.desc(), RunEvent.id.desc())
+            .limit(10)
+        ).scalars().all()
+
+        stop_event_row = None
+        for row in stop_event:
+            payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+            status_text = str(payload.get("status") or "").strip().lower()
+            if status_text in {"manual_stop", "run_end"}:
+                stop_event_row = row
+                break
+
+        if stop_event_row is None:
+            stop_event_row = RunEvent(
+                event_id=str(uuid.uuid4()),
+                run_id=run.id,
+                bot_instance_id=run.bot_instance_id,
+                ts=now_utc,
+                event_type="status_update",
+                severity="info",
+                payload_json={
+                    "status": "manual_stop",
+                    "message": "Ended by user",
+                    "detail": fallback_detail,
+                    "source": "bot_control_fallback",
+                    "requested_by": requested_by or "",
+                },
+            )
+            db.add(stop_event_row)
+            db.flush()
+            try:
+                from .run_pair_segments import sync_run_pair_segments_for_event
+
+                sync_run_pair_segments_for_event(db, run, stop_event_row)
+            except Exception:
+                pass
+
+        db.commit()
+
+        try:
+            from .live_report import materialize_live_run_report
+
+            report_result = materialize_live_run_report(db, run)
+        except Exception as exc:
+            report_result = {"saved": False, "detail": f"live_report_failed:{exc}"}
+
+        return {
+            "saved": bool(report_result.get("saved")) or bool(log_written),
+            "detail": report_result.get("detail") or "manual_stop_artifacts_created",
+            "log_written": log_written,
+            "report_saved": bool(report_result.get("saved")),
+        }
+    finally:
+        db.close()
 
 
 def _tail_lines(path: Path, line_count: int) -> list[str]:
@@ -789,6 +937,8 @@ def _send_stop_signal(pid: int, sig: int) -> None:
 def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
     state = get_bot_status()
     pid = int(state.get("pid") or 0)
+    run_key = str(state.get("run_key") or "").strip()
+    run_log_file = str(state.get("run_log_file") or "").strip()
     if pid <= 0 or not state.get("running"):
         state["running"] = False
         state["detail"] = "already_stopped"
@@ -840,6 +990,16 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
     state["detail"] = "stopped" if terminated else detail
     state["requested_by"] = requested_by or state.get("requested_by", "")
     _write_state(state)
+    if terminated and run_key:
+        fallback_result = _ensure_manual_stop_artifacts(
+            run_key,
+            run_log_file,
+            requested_by=requested_by,
+            started_at_text=state.get("started_at"),
+        )
+        if not bool(fallback_result.get("saved")) and fallback_result.get("detail"):
+            state["detail"] = str(fallback_result.get("detail"))
+            _write_state(state)
     return _normalize_status(state)
 
 
@@ -1704,6 +1864,47 @@ def _graveyard_ticker_from_key(key: str) -> str:
     return key_text[len(TICKER_GRAVEYARD_PREFIX):]
 
 
+def clear_active_pair(requested_by: str | None = None) -> dict:
+    """Clear the persisted active_pair.json so startup falls back to defaults."""
+    existed = ACTIVE_PAIR_FILE.exists()
+    previous: dict | None = None
+
+    if existed:
+        previous_data = _read_json_object(ACTIVE_PAIR_FILE)
+        if previous_data.get("ticker_1") and previous_data.get("ticker_2"):
+            previous = {
+                "ticker_1": str(previous_data.get("ticker_1") or "").strip(),
+                "ticker_2": str(previous_data.get("ticker_2") or "").strip(),
+            }
+        try:
+            ACTIVE_PAIR_FILE.unlink()
+        except FileNotFoundError:
+            existed = False
+        except Exception as exc:
+            raise RuntimeError(f"Failed to clear active pair: {exc}") from exc
+
+    status = get_bot_status()
+    running = bool(status.get("running"))
+    detail = "Persisted active pair cleared."
+    if not existed:
+        detail = "No persisted active pair was set."
+    elif running:
+        detail = (
+            "Persisted active pair cleared. The running bot keeps its in-memory pair until restart."
+        )
+
+    return {
+        "ok": True,
+        "cleared": True,
+        "file_existed": existed,
+        "running": running,
+        "detail": detail,
+        "requested_by": requested_by or "",
+        "previous_active_pair": previous,
+        "active_pair": None,
+    }
+
+
 def get_pair_health_data() -> dict:
     """Get pair health data from state files."""
     result = {
@@ -1795,7 +1996,13 @@ def get_pair_health_data() -> dict:
     # Read active pair
     if ACTIVE_PAIR_FILE.exists():
         try:
-            result["active_pair"] = json.loads(ACTIVE_PAIR_FILE.read_text(encoding="utf-8"))
+            active_pair = json.loads(ACTIVE_PAIR_FILE.read_text(encoding="utf-8"))
+            if (
+                isinstance(active_pair, dict)
+                and active_pair.get("ticker_1")
+                and active_pair.get("ticker_2")
+            ):
+                result["active_pair"] = active_pair
         except Exception:
             pass
 

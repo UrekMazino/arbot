@@ -14,6 +14,7 @@ import {
   AdminReportSummary,
   AdminRunRuntime,
   UserRecord,
+  clearAdminActivePair,
   clearAdminLogs,
   deleteAdminLogRun,
   downloadAdminReportFile,
@@ -883,6 +884,45 @@ export default function AdminConsolePage() {
     });
   }, [showActionConfirm, handleClearLogsAndReports]);
 
+  const handleClearActivePair = useCallback(async () => {
+    if (!canManageBot) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await clearAdminActivePair();
+      await loadAdminData();
+      setStatus(result.detail || "Persisted active pair cleared");
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to clear the active pair.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Clear active pair failed";
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }, [canManageBot, loadAdminData, clearAdminSession, setError]);
+
+  const requestClearActivePair = useCallback(() => {
+    showActionConfirm({
+      title: "Clear Active Pair",
+      description:
+        "This clears the saved active pair from disk so the next startup falls back to defaults or discovers a new pair. If the bot is already running, its in-memory pair will stay active until restart.",
+      confirmLabel: "Clear Pair",
+      cancelLabel: "Cancel",
+      variant: "danger",
+      onConfirm: async () => {
+        await handleClearActivePair();
+      },
+    });
+  }, [showActionConfirm, handleClearActivePair]);
+
   useEffect(() => {
     if (artifactRunKeys.length === 0) {
       setSelectedArtifactsRunKey("");
@@ -1090,6 +1130,24 @@ export default function AdminConsolePage() {
     return () => stopStream();
   }, [canViewConsole, canViewLogs, selectedRunKey, isFloating, startStream, stopStream]);
 
+  useEffect(() => {
+    if (!waitingForRun) return;
+    const resolvedRunKey = runtimeSnapshot?.run_key || localLogTail?.run_key || botStatus?.latest_run_key || "";
+    if (!resolvedRunKey || resolvedRunKey === "latest" || resolvedRunKey === "__control__") return;
+    setWaitingForRun(false);
+    setLastKnownRunKey(null);
+    if (!selectedRunKey || selectedRunKey === "latest") {
+      setSelectedRunKey(resolvedRunKey);
+    }
+  }, [
+    waitingForRun,
+    runtimeSnapshot?.run_key,
+    localLogTail?.run_key,
+    botStatus?.latest_run_key,
+    selectedRunKey,
+    setSelectedRunKey,
+  ]);
+
   // Poll structured runtime metadata from the event/DB pipeline while SSE handles terminal lines.
   useEffect(() => {
     if (!canViewConsole || !canViewLogs || isFloating) return;
@@ -1178,6 +1236,10 @@ export default function AdminConsolePage() {
       const next = await startAdminBot();
       setBotStatus(next);
       const nextRunKey = String(next.run_key || next.latest_run_key || "latest").trim() || "latest";
+      if (nextRunKey !== "latest" && nextRunKey !== "__control__") {
+        setWaitingForRun(false);
+        setLastKnownRunKey(null);
+      }
       setSelectedRunKey(nextRunKey);
       if (canViewLogs) {
         await refreshLogTail(nextRunKey);
@@ -2117,7 +2179,21 @@ export default function AdminConsolePage() {
         {activeTab === "pairs" && (
           <section className="grid gap-4">
             {/* Active Pair */}
-            <PanelCard title="Active Pair">
+            <PanelCard
+              title="Active Pair"
+              actions={
+                canManageBot ? (
+                  <button
+                    type="button"
+                    onClick={requestClearActivePair}
+                    disabled={busy || !pairsHealth?.active_pair}
+                    className="inline-flex items-center rounded-xl border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/40"
+                  >
+                    Clear Active Pair
+                  </button>
+                ) : null
+              }
+            >
               {pairsHealth?.active_pair ? (
                 <div className="grid grid-cols-2 gap-4">
                   <div>

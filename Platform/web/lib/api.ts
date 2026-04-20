@@ -562,6 +562,19 @@ export async function getAdminPairsHealth(): Promise<AdminPairsHealth> {
   return apiRequest<AdminPairsHealth>("/admin/pairs/health", { method: "GET" });
 }
 
+export async function clearAdminActivePair(): Promise<{
+  ok: boolean;
+  cleared: boolean;
+  file_existed: boolean;
+  running: boolean;
+  detail: string;
+  requested_by: string;
+  previous_active_pair: Record<string, string> | null;
+  active_pair: null;
+}> {
+  return apiRequest("/admin/pairs/active/clear", { method: "POST", body: JSON.stringify({}) });
+}
+
 export interface ClearLogsResult {
   deleted_logs: number;
   deleted_reports: number;

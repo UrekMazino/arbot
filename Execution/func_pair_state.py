@@ -1284,7 +1284,13 @@ def add_stall_warning_mark(mark):
     save_pair_state(state)
     return True
 
-def can_switch(cooldown_hours=24, health_score=None, emergency_threshold=25):
+def can_switch(
+    cooldown_hours=24,
+    health_score=None,
+    emergency_threshold=25,
+    bypass_rate_limit=False,
+    bypass_cooldown=False,
+):
     """
     Check if pair switching is allowed.
 
@@ -1292,6 +1298,8 @@ def can_switch(cooldown_hours=24, health_score=None, emergency_threshold=25):
         cooldown_hours: Normal cooldown period in hours (default: 24)
         health_score: Current pair health score (0-100). If provided and below emergency_threshold, overrides cooldown
         emergency_threshold: Health score threshold for emergency override (default: 25)
+        bypass_rate_limit: When True, ignore sliding-window/rate-limit blocks.
+        bypass_cooldown: When True, ignore elapsed-time cooldown checks.
 
     Returns:
         bool: True if switching is allowed, False otherwise
@@ -1299,32 +1307,36 @@ def can_switch(cooldown_hours=24, health_score=None, emergency_threshold=25):
     state = load_pair_state()
     now_ts = time.time()
 
-    # 1) Hard block while switch rate-limit cooldown is active.
-    try:
-        until_ts = float(state.get("switch_rate_limit_until_ts", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        until_ts = 0.0
-    if until_ts > now_ts:
-        return False
+    if not bypass_rate_limit:
+        # 1) Hard block while switch rate-limit cooldown is active.
+        try:
+            until_ts = float(state.get("switch_rate_limit_until_ts", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            until_ts = 0.0
+        if until_ts > now_ts:
+            return False
 
-    # 2) Sliding-window rate limiter.
-    max_switches, switch_cooldown_seconds = _switch_limit_settings()
-    events = _prune_switch_events(state.get("switch_events", []), now_ts)
-    if max_switches > 0 and len(events) >= max_switches:
-        if switch_cooldown_seconds > 0:
-            state["switch_rate_limit_until_ts"] = now_ts + switch_cooldown_seconds
-        else:
-            state["switch_rate_limit_until_ts"] = 0.0
-        state["switch_events"] = events
-        save_pair_state(state)
-        return False
-    if events != state.get("switch_events", []):
-        state["switch_events"] = events
-        save_pair_state(state)
+        # 2) Sliding-window rate limiter.
+        max_switches, switch_cooldown_seconds = _switch_limit_settings()
+        events = _prune_switch_events(state.get("switch_events", []), now_ts)
+        if max_switches > 0 and len(events) >= max_switches:
+            if switch_cooldown_seconds > 0:
+                state["switch_rate_limit_until_ts"] = now_ts + switch_cooldown_seconds
+            else:
+                state["switch_rate_limit_until_ts"] = 0.0
+            state["switch_events"] = events
+            save_pair_state(state)
+            return False
+        if events != state.get("switch_events", []):
+            state["switch_events"] = events
+            save_pair_state(state)
 
     last_switch = get_last_switch_time()
     time_since_switch = now_ts - last_switch
     cooldown_seconds = cooldown_hours * 60 * 60
+
+    if bypass_cooldown:
+        return True
 
     # Emergency override: health is critically bad, ignore cooldown
     if health_score is not None and health_score < emergency_threshold:

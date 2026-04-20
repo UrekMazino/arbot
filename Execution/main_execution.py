@@ -821,6 +821,27 @@ def _validate_ticker_configuration():
     )
 
 
+def _get_startup_pair_block():
+    """Return a startup block reason/message if the persisted active pair is invalid."""
+    if is_restricted_ticker(ticker_1):
+        detail = get_restricted_ticker_reason(ticker_1) or "restricted ticker"
+        return "restricted_ticker", (
+            f"Active pair blocked at startup: {ticker_1}/{ticker_2} includes restricted "
+            f"ticker {ticker_1} ({detail})."
+        )
+    if is_restricted_ticker(ticker_2):
+        detail = get_restricted_ticker_reason(ticker_2) or "restricted ticker"
+        return "restricted_ticker", (
+            f"Active pair blocked at startup: {ticker_1}/{ticker_2} includes restricted "
+            f"ticker {ticker_2} ({detail})."
+        )
+    if is_in_graveyard(ticker_1, ticker_2):
+        return "startup_invalid_pair", (
+            f"Active pair blocked at startup: {ticker_1}/{ticker_2} is in graveyard."
+        )
+    return None, None
+
+
 def _is_hedged_mode(mode_value):
     normalized = str(mode_value or "").strip().lower()
     return normalized in ("long_short", "long_short_mode", "hedge", "hedged")
@@ -1235,11 +1256,32 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         )
         return SWITCH_RESULT_BLOCKED
 
+    def _bypass_switch_limits(reason):
+        return str(reason or "").strip().lower() in {
+            "restricted_ticker",
+            "compliance_restricted",
+            "startup_invalid_pair",
+        }
+
+    bypass_switch_limits = _bypass_switch_limits(switch_reason)
+
     # 1. Check Cooldown with emergency override
     last_switch = get_last_switch_time()
     elapsed = (time.time() - last_switch) / 3600
 
-    if not can_switch(cooldown_hours=24, health_score=health_score, emergency_threshold=40):
+    if bypass_switch_limits:
+        logger.warning(
+            "Bypassing switch cooldown/rate limiter for forced safety switch (reason=%s).",
+            switch_reason,
+        )
+
+    if not can_switch(
+        cooldown_hours=24,
+        health_score=health_score,
+        emergency_threshold=40,
+        bypass_rate_limit=bypass_switch_limits,
+        bypass_cooldown=bypass_switch_limits,
+    ):
         rate_limit_remaining = get_switch_rate_limit_remaining()
         if rate_limit_remaining > 0:
             logger.warning(
@@ -1880,6 +1922,26 @@ if __name__ == "__main__":
             logger.info("Cleaned %d expired graveyard entries.", removed)
     except Exception as exc:
         logger.warning("Failed to cleanup graveyard entries: %s", exc)
+
+    startup_block_reason, startup_block_message = _get_startup_pair_block()
+    if startup_block_reason:
+        logger.error(startup_block_message)
+        print(startup_block_message)
+        set_last_switch_reason(startup_block_reason)
+        if lock_on_pair:
+            logger.critical(
+                "lock_on_pair enabled; refusing to start with invalid active pair %s/%s.",
+                ticker_1,
+                ticker_2,
+            )
+            sys.exit(1)
+        switch_result = _switch_to_next_pair(health_score=0, switch_reason=startup_block_reason)
+        if switch_result == SWITCH_RESULT_SWITCHED:
+            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+            print("Restarting to apply new pair...")
+            sys.exit(3)
+        logger.critical("No suitable replacement pair found for startup-invalid active pair.")
+        sys.exit(1)
 
     per_leg_capital = _get_per_leg_allocation()
     if not _pair_meets_min_capital(ticker_1, ticker_2, per_leg_capital):

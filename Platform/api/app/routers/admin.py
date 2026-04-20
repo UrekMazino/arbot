@@ -10,6 +10,7 @@ from ..deps import get_current_user, get_db_session, get_user_permission_ids, re
 from ..models import User
 from ..services.bot_control import (
     build_report_run_zip,
+    clear_active_pair,
     clear_logs_and_reports,
     delete_log_run,
     get_bot_status,
@@ -268,6 +269,14 @@ def admin_env_settings_update(
 @router.get("/pairs/health")
 def admin_pairs_health(_: User = Depends(require_permissions("view_logs", "manage_bot"))):
     return get_pair_health_data()
+
+
+@router.post("/pairs/active/clear")
+def admin_clear_active_pair(user: User = Depends(require_permissions("manage_bot"))):
+    try:
+        return clear_active_pair(requested_by=user.email)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.post("/logs/clear")

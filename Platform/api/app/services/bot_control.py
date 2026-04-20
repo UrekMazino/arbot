@@ -817,7 +817,8 @@ def start_bot(requested_by: str | None = None) -> dict:
     log_handle = CONTROL_LOG_FILE.open("a", encoding="utf-8", errors="ignore")
 
     env = os.environ.copy()
-    env["STATBOT_MANAGED"] = "1"
+    # Start the top-level execution manager so exit code 3 can trigger in-process restarts.
+    env.pop("STATBOT_MANAGED", None)
     env["PYTHONUNBUFFERED"] = "1"
 
     # Compute the run_key that the execution script will use

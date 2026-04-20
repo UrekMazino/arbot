@@ -39,7 +39,7 @@ from config_execution_api import (
     stop_loss_fail_safe,
     ticker_1,
     ticker_2,
-    save_active_pair,
+    set_runtime_active_pair,
     STATUS_UPDATE_INTERVAL,
     HEALTH_CHECK_INTERVAL,
     td_mode,
@@ -1618,8 +1618,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         print(msg)
         logger.info(msg)
 
-        if save_active_pair(next_t1, next_t2):
-            logger.info("New pair saved to state/active_pair.json")
+        if set_runtime_active_pair(next_t1, next_t2, persist=True):
+            logger.info("New pair activated in memory and saved to state/active_pair.json")
             try:
                 from func_regime_state import reset_regime_state
                 reset_regime_state(reason=f"pair_switch:{switch_reason}")

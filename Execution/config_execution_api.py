@@ -5,6 +5,7 @@
 
 import os
 import json
+import sys
 from pathlib import Path
 
 try:
@@ -93,6 +94,100 @@ def save_active_pair(t1, t2):
     except Exception as e:
         print(f"Error saving active pair: {e}")
         return False
+
+
+def _load_rounding_for_ticker(inst_id):
+    price_rounding = 2
+    quantity_rounding = 0
+    if skip_instrument_fetch or not inst_id:
+        return price_rounding, quantity_rounding
+
+    try:
+        response = public_session.get_instruments(instType=inst_type, instId=inst_id)
+        if response.get("code") == "0" and response.get("data"):
+            instrument = response["data"][0]
+            tick_sz = instrument.get("tickSz", "0.01")
+            price_rounding = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
+            lot_sz = instrument.get("lotSz", "1")
+            quantity_rounding = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
+    except Exception as exc:
+        print(f"Warning: Could not fetch dynamic rounding for {inst_id}: {exc}")
+    return price_rounding, quantity_rounding
+
+
+def refresh_dynamic_rounding(inst_id_1=None, inst_id_2=None):
+    """Refresh price and quantity roundings for the active pair."""
+    global rounding_ticker_1, rounding_ticker_2
+    global quantity_rounding_ticker_1, quantity_rounding_ticker_2
+
+    target_t1 = str(inst_id_1 or ticker_1 or "").strip().upper()
+    target_t2 = str(inst_id_2 or ticker_2 or "").strip().upper()
+    if not target_t1 or not target_t2:
+        return False
+
+    rounding_ticker_1, quantity_rounding_ticker_1 = _load_rounding_for_ticker(target_t1)
+    rounding_ticker_2, quantity_rounding_ticker_2 = _load_rounding_for_ticker(target_t2)
+    return True
+
+
+def _sync_runtime_pair_to_modules():
+    """Push the current active pair into modules that imported config values by value."""
+    module_names = (
+        "__main__",
+        "main_execution",
+        "func_get_zscore",
+        "func_price_calls",
+        "func_close_positions",
+        "func_trade_management",
+        "func_calculation",
+        "config_ws_connect",
+        "check_balance",
+    )
+    for module_name in module_names:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        if hasattr(module, "ticker_1"):
+            setattr(module, "ticker_1", ticker_1)
+        if hasattr(module, "ticker_2"):
+            setattr(module, "ticker_2", ticker_2)
+        if hasattr(module, "signal_positive_ticker"):
+            setattr(module, "signal_positive_ticker", signal_positive_ticker)
+        if hasattr(module, "signal_negative_ticker"):
+            setattr(module, "signal_negative_ticker", signal_negative_ticker)
+        if hasattr(module, "rounding_ticker_1"):
+            setattr(module, "rounding_ticker_1", rounding_ticker_1)
+        if hasattr(module, "rounding_ticker_2"):
+            setattr(module, "rounding_ticker_2", rounding_ticker_2)
+        if hasattr(module, "quantity_rounding_ticker_1"):
+            setattr(module, "quantity_rounding_ticker_1", quantity_rounding_ticker_1)
+        if hasattr(module, "quantity_rounding_ticker_2"):
+            setattr(module, "quantity_rounding_ticker_2", quantity_rounding_ticker_2)
+
+
+def set_runtime_active_pair(t1, t2, persist=True):
+    """
+    Update the active pair for the running process and optionally persist it.
+
+    This keeps the in-memory execution modules in sync after a live pair switch.
+    """
+    global ticker_1, ticker_2, signal_positive_ticker, signal_negative_ticker
+
+    next_t1 = str(t1 or "").strip().upper()
+    next_t2 = str(t2 or "").strip().upper()
+    if not next_t1 or not next_t2 or next_t1 == next_t2:
+        return False
+
+    if persist and not save_active_pair(next_t1, next_t2):
+        return False
+
+    ticker_1 = next_t1
+    ticker_2 = next_t2
+    signal_positive_ticker = ticker_2
+    signal_negative_ticker = ticker_1
+    refresh_dynamic_rounding(next_t1, next_t2)
+    _sync_runtime_pair_to_modules()
+    return True
 
 
 # CONFIG VARIABLES
@@ -285,24 +380,4 @@ for session in [public_session, market_session, account_session, trade_session]:
 skip_instrument_fetch = _env_flag("STATBOT_SKIP_INSTRUMENT_FETCH", False)
 
 # DYNAMIC ROUNDING FETCH
-if not skip_instrument_fetch:
-    try:
-        # Update rounding_ticker_1
-        res1 = public_session.get_instruments(instType=inst_type, instId=ticker_1)
-        if res1.get("code") == "0" and res1.get("data"):
-            inst1 = res1["data"][0]
-            tick_sz = inst1.get("tickSz", "0.01")
-            rounding_ticker_1 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
-            lot_sz = inst1.get("lotSz", "1")
-            quantity_rounding_ticker_1 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
-
-        # Update rounding_ticker_2
-        res2 = public_session.get_instruments(instType=inst_type, instId=ticker_2)
-        if res2.get("code") == "0" and res2.get("data"):
-            inst2 = res2["data"][0]
-            tick_sz = inst2.get("tickSz", "0.01")
-            rounding_ticker_2 = len(tick_sz.split(".")[-1]) if "." in tick_sz else 0
-            lot_sz = inst2.get("lotSz", "1")
-            quantity_rounding_ticker_2 = len(lot_sz.split(".")[-1]) if "." in lot_sz else 0
-    except Exception as e:
-        print(f"Warning: Could not fetch dynamic rounding info: {e}")
+refresh_dynamic_rounding()

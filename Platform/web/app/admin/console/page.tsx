@@ -647,7 +647,7 @@ export default function AdminConsolePage() {
   const handleClearLogsAndReports = useCallback(async () => {
     setBusy(true);
     try {
-      const result = await clearAdminLogs(true);
+      const result = await clearAdminLogs(false);
       const details = [
         `Cleared ${result.deleted_logs} log runs`,
         `${result.deleted_reports} report folders`,
@@ -686,10 +686,10 @@ export default function AdminConsolePage() {
   const requestClearLogsAndReports = useCallback(() => {
     showActionConfirm({
       title: "Clear Logs and Reports",
-      description: "This will remove older log runs and report data while keeping only the most recent run.",
-      confirmLabel: "Clear Data",
+      description: "This will permanently remove all log runs, all report folders, and their related database history, including the most recent run.",
+      confirmLabel: "Clear Everything",
       cancelLabel: "Cancel",
-      variant: "warning",
+      variant: "danger",
       onConfirm: async () => {
         await handleClearLogsAndReports();
       },

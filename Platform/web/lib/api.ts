@@ -461,7 +461,7 @@ export interface ClearLogsResult {
   errors: string[];
 }
 
-export async function clearAdminLogs(keepLatest = true): Promise<ClearLogsResult> {
+export async function clearAdminLogs(keepLatest = false): Promise<ClearLogsResult> {
   return apiRequest<ClearLogsResult>(`/admin/logs/clear?keep_latest=${keepLatest}`, { method: "POST" });
 }
 

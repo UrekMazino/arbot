@@ -172,7 +172,7 @@ def _parse_log_timestamp(line: str) -> float | None:
     if not ts_match:
         return None
     try:
-        return datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+        return datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
     except Exception:
         return None
 
@@ -936,7 +936,7 @@ def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
         run_start_time = last_update_time
 
     # Format last log time as ISO for frontend
-    last_log_iso = datetime.fromtimestamp(last_update_time).isoformat() if last_update_time else None
+    last_log_iso = datetime.fromtimestamp(last_update_time, timezone.utc).isoformat() if last_update_time else None
 
     return {
         "run_key": resolved_run_key,
@@ -1175,7 +1175,7 @@ def list_report_runs(limit: int = 100) -> list[dict]:
     return rows[: max(min(int(limit), 500), 1)]
 
 
-def clear_logs_and_reports(keep_latest: bool = True) -> dict:
+def clear_logs_and_reports(keep_latest: bool = False) -> dict:
     """Clear log and report directories.
 
     Args:

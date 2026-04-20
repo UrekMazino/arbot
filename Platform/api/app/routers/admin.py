@@ -195,8 +195,8 @@ def admin_pairs_health(_: User = Depends(require_permissions("view_logs", "manag
 
 @router.post("/logs/clear")
 def admin_logs_clear(
-    keep_latest: bool = Query(default=True),
+    keep_latest: bool = Query(default=False),
     user: User = Depends(require_permissions("manage_bot")),
 ):
-    """Clear log and report data while optionally preserving the newest run."""
+    """Clear log and report data, optionally preserving the newest run when requested."""
     return clear_logs_and_reports(keep_latest=keep_latest)

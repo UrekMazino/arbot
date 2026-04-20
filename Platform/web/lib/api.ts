@@ -175,6 +175,8 @@ export type AdminBotStatus = {
   command?: string[];
   cwd?: string;
   requested_by?: string;
+  run_key?: string | null;
+  run_log_file?: string | null;
   latest_run_key?: string | null;
   latest_log_file?: string | null;
   workspace_root?: string;

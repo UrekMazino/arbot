@@ -335,6 +335,31 @@ function artifactTone(file: AdminReportArtifactFile): "success" | "info" | "neut
   return "neutral";
 }
 
+function parseRunKeySortParts(runKey: string): { timestampKey: string; sequence: number } | null {
+  const match = String(runKey || "").match(/^run_(\d+)_(\d{8})_(\d{6})$/i);
+  if (!match) return null;
+  return {
+    sequence: Number(match[1] || 0),
+    timestampKey: `${match[2]}${match[3]}`,
+  };
+}
+
+function sortReportRunsDesc(rows: AdminReportRun[]): AdminReportRun[] {
+  return [...rows].sort((a, b) => {
+    const aRun = parseRunKeySortParts(a.run_key);
+    const bRun = parseRunKeySortParts(b.run_key);
+    if (aRun && bRun) {
+      const timestampCompare = bRun.timestampKey.localeCompare(aRun.timestampKey);
+      if (timestampCompare !== 0) return timestampCompare;
+      const sequenceDelta = bRun.sequence - aRun.sequence;
+      if (sequenceDelta !== 0) return sequenceDelta;
+    }
+    const mtimeDelta = Number(b.mtime_ts || 0) - Number(a.mtime_ts || 0);
+    if (mtimeDelta !== 0) return mtimeDelta;
+    return String(b.run_key || "").localeCompare(String(a.run_key || ""));
+  });
+}
+
 export default function AdminConsolePage() {
   const router = useRouter();
   const { isFloating, setFloating, logTail: sharedLogTail, setLogTail: setSharedLogTail } = useFloatingTerminal();
@@ -388,7 +413,7 @@ export default function AdminConsolePage() {
   } = useLogRuns();
 
   // SSE for real-time log streaming
-  const { logLines: streamLogLines, isStreaming, startStream, stopStream } = useLogStream(selectedRunKey);
+  const { logLines: streamLogLines, isStreaming, error: streamError, startStream, stopStream } = useLogStream(selectedRunKey);
 
   const closeLogViewer = useCallback(() => {
     setLogViewerRun(null);
@@ -590,7 +615,7 @@ export default function AdminConsolePage() {
 
       setBotStatus(statusData);
       setLogRuns(logsData);
-      setReportRuns(reportsData);
+      setReportRuns(sortReportRunsDesc(reportsData));
       setPairsHealth(healthData);
 
       // Determine which run key to load:
@@ -1152,6 +1177,11 @@ export default function AdminConsolePage() {
       setWaitingForRun(true);
       const next = await startAdminBot();
       setBotStatus(next);
+      const nextRunKey = String(next.run_key || next.latest_run_key || "latest").trim() || "latest";
+      setSelectedRunKey(nextRunKey);
+      if (canViewLogs) {
+        await refreshLogTail(nextRunKey);
+      }
       setStatus("Bot start requested");
     } catch (err) {
       setWaitingForRun(false);
@@ -1347,9 +1377,17 @@ export default function AdminConsolePage() {
                     <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
                       Waiting for new run to start...
                     </p>
+                  ) : streamError ? (
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+                      {streamError}. Reconnecting...
+                    </p>
                   ) : showingControlLog ? (
                     <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">
                       Showing current startup/control output until a fresh run log is created.
+                    </p>
+                  ) : isStreaming ? (
+                    <p className="mb-2 text-xs text-emerald-600 dark:text-emerald-400">
+                      Live stream connected.
                     </p>
                   ) : null}
                   <pre className="custom-scrollbar mt-2 min-h-0 flex-1 overflow-auto rounded-xl border border-gray-700 bg-gray-950 p-3 text-xs leading-relaxed text-emerald-100" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
@@ -1519,9 +1557,17 @@ export default function AdminConsolePage() {
                 <p className="mb-2 text-xs text-amber-400">
                   Waiting for new run to start...
                 </p>
+              ) : streamError ? (
+                <p className="mb-2 text-xs text-amber-400">
+                  {streamError}. Reconnecting...
+                </p>
               ) : showingControlLog ? (
                 <p className="mb-2 text-xs text-gray-400">
                   Showing current startup/control output until a fresh run log is created.
+                </p>
+              ) : isStreaming ? (
+                <p className="mb-2 text-xs text-emerald-400">
+                  Live stream connected.
                 </p>
               ) : null}
               <SearchableTerminalContent
@@ -1959,9 +2005,9 @@ export default function AdminConsolePage() {
                     <table className="text-xs">
                       <thead>
                         <tr>
-                          <th>Run</th>
-                          <th>Size</th>
-                          <th>Updated</th>
+                          <th className="h-9 py-0 align-middle">Run</th>
+                          <th className="h-9 py-0 align-middle">Size</th>
+                          <th className="h-9 py-0 align-middle">Updated</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1971,7 +2017,7 @@ export default function AdminConsolePage() {
                             onClick={() => setSelectedArtifactsRunKey(row.run_key)}
                             className={selectedArtifactsRunKey === row.run_key ? "cursor-pointer bg-brand-50/80 dark:bg-brand-950/20" : "cursor-pointer"}
                           >
-                            <td>
+                            <td className="h-10 py-0 align-middle">
                               <button
                                 type="button"
                                 onClick={(event) => {
@@ -1979,19 +2025,19 @@ export default function AdminConsolePage() {
                                   setSelectedArtifactsRunKey(row.run_key);
                                   void handleOpenLogViewer(row);
                                 }}
-                                className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
+                                className="inline-flex items-center font-mono text-left text-xs leading-none text-brand-600 hover:underline dark:text-brand-400"
                                 title={`View ${row.run_key}`}
                               >
                                 {row.run_key}
                               </button>
                             </td>
-                            <td>{fmtBytes(row.size_bytes)}</td>
-                            <td>{fmtUnix(row.mtime_ts)}</td>
+                            <td className="h-10 py-0 align-middle">{fmtBytes(row.size_bytes)}</td>
+                            <td className="h-10 py-0 align-middle">{fmtUnix(row.mtime_ts)}</td>
                           </tr>
                         ))}
                         {!logRuns.length ? (
                           <tr>
-                            <td colSpan={3} className="text-xs text-gray-500 dark:text-gray-400">
+                            <td colSpan={3} className="h-10 py-0 align-middle text-xs text-gray-500 dark:text-gray-400">
                               No log runs found.
                             </td>
                           </tr>
@@ -2010,10 +2056,10 @@ export default function AdminConsolePage() {
                     <table className="text-xs">
                       <thead>
                         <tr>
-                          <th>Run</th>
-                          <th>Files</th>
-                          <th>Summary</th>
-                          <th>Updated</th>
+                          <th className="h-9 py-0 align-middle">Run</th>
+                          <th className="h-9 py-0 align-middle">Files</th>
+                          <th className="h-9 py-0 align-middle">Summary</th>
+                          <th className="h-9 py-0 align-middle">Updated</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2023,7 +2069,7 @@ export default function AdminConsolePage() {
                             onClick={() => setSelectedArtifactsRunKey(row.run_key)}
                             className={selectedArtifactsRunKey === row.run_key ? "cursor-pointer bg-brand-50/80 dark:bg-brand-950/20" : "cursor-pointer"}
                           >
-                            <td>
+                            <td className="h-10 py-0 align-middle">
                               <button
                                 type="button"
                                 onClick={(event) => {
@@ -2031,22 +2077,30 @@ export default function AdminConsolePage() {
                                   setSelectedArtifactsRunKey(row.run_key);
                                   void handleOpenReportViewer(row.run_key);
                                 }}
-                                className="font-mono text-left text-xs text-brand-600 hover:underline dark:text-brand-400"
+                                className="inline-flex items-center font-mono text-left text-xs leading-none text-brand-600 hover:underline dark:text-brand-400"
                                 title={`View ${row.run_key} report`}
                               >
                                 {row.run_key}
                               </button>
                             </td>
-                            <td>{row.file_count}</td>
-                            <td>
-                              <StatusPill label={row.summary_json ? "available" : "missing"} tone={row.summary_json ? "success" : "warn"} />
+                            <td className="h-10 py-0 align-middle">{row.file_count}</td>
+                            <td className="h-10 py-0 align-middle">
+                              <span
+                                className={
+                                  row.summary_json
+                                    ? "inline-flex items-center rounded-full border border-success-200 bg-success-50 px-2 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-[0.08em] text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400"
+                                    : "inline-flex items-center rounded-full border border-warning-200 bg-warning-50 px-2 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-[0.08em] text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400"
+                                }
+                              >
+                                {row.summary_json ? "available" : "missing"}
+                              </span>
                             </td>
-                            <td>{fmtUnix(row.mtime_ts)}</td>
+                            <td className="h-10 py-0 align-middle">{fmtUnix(row.mtime_ts)}</td>
                           </tr>
                         ))}
                         {!reportRuns.length ? (
                           <tr>
-                            <td colSpan={4} className="text-xs text-gray-500 dark:text-gray-400">
+                            <td colSpan={4} className="h-10 py-0 align-middle text-xs text-gray-500 dark:text-gray-400">
                               No report runs found.
                             </td>
                           </tr>

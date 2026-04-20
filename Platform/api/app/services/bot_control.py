@@ -79,6 +79,7 @@ PAIR_SWITCH_RE = re.compile(rf"Switching from (?P<from_pair>{PAIR_TEXT_PATTERN})
 TICKER_CONFIG_RE = re.compile(
     r"Ticker configuration validated: ticker_1=(?P<t1>[A-Z0-9]+-[A-Z]+-SWAP), ticker_2=(?P<t2>[A-Z0-9]+-[A-Z]+-SWAP)"
 )
+RUN_KEY_SORT_RE = re.compile(r"^run_(?P<seq>\d+)_(?P<date>\d{8})_(?P<time>\d{6})$", re.IGNORECASE)
 
 
 def _default_bot_command() -> list[str]:
@@ -603,6 +604,17 @@ def _resolve_live_tail_target(run_key: str | None) -> tuple[str | None, Path | N
     if should_prefer_control:
         return "__control__", CONTROL_LOG_FILE, "control_log_preferred"
     return latest_run_key, latest_log_file, "latest_run"
+
+
+def resolve_live_stream_target(run_key: str | None = None) -> dict:
+    resolved_run_key, log_file, source = _resolve_live_tail_target(run_key)
+    if not log_file or not log_file.exists():
+        raise FileNotFoundError("Log stream target not found")
+    return {
+        "run_key": resolved_run_key,
+        "log_file": str(log_file),
+        "source": source,
+    }
 
 
 def _normalize_status(state: dict) -> dict:
@@ -1216,7 +1228,17 @@ def list_report_runs(limit: int = 100) -> list[dict]:
                 "mtime_ts": latest_mtime,
             }
         )
-    rows.sort(key=lambda item: item.get("mtime_ts", 0.0), reverse=True)
+
+    def _report_sort_key(item: dict) -> tuple:
+        run_key = str(item.get("run_key") or "").strip()
+        match = RUN_KEY_SORT_RE.match(run_key)
+        if match:
+            timestamp_key = f"{match.group('date')}{match.group('time')}"
+            sequence = int(match.group("seq") or 0)
+            return (timestamp_key, sequence, float(item.get("mtime_ts") or 0.0), run_key)
+        return ("", 0, float(item.get("mtime_ts") or 0.0), run_key)
+
+    rows.sort(key=_report_sort_key, reverse=True)
     return rows[: max(min(int(limit), 500), 1)]
 
 

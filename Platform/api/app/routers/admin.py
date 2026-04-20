@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -14,6 +16,7 @@ from ..services.bot_control import (
     get_pair_health_data,
     get_report_run_file,
     get_report_run_summary,
+    resolve_live_stream_target,
     list_log_runs,
     list_report_runs,
     read_env_settings,
@@ -89,49 +92,67 @@ async def admin_bot_logs_stream(
 
     async def event_generator():
         import asyncio
-        import os
         from pathlib import Path
 
-        log_dir = Path("Logs")
-        if run_key and run_key != "latest":
-            log_file = log_dir / f"{run_key}.log"
-        else:
-            # Find latest log file
-            log_files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
-            log_file = log_files[0] if log_files else None
-
-        if not log_file or not log_file.exists():
+        try:
+            target = resolve_live_stream_target(run_key)
+        except FileNotFoundError:
             yield "data: {\"error\": \"no log file\"}\n\n"
             return
 
-        # Start from end of file
-        last_pos = log_file.stat().st_size
+        log_file = Path(target["log_file"])
+        last_pos = log_file.stat().st_size if log_file.exists() else 0
+        yield ": connected\n\n"
 
         while True:
             await asyncio.sleep(2)  # Poll every 2 seconds
 
             try:
+                if not run_key or str(run_key).strip().lower() == "latest":
+                    try:
+                        next_target = resolve_live_stream_target(run_key)
+                        next_log_file = Path(next_target["log_file"])
+                        if next_log_file != log_file:
+                            log_file = next_log_file
+                            last_pos = 0
+                    except FileNotFoundError:
+                        yield "data: {\"error\": \"no log file\"}\n\n"
+                        return
+
+                if not log_file.exists():
+                    yield "data: {\"error\": \"no log file\"}\n\n"
+                    return
+
                 current_size = log_file.stat().st_size
                 if current_size > last_pos:
                     # Read new content
                     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
                         f.seek(last_pos)
                         new_lines = f.readlines()
+                        next_pos = f.tell()
 
                     if new_lines:
                         # Send last 10 lines as update
                         tail_lines = new_lines[-10:] if len(new_lines) > 10 else new_lines
                         payload = {"lines": [line.rstrip("\n\r") for line in tail_lines]}
                         yield f"data: {json.dumps(payload)}\n\n"
-                        last_pos = f.tell()
+                    last_pos = next_pos
 
                 elif current_size < last_pos:
                     # File was truncated (new run), start from beginning
                     last_pos = 0
+                else:
+                    # Keep the SSE connection alive between log writes.
+                    yield ": ping\n\n"
             except Exception:
                 break
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 
 @router.get("/logs/runs")

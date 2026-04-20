@@ -26,7 +26,6 @@ from func_pair_state import (
     get_consecutive_losses,
     set_last_health_score,
     set_last_switch_reason,
-    get_switch_rate_limit_remaining,
     set_min_capital_cooldown,
     add_restricted_ticker,
     is_restricted_ticker,
@@ -62,7 +61,7 @@ _LAST_ZSCORE_LOG_TS = 0.0
 _LAST_WAITING_LOG_TS = 0.0
 _LAST_WAITING_MSG = ""
 _LAST_HOLD_LOG_TS = 0.0
-_LAST_SWITCH_LIMIT_LOG_TS = 0.0
+_LAST_POST_SWITCH_WARMUP_LOG_TS = 0.0
 _LAST_TREND_LOOKBACK_LOG_TS = 0.0
 _LAST_TREND_LOOKBACK_VALUE = None
 _LAST_TREND_LOOKBACK_REGIME = ""
@@ -86,6 +85,17 @@ def _get_health_switch_settings():
     if grace_seconds < 0:
         grace_seconds = 0.0
     return required, grace_seconds
+
+
+def _get_post_switch_entry_warmup_seconds():
+    raw = os.getenv("STATBOT_POST_SWITCH_ENTRY_WARMUP_SECONDS", "60")
+    try:
+        warmup_seconds = float(raw)
+    except (TypeError, ValueError):
+        warmup_seconds = 60.0
+    if warmup_seconds < 0:
+        warmup_seconds = 0.0
+    return warmup_seconds
 
 
 def _env_float(name, default=None):
@@ -948,6 +958,7 @@ def generate_signal(
 
         if len(persistence_history) >= effective_min_persist_bars:
             recent_zscores = persistence_history[-effective_min_persist_bars:]
+            rounded_history = [round(z, 2) for z in recent_zscores]
 
             # Check if all recent z-scores are in the same extreme zone
             # Also enforce ENTRY_Z_MAX to avoid regime breaks
@@ -973,7 +984,37 @@ def generate_signal(
                     f"(overbought, bars={effective_min_persist_bars})",
                 )
             else:
-                return None, f"No entry - Z-score not persistent (history: {[round(z, 2) for z in recent_zscores]})"
+                all_oversold_raw = all(z <= -effective_entry_z for z in recent_zscores)
+                all_overbought_raw = all(z >= effective_entry_z for z in recent_zscores)
+
+                if all_oversold_raw and any(z < -effective_entry_z_max for z in recent_zscores):
+                    min_recent_z = min(recent_zscores)
+                    return (
+                        None,
+                        f"No entry - Z-score too extreme for long entry "
+                        f"(min_recent_z={min_recent_z:.2f} < -{effective_entry_z_max:.2f}, "
+                        f"history: {rounded_history})",
+                    )
+
+                if all_overbought_raw and any(z > effective_entry_z_max for z in recent_zscores):
+                    max_recent_z = max(recent_zscores)
+                    return (
+                        None,
+                        f"No entry - Z-score too extreme for short entry "
+                        f"(max_recent_z={max_recent_z:.2f} > +{effective_entry_z_max:.2f}, "
+                        f"history: {rounded_history})",
+                    )
+
+                same_sign = all(z >= 0 for z in recent_zscores) or all(z <= 0 for z in recent_zscores)
+                if same_sign:
+                    return (
+                        None,
+                        f"No entry - Z-score did not stay within the allowed entry band "
+                        f"[{effective_entry_z:.2f}, {effective_entry_z_max:.2f}] "
+                        f"(history: {rounded_history})",
+                    )
+
+                return None, f"No entry - Z-score not persistent (history: {rounded_history})"
         else:
             return None, (
                 f"Insufficient history: {len(persistence_history)} cycles < "
@@ -1239,18 +1280,22 @@ def manage_new_trades(
     else:
         zscore, signal_sign_positive, metrics = get_latest_zscore()
 
-    # Defensive mode: when switch rate limiter is active, block new entries.
-    switch_limit_remaining = get_switch_rate_limit_remaining()
-    if switch_limit_remaining > 0:
-        global _LAST_SWITCH_LIMIT_LOG_TS
+    # Short entry warmup after a pair switch to let the new pair settle.
+    post_switch_entry_warmup_seconds = _get_post_switch_entry_warmup_seconds()
+    last_switch = get_last_switch_time()
+    if post_switch_entry_warmup_seconds > 0 and last_switch:
         now_ts = time.time()
-        if (now_ts - _LAST_SWITCH_LIMIT_LOG_TS) >= 60:
-            logger.warning(
-                "DEFENSIVE_MODE: switch limiter active (%.0fs remaining). Skipping new entries.",
-                switch_limit_remaining,
-            )
-            _LAST_SWITCH_LIMIT_LOG_TS = now_ts
-        return kill_switch, False, False
+        elapsed_since_switch = now_ts - float(last_switch)
+        if 0 <= elapsed_since_switch < post_switch_entry_warmup_seconds:
+            remaining = post_switch_entry_warmup_seconds - elapsed_since_switch
+            global _LAST_POST_SWITCH_WARMUP_LOG_TS
+            if (now_ts - _LAST_POST_SWITCH_WARMUP_LOG_TS) >= 60:
+                logger.warning(
+                    "POST_SWITCH_ENTRY_WARMUP: %.0fs remaining. Skipping new entries on current pair.",
+                    remaining,
+                )
+                _LAST_POST_SWITCH_WARMUP_LOG_TS = now_ts
+            return kill_switch, False, False
 
     regime_policy = resolve_regime_policy_overrides(regime_mode, regime_decision)
     strategy_policy = resolve_strategy_policy_overrides(strategy_mode, strategy_decision)

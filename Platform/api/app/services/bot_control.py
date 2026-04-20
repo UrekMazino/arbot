@@ -17,6 +17,11 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9 fallback
+    ZoneInfo = None
+
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -40,6 +45,13 @@ from .run_pair_segments import list_run_pair_history_rows_by_run_key
 
 def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _strip_wrapping_quotes(value: str | None) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
 
 
 def _workspace_root() -> Path:
@@ -93,6 +105,34 @@ def _parse_iso_timestamp(value: str | None) -> datetime | None:
         return datetime.fromisoformat(raw)
     except ValueError:
         return None
+
+
+def _configured_log_timezone_name() -> str:
+    env_value = _strip_wrapping_quotes(os.getenv("STATBOT_TIMEZONE") or os.getenv("TZ"))
+    if env_value:
+        return env_value
+    env_settings = read_env_settings()
+    return _strip_wrapping_quotes(env_settings.get("STATBOT_TIMEZONE") or env_settings.get("TZ"))
+
+
+def _resolve_log_timezone():
+    timezone_name = _configured_log_timezone_name()
+    if timezone_name and ZoneInfo is not None:
+        try:
+            return ZoneInfo(timezone_name)
+        except Exception:
+            pass
+    try:
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is not None:
+            return local_tz
+    except Exception:
+        pass
+    return timezone.utc
+
+
+def _log_now() -> datetime:
+    return datetime.now(_resolve_log_timezone())
 
 
 def _path_mtime(path: Path | None) -> float:
@@ -175,7 +215,9 @@ def _parse_log_timestamp(line: str) -> float | None:
     if not ts_match:
         return None
     try:
-        return datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+        return datetime.strptime(ts_match.group(1), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=_resolve_log_timezone()
+        ).timestamp()
     except Exception:
         return None
 
@@ -192,7 +234,7 @@ def _format_log_threshold_text(value: datetime | None) -> str | None:
         return None
     try:
         if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc)
+            value = value.astimezone(_resolve_log_timezone())
         return value.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return None
@@ -619,7 +661,7 @@ def start_bot(requested_by: str | None = None) -> dict:
     env["PYTHONUNBUFFERED"] = "1"
 
     # Compute the run_key that the execution script will use
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = _log_now().strftime("%Y%m%d_%H%M%S")
     run_seq = 1
     if LOGS_ROOT.exists():
         max_seq = 0

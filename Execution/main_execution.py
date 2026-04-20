@@ -126,6 +126,20 @@ def _env_text(name, default=""):
     return value if value else default
 
 
+def _env_int(name, default, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
 def _build_startup_config_snapshot(regime_mode, strategy_mode):
     return {
         "pair": {
@@ -175,6 +189,14 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
             "strategy_kline_limit": _env_text("STATBOT_STRATEGY_KLINE_LIMIT", "10080"),
             "strategy_z_score_window": _env_text("STATBOT_STRATEGY_Z_SCORE_WINDOW", "21"),
+            "strategy_startup_retry_seconds": _env_text(
+                "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",
+                str(STRATEGY_STARTUP_RETRY_SECONDS),
+            ),
+            "strategy_startup_max_attempts": _env_text(
+                "STATBOT_STRATEGY_STARTUP_MAX_ATTEMPTS",
+                str(STRATEGY_STARTUP_MAX_ATTEMPTS),
+            ),
         },
         "reporting": {
             "report_enable": _env_text("STATBOT_REPORT_ENABLE", "1"),
@@ -201,7 +223,13 @@ except Exception:
 SWITCH_RESULT_SWITCHED = "switched"
 SWITCH_RESULT_BLOCKED = "blocked"
 SWITCH_RESULT_HARD_STOP = "hard_stop"
-STRATEGY_REFRESH_SLEEP_SECONDS = 5
+STRATEGY_REFRESH_SLEEP_SECONDS = _env_int("STATBOT_STRATEGY_REFRESH_SLEEP_SECONDS", 5, minimum=1)
+STRATEGY_STARTUP_RETRY_SECONDS = _env_int(
+    "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",
+    STRATEGY_REFRESH_SLEEP_SECONDS,
+    minimum=1,
+)
+STRATEGY_STARTUP_MAX_ATTEMPTS = _env_int("STATBOT_STRATEGY_STARTUP_MAX_ATTEMPTS", 0, minimum=0)
 _PNL_LOG_INTERVAL_SECONDS = 60
 _PNL_LOG_DELTA_THRESHOLD = 0.5
 _LAST_PNL_LOG_TS = 0.0
@@ -1041,6 +1069,7 @@ def _run_strategy_refresh():
 def _run_strategy_at_startup():
     """Run Strategy at startup to discover pairs if CSV is empty or missing."""
     strategy_path = Path(__file__).resolve().parent.parent / "Strategy" / "main_strategy.py"
+    csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
     if not strategy_path.exists():
         logger.error("Cannot run Strategy: script not found at %s", strategy_path)
         return False
@@ -1050,19 +1079,51 @@ def _run_strategy_at_startup():
     print(f"   Strategy: {strategy_path}")
     print("   This may take a few minutes...")
 
-    try:
-        env = os.environ.copy()
-        ret = subprocess.call([sys.executable, str(strategy_path)], env=env)
-    except Exception as exc:
-        logger.error("Strategy startup run failed: %s", exc)
-        return False
+    attempt = 0
+    while True:
+        attempt += 1
+        attempt_suffix = (
+            f" (attempt {attempt}/{STRATEGY_STARTUP_MAX_ATTEMPTS})"
+            if STRATEGY_STARTUP_MAX_ATTEMPTS > 0
+            else f" (attempt {attempt})"
+        )
+        logger.info("Starting Strategy discovery at startup%s.", attempt_suffix)
 
-    if ret != 0:
-        logger.error("Strategy startup run failed with exit code %s", ret)
-        return False
+        try:
+            env = os.environ.copy()
+            ret = subprocess.call([sys.executable, str(strategy_path)], env=env)
+        except Exception as exc:
+            logger.error("Strategy startup run failed%s: %s", attempt_suffix, exc)
+            ret = None
 
-    logger.info("Strategy startup run completed successfully.")
-    return True
+        if ret == 0 and csv_path.exists() and csv_path.stat().st_size > 200:
+            logger.info("Strategy startup run completed successfully%s.", attempt_suffix)
+            return True
+
+        if ret is None:
+            logger.error("Strategy startup run could not start%s.", attempt_suffix)
+        elif ret != 0:
+            logger.error("Strategy startup run failed with exit code %s%s", ret, attempt_suffix)
+        else:
+            logger.error("Strategy startup completed%s but no pairs CSV data was produced.", attempt_suffix)
+
+        if STRATEGY_STARTUP_MAX_ATTEMPTS > 0 and attempt >= STRATEGY_STARTUP_MAX_ATTEMPTS:
+            logger.error(
+                "Strategy startup exhausted %d attempts without producing pairs.",
+                STRATEGY_STARTUP_MAX_ATTEMPTS,
+            )
+            return False
+
+        logger.warning(
+            "Strategy startup did not produce pairs%s. Retrying in %s seconds.",
+            attempt_suffix,
+            STRATEGY_STARTUP_RETRY_SECONDS,
+        )
+        logger.info(
+            "Sleeping for %s before retrying startup pair discovery.",
+            _format_uptime(STRATEGY_STARTUP_RETRY_SECONDS),
+        )
+        _sleep_with_progress(STRATEGY_STARTUP_RETRY_SECONDS, label="Sleeping")
 
 
 def _pair_meets_min_capital(t1, t2, per_leg_capital):

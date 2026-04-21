@@ -79,7 +79,7 @@ cointegration_zero_cross_threshold_ratio = _env_float("STATBOT_COINT_ZERO_CROSS_
 if cointegration_zero_cross_threshold_ratio < 0:
     cointegration_zero_cross_threshold_ratio = 0.0
 
-kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 10080)  # 7 days @ 1m bars (increased from 1440 for statistical validity)
+kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)  # 1 day @ 1m bars; avoid short-window zero-crossing starvation
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
@@ -97,7 +97,7 @@ if liquidity_pct < 0:
 if liquidity_pct > 1:
     liquidity_pct = 1.0
 min_orderbook_depth_usdt = _env_float("STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH", 5000.0)
-min_orderbook_levels = _env_int("STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS", 10)
+min_orderbook_levels = _env_int("STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS", 7)
 fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
 corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.60 if fast_path_enabled else 0.0)  # Increased from 0.2 - need strong correlation
 corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)

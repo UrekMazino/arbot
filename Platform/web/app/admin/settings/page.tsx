@@ -100,7 +100,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   // Strategy settings (exposed ones)
   STRATEGY_TIMEFRAME: { description: "Strategy candle timeframe used for discovery scans", default: "1m" },
   STRATEGY_Z_SCORE_WINDOW: { description: "Rolling window used for Strategy-side Z-score analytics", default: "60" },
-  STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "10080" },
+  STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "1440" },
   STRATEGY_STARTUP_RETRY_SECONDS: { description: "Sleep seconds between startup Strategy discovery retries when no pairs are found", default: "5" },
   STRATEGY_STARTUP_MAX_ATTEMPTS: { description: "Maximum startup Strategy discovery attempts before execution gives up; 0 retries forever", default: "0" },
   STRATEGY_SETTLE_CCY: { description: "Comma-separated settle currencies Strategy is allowed to scan", default: "USDT" },
@@ -120,7 +120,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   STRATEGY_MAX_HEDGE_RATIO: { description: "Maximum absolute hedge ratio allowed for a discovered pair", default: "3.0" },
   STRATEGY_MAX_PAIRS_PER_TICKER: { description: "Maximum cointegrated pairs per ticker", default: "10" },
   STRATEGY_MIN_ORDERBOOK_DEPTH: { description: "Minimum orderbook depth in USDT", default: "5000" },
-  STRATEGY_MIN_ORDERBOOK_LEVELS: { description: "Minimum orderbook levels required", default: "10" },
+  STRATEGY_MIN_ORDERBOOK_LEVELS: { description: "Minimum orderbook levels required", default: "7" },
   STRATEGY_EVAL_SECONDS: { description: "Seconds between strategy evaluation", default: "30" },
   REGIME_ROUTER_MODE: { description: "Regime detection router mode: off, shadow, or active", default: "off" },
   REGIME_EVAL_SECONDS: { description: "Seconds between regime evaluation", default: "30" },

@@ -129,3 +129,25 @@ def test_add_to_graveyard_stores_normalized_pair_key(tmp_path, monkeypatch):
     state = json.loads(state_file.read_text(encoding="utf-8"))
     assert "AAA-USDT-SWAP/BBB-USDT-SWAP" in state["graveyard"]
     assert "BBB-USDT-SWAP/AAA-USDT-SWAP" not in state["graveyard"]
+
+
+def test_startup_invalid_pair_preserves_existing_graveyard_reason(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "pair_strategy_state.json"
+
+    monkeypatch.setattr(fps, "_STATE_DIR", state_dir)
+    monkeypatch.setattr(fps, "STATE_FILE", state_file)
+    monkeypatch.setattr(fps.time, "time", lambda: 1000.0)
+
+    assert fps.add_to_graveyard("AAA-USDT-SWAP", "BBB-USDT-SWAP", reason="bad_history") is True
+
+    monkeypatch.setattr(fps.time, "time", lambda: 2000.0)
+    assert fps.add_to_graveyard("BBB-USDT-SWAP", "AAA-USDT-SWAP", reason="startup_invalid_pair") is False
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["graveyard"]["AAA-USDT-SWAP/BBB-USDT-SWAP"] == {
+        "ts": 1000.0,
+        "reason": "bad_history",
+        "ttl_days": 7,
+    }

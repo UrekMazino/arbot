@@ -735,12 +735,21 @@ def _graveyard_days_for_reason(reason):
 def add_to_graveyard(t1, t2, reason=""):
     state = load_pair_state()
     pair_key = normalize_pair_key(t1, t2) or f"{t1}/{t2}"
-    ttl_days = _graveyard_days_for_reason(reason)
-    state["graveyard"][pair_key] = {
-        "ts": time.time(),
-        "reason": str(reason or ""),
-        "ttl_days": ttl_days,
-    }
+    graveyard = state.get("graveyard", {})
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+    state["graveyard"] = graveyard
+
+    reason_text = str(reason or "")
+    existing_entry = graveyard.get(pair_key)
+    preserve_existing = reason_text.strip().lower() == "startup_invalid_pair" and existing_entry is not None
+    if not preserve_existing:
+        ttl_days = _graveyard_days_for_reason(reason_text)
+        graveyard[pair_key] = {
+            "ts": time.time(),
+            "reason": reason_text,
+            "ttl_days": ttl_days,
+        }
     hospital = state.get("hospital", {})
     hospital_key = normalize_pair_key(t1, t2)
     if hospital_key in hospital:
@@ -748,6 +757,7 @@ def add_to_graveyard(t1, t2, reason=""):
         state["hospital"] = hospital
     state["consecutive_losses"] = 0 # Reset losses when switching
     save_pair_state(state)
+    return not preserve_existing
 
 def add_restricted_ticker(ticker, code="", msg=""):
     if not ticker:

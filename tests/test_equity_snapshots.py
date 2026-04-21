@@ -102,3 +102,69 @@ def test_materializer_creates_equity_snapshots_and_run_summary():
         db.close()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+def test_heartbeat_equity_snapshots_use_dedupe_and_keepalive(monkeypatch):
+    from Platform.api.app.services import event_materializer
+
+    monkeypatch.setattr(event_materializer.settings, "equity_snapshot_min_change_usdt", 0.01)
+    monkeypatch.setattr(event_materializer.settings, "equity_snapshot_keepalive_seconds", 300)
+
+    engine, session_factory = _build_session_factory()
+    db = session_factory()
+    try:
+        bot = BotInstance(id="bot-1", name="default", environment="demo", is_active=True)
+        start_ts = datetime(2026, 4, 21, 5, 0, 0, tzinfo=timezone.utc)
+        run = Run(
+            id="run-db-2",
+            bot_instance_id=bot.id,
+            run_key="run_02_20260421_130000",
+            status="running",
+            start_ts=start_ts,
+            start_equity=1000.0,
+        )
+        db.add_all([bot, run])
+        db.flush()
+
+        events = [
+            _event(
+                run.id,
+                "evt-start",
+                start_ts,
+                "status_update",
+                {"status": "startup_complete", "starting_equity_usdt": 1000.0},
+            ),
+            _event(run.id, "evt-skip", start_ts + timedelta(seconds=60), "heartbeat", {"equity_usdt": 1000.0}),
+            _event(run.id, "evt-noise", start_ts + timedelta(seconds=120), "heartbeat", {"equity_usdt": 1000.005}),
+            _event(run.id, "evt-change", start_ts + timedelta(seconds=180), "heartbeat", {"equity_usdt": 1000.02}),
+            _event(run.id, "evt-state", start_ts + timedelta(seconds=240), "heartbeat", {"equity_usdt": 1000.02, "regime": "RANGE"}),
+            _event(run.id, "evt-keepalive", start_ts + timedelta(seconds=550), "heartbeat", {"equity_usdt": 1000.02, "regime": "RANGE"}),
+        ]
+        db.add_all(events)
+        db.flush()
+
+        for event in events:
+            materialize_run_entities_for_event(db, run, event)
+        db.commit()
+
+        snapshots = db.execute(
+            select(EquitySnapshot).order_by(EquitySnapshot.ts.asc())
+        ).scalars().all()
+
+        assert [row.source_event_id for row in snapshots] == [
+            "evt-start",
+            "evt-change",
+            "evt-state",
+            "evt-keepalive",
+        ]
+        assert float(snapshots[1].equity_usdt) == 1000.02
+        assert snapshots[2].regime == "RANGE"
+        assert snapshots[3].regime == "RANGE"
+
+        db.refresh(run)
+        assert float(run.end_equity) == 1000.02
+        assert float(run.session_pnl) == 0.02
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()

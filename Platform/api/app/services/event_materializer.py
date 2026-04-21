@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import (
     BotConfig,
     EquitySnapshot,
@@ -121,6 +122,51 @@ def _latest_runtime_event_ts(db: Session, run_id: str) -> datetime:
             return ts.replace(tzinfo=timezone.utc)
         return ts.astimezone(timezone.utc)
     return datetime.now(timezone.utc)
+
+
+def _latest_equity_snapshot(db: Session, run_id: str) -> EquitySnapshot | None:
+    return db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.run_id == run_id)
+        .order_by(desc(EquitySnapshot.ts), desc(EquitySnapshot.created_at), desc(EquitySnapshot.id))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _equity_snapshot_should_save_heartbeat(
+    latest: EquitySnapshot | None,
+    *,
+    ts: datetime,
+    equity_usdt: float,
+    current_pair: str | None,
+    regime: str | None,
+    strategy: str | None,
+    in_position: bool,
+) -> bool:
+    if latest is None:
+        return True
+
+    min_change = max(float(settings.equity_snapshot_min_change_usdt or 0.0), 0.0)
+    latest_equity = _coerce_float(latest.equity_usdt)
+    if latest_equity is None or abs(equity_usdt - latest_equity) >= min_change:
+        return True
+
+    if (latest.current_pair or None) != (current_pair or None):
+        return True
+    if (latest.regime or None) != (regime or None):
+        return True
+    if (latest.strategy or None) != (strategy or None):
+        return True
+    if bool(latest.in_position) != bool(in_position):
+        return True
+
+    keepalive_seconds = max(int(settings.equity_snapshot_keepalive_seconds or 0), 0)
+    if keepalive_seconds <= 0:
+        return False
+
+    latest_ts = latest.ts if latest.ts.tzinfo is not None else latest.ts.replace(tzinfo=timezone.utc)
+    current_ts = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+    return (current_ts - latest_ts).total_seconds() >= keepalive_seconds
 
 
 def _sync_bot_config_for_event(db: Session, run: Run, event: RunEvent) -> None:
@@ -327,11 +373,32 @@ def _sync_equity_snapshot_for_event(db: Session, run: Run, event: RunEvent) -> N
     if equity_usdt is None:
         return
 
+    current_pair = _normalize_pair_text(payload.get("current_pair") or payload.get("pair"))
+    regime = _normalize_upper(payload.get("regime"))
+    strategy = _normalize_upper(payload.get("strategy"))
+    in_position = bool(payload.get("in_position"))
+    latest_snapshot = _latest_equity_snapshot(db, run.id)
+
     existing = db.execute(
         select(EquitySnapshot)
         .where(EquitySnapshot.source_event_id == event.event_id)
         .limit(1)
     ).scalar_one_or_none()
+    if (
+        existing is None
+        and event_type == "heartbeat"
+        and not _equity_snapshot_should_save_heartbeat(
+            latest_snapshot,
+            ts=event.ts,
+            equity_usdt=equity_usdt,
+            current_pair=current_pair,
+            regime=regime,
+            strategy=strategy,
+            in_position=in_position,
+        )
+    ):
+        return
+
     snapshot = existing or EquitySnapshot(
         run_id=run.id,
         ts=event.ts,
@@ -358,10 +425,10 @@ def _sync_equity_snapshot_for_event(db: Session, run: Run, event: RunEvent) -> N
     snapshot.equity_usdt = equity_usdt
     snapshot.session_pnl_usdt = session_pnl_usdt
     snapshot.session_pnl_pct = session_pnl_pct
-    snapshot.current_pair = _normalize_pair_text(payload.get("current_pair") or payload.get("pair"))
-    snapshot.regime = _normalize_upper(payload.get("regime"))
-    snapshot.strategy = _normalize_upper(payload.get("strategy"))
-    snapshot.in_position = bool(payload.get("in_position"))
+    snapshot.current_pair = current_pair
+    snapshot.regime = regime
+    snapshot.strategy = strategy
+    snapshot.in_position = in_position
     snapshot.entry_z = _coerce_float(payload.get("entry_z"))
     snapshot.current_z = _coerce_float(payload.get("current_z"))
     snapshot.hold_minutes = _coerce_float(payload.get("hold_minutes"))

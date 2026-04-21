@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     event_ingest_key: str = ""
     event_allow_unauthenticated: bool = True
     event_publish_realtime: bool = True
+    equity_snapshot_min_change_usdt: float = 0.01
+    equity_snapshot_keepalive_seconds: int = 300
 
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in str(self.cors_origins or "").split(",") if item.strip()]

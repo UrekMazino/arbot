@@ -77,6 +77,31 @@ def _utc_iso_now() -> str:
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name != "nt":
+        wait_nohang = getattr(os, "WNOHANG", 1)
+        try:
+            waited_pid, _status = os.waitpid(pid, wait_nohang)
+            if waited_pid == pid:
+                return False
+        except ChildProcessError:
+            pass
+        except OSError:
+            pass
+        status_path = Path("/proc") / str(pid) / "status"
+        if status_path.exists():
+            try:
+                for line in status_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if line.startswith("State:"):
+                        state_code = line.split(":", 1)[1].strip().split()[0].upper()
+                        if state_code == "Z":
+                            try:
+                                os.waitpid(pid, wait_nohang)
+                            except Exception:
+                                pass
+                            return False
+                        break
+            except Exception:
+                pass
     try:
         os.kill(pid, 0)
     except OSError:
@@ -96,7 +121,9 @@ def _read_supply_state() -> dict[str, Any]:
 
 def _write_supply_state(data: dict[str, Any]) -> None:
     payload = dict(data or {})
-    payload["updated_at"] = _utc_iso_now()
+    updated_at = _utc_iso_now()
+    payload["updated_at"] = updated_at
+    data["updated_at"] = updated_at
     PAIR_SUPPLY_STATE.parent.mkdir(parents=True, exist_ok=True)
     PAIR_SUPPLY_STATE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

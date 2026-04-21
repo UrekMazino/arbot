@@ -63,3 +63,51 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     assert detail["pair"]["zero_crossing"] == 7
     assert len(detail["points"]) == 4
     assert detail["stats"]["zscore_current"] is not None
+
+
+def test_pair_supply_status_marks_zombie_or_reaped_pid_stopped(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "running": True,
+                "pid": 12345,
+                "started_at": "2026-04-21T00:00:00+00:00",
+                "stopped_at": None,
+                "detail": "started",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", state_path)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_LOG", log_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "_pid_exists", lambda _pid: False)
+
+    status = cp.get_pair_supply_status()
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert status["running"] is False
+    assert status["detail"] == "process_exited"
+    assert status["stopped_at"]
+    assert persisted["running"] is False
+    assert persisted["detail"] == "process_exited"
+    assert status["updated_at"] == persisted["updated_at"]
+
+
+def test_pid_exists_treats_reaped_child_as_stopped(monkeypatch):
+    monkeypatch.setattr(cp.os, "name", "posix", raising=False)
+    monkeypatch.setattr(cp.os, "waitpid", lambda pid, _flags: (pid, 0))
+
+    killed = []
+
+    def fake_kill(pid, signal_number):
+        killed.append((pid, signal_number))
+
+    monkeypatch.setattr(cp.os, "kill", fake_kill)
+
+    assert cp._pid_exists(12345) is False
+    assert killed == []

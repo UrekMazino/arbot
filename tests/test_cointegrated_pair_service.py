@@ -98,6 +98,63 @@ def test_pair_supply_status_marks_zombie_or_reaped_pid_stopped(monkeypatch, tmp_
     assert status["updated_at"] == persisted["updated_at"]
 
 
+def test_pair_supply_status_trusts_remote_runner_state(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "running": True,
+                "pid": 12345,
+                "started_at": "2026-04-21T00:00:00+00:00",
+                "stopped_at": None,
+                "detail": "started",
+                "process_mode": "runner",
+                "process_owner": "pair-supply-runner",
+                "runner_heartbeat_at": cp._utc_iso_now(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STATBOT_PROCESS_OWNER", "api")
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", state_path)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_LOG", log_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "_pid_exists", lambda _pid: False)
+
+    status = cp.get_pair_supply_status()
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert status["running"] is True
+    assert status["detail"] == "started"
+    assert persisted["running"] is True
+    assert "updated_at" not in persisted
+
+
+def test_pair_supply_status_rejects_reused_non_daemon_pid(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    state_path.write_text(
+        json.dumps({"running": True, "pid": 12345, "detail": "started"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", state_path)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_LOG", log_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp.os, "name", "posix", raising=False)
+    monkeypatch.setattr(cp, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(cp, "_read_process_cmdline", lambda _pid: ["python", "-m", "uvicorn", "app.main:app"])
+
+    status = cp.get_pair_supply_status()
+
+    assert status["running"] is False
+    assert status["detail"] == "process_exited"
+
+
 def test_pid_exists_treats_reaped_child_as_stopped(monkeypatch):
     monkeypatch.setattr(cp.os, "name", "posix", raising=False)
     monkeypatch.setattr(cp.os, "waitpid", lambda pid, _flags: (pid, 0))
@@ -111,3 +168,46 @@ def test_pid_exists_treats_reaped_child_as_stopped(monkeypatch):
 
     assert cp._pid_exists(12345) is False
     assert killed == []
+
+
+def test_pair_supply_runner_mode_records_start_request(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+
+    monkeypatch.setenv("STATBOT_PAIR_SUPPLY_PROCESS_MODE", "runner")
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", state_path)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_LOG", log_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+
+    result = cp.start_pair_supply(requested_by="tester@example.com")
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result["desired_running"] is True
+    assert persisted["detail"] == "start_requested"
+    assert persisted["process_mode"] == "runner"
+    assert persisted["requested_by"] == "tester@example.com"
+
+
+def test_pair_supply_runner_mode_records_stop_request(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    state_path.write_text(
+        json.dumps({"running": True, "pid": 12345, "detail": "started"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STATBOT_PAIR_SUPPLY_PROCESS_MODE", "runner")
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", state_path)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_LOG", log_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "_is_managed_pair_supply_process", lambda _pid: True)
+
+    result = cp.stop_pair_supply(requested_by="tester@example.com")
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert result["desired_running"] is False
+    assert persisted["detail"] == "stop_requested"
+    assert persisted["process_mode"] == "runner"
+    assert persisted["requested_by"] == "tester@example.com"

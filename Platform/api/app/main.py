@@ -46,16 +46,20 @@ def bootstrap_identity() -> None:
     try:
         for role_name, description in BUILTIN_ROLES.items():
             role = db.execute(select(Role).where(Role.name == role_name)).scalar_one_or_none()
+            builtin_permissions = list(BUILTIN_ROLE_PERMISSIONS.get(role_name, []))
             if not role:
                 db.add(
                     Role(
                         name=role_name,
                         description=description,
-                        permissions=BUILTIN_ROLE_PERMISSIONS.get(role_name, []),
+                        permissions=builtin_permissions,
                     )
                 )
-            elif not role.permissions:
-                role.permissions = list(BUILTIN_ROLE_PERMISSIONS.get(role_name, []))
+            else:
+                existing_permissions = list(role.permissions or [])
+                merged_permissions = list(dict.fromkeys([*existing_permissions, *builtin_permissions]))
+                if merged_permissions != existing_permissions:
+                    role.permissions = merged_permissions
         db.flush()
         admin_role = db.execute(select(Role).where(Role.name == "admin")).scalar_one()
 

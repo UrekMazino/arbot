@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -322,6 +324,26 @@ def test_normalize_status_rejects_reused_non_bot_pid(monkeypatch):
     assert result["detail"] == "stale_pid_reused"
 
 
+def test_normalize_status_trusts_remote_runner_state(monkeypatch):
+    monkeypatch.setenv("STATBOT_PROCESS_OWNER", "api")
+    monkeypatch.setattr(bot_control, "_pid_exists", lambda _pid: False)
+    monkeypatch.setattr(bot_control, "_latest_run_log_file", lambda: (None, None))
+
+    result = bot_control._normalize_status(
+        {
+            "running": True,
+            "pid": 13,
+            "detail": "started",
+            "process_mode": "runner",
+            "process_owner": "bot-runner",
+            "runner_heartbeat_at": bot_control._utc_iso_now(),
+        }
+    )
+
+    assert result["running"] is True
+    assert result["detail"] == "started"
+
+
 def test_bot_child_env_uses_internal_api_port_inside_docker(monkeypatch):
     monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
     monkeypatch.setattr(bot_control.Path, "exists", lambda self: str(self) == "/workspace")
@@ -354,3 +376,130 @@ def test_stop_bot_does_not_signal_reused_non_bot_pid(monkeypatch):
     assert result["running"] is False
     assert result["detail"] == "stale_pid_reused"
     assert writes[-1]["requested_by"] == "tester@example.com"
+
+
+def test_start_bot_runner_mode_records_start_request(monkeypatch):
+    writes = []
+
+    monkeypatch.setenv("STATBOT_BOT_PROCESS_MODE", "runner")
+    monkeypatch.setattr(bot_control, "get_bot_status", lambda: {"running": False, "pid": 0})
+    monkeypatch.setattr(bot_control, "_write_state", lambda state: writes.append(dict(state)))
+    monkeypatch.setattr(bot_control, "_normalize_status", lambda state: state)
+
+    result = bot_control.start_bot(requested_by="tester@example.com")
+
+    assert result["desired_running"] is True
+    assert result["detail"] == "start_requested"
+    assert writes[-1]["process_mode"] == "runner"
+    assert writes[-1]["requested_by"] == "tester@example.com"
+
+
+def test_stop_bot_runner_mode_records_stop_request(monkeypatch):
+    writes = []
+
+    monkeypatch.setenv("STATBOT_BOT_PROCESS_MODE", "runner")
+    monkeypatch.setattr(bot_control, "get_bot_status", lambda: {"running": True, "pid": 123, "detail": "started"})
+    monkeypatch.setattr(bot_control, "_write_state", lambda state: writes.append(dict(state)))
+    monkeypatch.setattr(bot_control, "_normalize_status", lambda state: state)
+
+    result = bot_control.stop_bot(requested_by="tester@example.com")
+
+    assert result["desired_running"] is False
+    assert result["detail"] == "stop_requested"
+    assert writes[-1]["process_mode"] == "runner"
+    assert writes[-1]["requested_by"] == "tester@example.com"
+
+
+def test_manual_switch_stopped_bot_sets_active_pair(tmp_path, monkeypatch):
+    active_pair_file = tmp_path / "Execution" / "state" / "active_pair.json"
+    manual_switch_file = tmp_path / "Execution" / "state" / "manual_pair_switch.json"
+    control_log = tmp_path / "Logs" / "v1" / "superadmin_bot_control.log"
+    fake_session = _FakeSession()
+
+    monkeypatch.setattr(bot_control, "ACTIVE_PAIR_FILE", active_pair_file)
+    monkeypatch.setattr(bot_control, "MANUAL_PAIR_SWITCH_FILE", manual_switch_file)
+    monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", control_log)
+    monkeypatch.setattr(bot_control, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(bot_control, "get_bot_status", lambda: {"running": False, "pid": 0})
+    monkeypatch.setattr(bot_control, "_latest_run_for_manual_switch", lambda _db, _status: None)
+    monkeypatch.setattr(bot_control, "_manual_switch_blockers", lambda _db, _run, bot_running=False: [])
+    monkeypatch.setattr(bot_control, "_manual_switch_target_in_pair_universe", lambda _t1, _t2: True)
+
+    result = bot_control.manual_switch_active_pair(
+        "aaa-usdt-swap",
+        "bbb-usdt-swap",
+        requested_by="tester@example.com",
+    )
+    active = json.loads(active_pair_file.read_text(encoding="utf-8"))
+
+    assert result["status"] == "applied"
+    assert result["running"] is False
+    assert active["ticker_1"] == "AAA-USDT-SWAP"
+    assert active["ticker_2"] == "BBB-USDT-SWAP"
+    assert not manual_switch_file.exists()
+    assert "Manual active pair set" in control_log.read_text(encoding="utf-8")
+
+
+def test_manual_switch_running_bot_writes_request_file(tmp_path, monkeypatch):
+    active_pair_file = tmp_path / "Execution" / "state" / "active_pair.json"
+    manual_switch_file = tmp_path / "Execution" / "state" / "manual_pair_switch.json"
+    control_log = tmp_path / "Logs" / "v1" / "superadmin_bot_control.log"
+    active_pair_file.parent.mkdir(parents=True)
+    active_pair_file.write_text(
+        json.dumps({"ticker_1": "OLD1-USDT-SWAP", "ticker_2": "OLD2-USDT-SWAP"}),
+        encoding="utf-8",
+    )
+    fake_session = _FakeSession()
+
+    monkeypatch.setattr(bot_control, "ACTIVE_PAIR_FILE", active_pair_file)
+    monkeypatch.setattr(bot_control, "MANUAL_PAIR_SWITCH_FILE", manual_switch_file)
+    monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", control_log)
+    monkeypatch.setattr(bot_control, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(bot_control, "get_bot_status", lambda: {"running": True, "pid": 123, "run_key": "run_01"})
+    monkeypatch.setattr(bot_control, "_latest_run_for_manual_switch", lambda _db, _status: None)
+    monkeypatch.setattr(bot_control, "_manual_switch_blockers", lambda _db, _run, bot_running=False: [])
+    monkeypatch.setattr(bot_control, "_manual_switch_target_in_pair_universe", lambda _t1, _t2: True)
+
+    result = bot_control.manual_switch_active_pair(
+        "AAA-USDT-SWAP",
+        "BBB-USDT-SWAP",
+        requested_by="tester@example.com",
+    )
+    request = json.loads(manual_switch_file.read_text(encoding="utf-8"))
+
+    assert result["status"] == "requested"
+    assert result["pending"] is True
+    assert request["status"] == "requested"
+    assert request["ticker_1"] == "AAA-USDT-SWAP"
+    assert request["ticker_2"] == "BBB-USDT-SWAP"
+    assert request["from_pair"] == "OLD1-USDT-SWAP/OLD2-USDT-SWAP"
+
+
+def test_manual_switch_blocked_when_runtime_reports_position(tmp_path, monkeypatch):
+    manual_switch_file = tmp_path / "Execution" / "state" / "manual_pair_switch.json"
+    control_log = tmp_path / "Logs" / "v1" / "superadmin_bot_control.log"
+    fake_session = _FakeSession()
+
+    monkeypatch.setattr(bot_control, "MANUAL_PAIR_SWITCH_FILE", manual_switch_file)
+    monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", control_log)
+    monkeypatch.setattr(bot_control, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(bot_control, "get_bot_status", lambda: {"running": True, "pid": 123, "run_key": "run_01"})
+    monkeypatch.setattr(bot_control, "_latest_run_for_manual_switch", lambda _db, _status: None)
+    monkeypatch.setattr(
+        bot_control,
+        "_manual_switch_blockers",
+        lambda _db, _run, bot_running=False: ["Latest heartbeat reports the bot is still in position/orders."],
+    )
+    monkeypatch.setattr(bot_control, "_manual_switch_target_in_pair_universe", lambda _t1, _t2: True)
+
+    with pytest.raises(bot_control.ManualPairSwitchBlocked) as exc_info:
+        bot_control.manual_switch_active_pair(
+            "AAA-USDT-SWAP",
+            "BBB-USDT-SWAP",
+            requested_by="tester@example.com",
+        )
+
+    assert exc_info.value.result["status"] == "blocked"
+    assert "position/orders" in exc_info.value.result["detail"]
+    assert not manual_switch_file.exists()
+    assert "Manual pair switch blocked" in control_log.read_text(encoding="utf-8")

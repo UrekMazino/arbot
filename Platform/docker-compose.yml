@@ -33,6 +33,7 @@ services:
   api:
     build:
       context: ./api
+    restart: unless-stopped
     depends_on:
       - postgres
       - redis
@@ -52,6 +53,8 @@ services:
       BOT_CONTROL_WORKSPACE_ROOT: /workspace
       BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
       STATBOT_EVENT_API_BASE: http://127.0.0.1:8080/api/v2
+      STATBOT_BOT_PROCESS_MODE: runner
+      STATBOT_PAIR_SUPPLY_PROCESS_MODE: runner
     ports:
       - "8082:8080"
     volumes:
@@ -61,6 +64,49 @@ services:
       sh -c "pip install --no-cache-dir -r /workspace/Platform/api/requirements.txt &&
              alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload --timeout-graceful-shutdown 5"
+
+  bot-runner:
+    build:
+      context: ./api
+    restart: unless-stopped
+    depends_on:
+      - api
+      - postgres
+      - redis
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg2://okxbot:okxbot@postgres:5432/okxbot_v2
+      REDIS_URL: redis://redis:6379/0
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
+      STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+      STATBOT_PROCESS_OWNER: bot-runner
+    volumes:
+      - ../:/workspace
+    working_dir: /workspace/Platform/api
+    command: >
+      sh -c "python -m app.process_runner bot"
+
+  pair-supply-runner:
+    build:
+      context: ./api
+    restart: unless-stopped
+    depends_on:
+      - api
+      - postgres
+      - redis
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg2://okxbot:okxbot@postgres:5432/okxbot_v2
+      REDIS_URL: redis://redis:6379/0
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+      STATBOT_PROCESS_OWNER: pair-supply-runner
+    volumes:
+      - ../:/workspace
+    working_dir: /workspace/Platform/api
+    command: >
+      sh -c "python -m app.process_runner pair-supply"
 
   worker:
     build:

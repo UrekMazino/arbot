@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..deps import get_current_user, get_db_session, get_user_permission_ids, require_permissions
 from ..models import User
 from ..services.bot_control import (
+    ManualPairSwitchBlocked,
     build_report_run_zip,
     clear_active_pair,
     clear_logs_and_reports,
@@ -17,6 +18,7 @@ from ..services.bot_control import (
     get_pair_health_data,
     get_report_run_file,
     get_report_run_summary,
+    manual_switch_active_pair,
     resolve_live_stream_target,
     list_log_runs,
     list_report_runs,
@@ -194,7 +196,7 @@ def admin_log_run_detail(
 @router.delete("/logs/runs/{run_key}")
 def admin_log_run_delete(
     run_key: str,
-    _: User = Depends(require_permissions("manage_bot")),
+    _: User = Depends(require_permissions("manage_logs_reports")),
 ):
     try:
         return delete_log_run(run_key)
@@ -281,14 +283,16 @@ def admin_env_settings_update(
 
 
 @router.get("/pairs/health")
-def admin_pairs_health(_: User = Depends(require_permissions("view_logs", "manage_bot"))):
+def admin_pairs_health(
+    _: User = Depends(require_permissions("view_pair_universe", "view_logs", "manage_bot", "switch_active_pair")),
+):
     return get_pair_health_data()
 
 
 @router.get("/cointegrated-pairs")
 def admin_cointegrated_pairs(
     limit: int = Query(default=500, ge=1, le=1000),
-    _: User = Depends(require_permissions("view_dashboard")),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     try:
         return list_cointegrated_pairs(limit=limit)
@@ -303,7 +307,7 @@ def admin_cointegrated_pair_detail(
     sym_1: str = Query(..., min_length=1),
     sym_2: str = Query(..., min_length=1),
     limit: int = Query(default=720, ge=50, le=2000),
-    _: User = Depends(require_permissions("view_dashboard")),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     try:
         return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit)
@@ -317,29 +321,48 @@ def admin_cointegrated_pair_detail(
 
 @router.get("/cointegrated-pairs/supply/status")
 def admin_cointegrated_pair_supply_status(
-    _: User = Depends(require_permissions("view_dashboard")),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     return get_pair_supply_status()
 
 
 @router.post("/cointegrated-pairs/supply/start")
 def admin_cointegrated_pair_supply_start(
-    user: User = Depends(require_permissions("manage_bot")),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
 ):
     return start_pair_supply(requested_by=user.email)
 
 
 @router.post("/cointegrated-pairs/supply/stop")
 def admin_cointegrated_pair_supply_stop(
-    user: User = Depends(require_permissions("manage_bot")),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
 ):
     return stop_pair_supply(requested_by=user.email)
 
 
 @router.post("/pairs/active/clear")
-def admin_clear_active_pair(user: User = Depends(require_permissions("manage_bot"))):
+def admin_clear_active_pair(user: User = Depends(require_permissions("switch_active_pair", "manage_bot"))):
     try:
         return clear_active_pair(requested_by=user.email)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/pairs/active/switch")
+def admin_manual_switch_active_pair(
+    payload: dict = Body(default_factory=dict),
+    user: User = Depends(require_permissions("switch_active_pair", "manage_bot")),
+):
+    try:
+        return manual_switch_active_pair(
+            sym_1=str(payload.get("sym_1") or payload.get("ticker_1") or ""),
+            sym_2=str(payload.get("sym_2") or payload.get("ticker_2") or ""),
+            requested_by=user.email,
+        )
+    except ManualPairSwitchBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.result.get("detail")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -347,7 +370,7 @@ def admin_clear_active_pair(user: User = Depends(require_permissions("manage_bot
 @router.post("/logs/clear")
 def admin_logs_clear(
     keep_latest: bool = Query(default=False),
-    user: User = Depends(require_permissions("manage_bot")),
+    _: User = Depends(require_permissions("manage_logs_reports")),
 ):
     """Clear log and report data, optionally preserving the newest run when requested."""
     return clear_logs_and_reports(keep_latest=keep_latest)

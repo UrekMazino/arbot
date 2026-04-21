@@ -213,12 +213,18 @@ export type RunReportArtifact = {
 export type AdminBotStatus = {
   running: boolean;
   pid: number;
+  desired_running?: boolean;
   started_at?: string | null;
   stopped_at?: string | null;
   detail?: string;
   command?: string[];
   cwd?: string;
   requested_by?: string;
+  process_mode?: string;
+  process_owner?: string;
+  request_updated_at?: string | null;
+  runner_owner?: string | null;
+  runner_heartbeat_at?: string | null;
   run_key?: string | null;
   run_log_file?: string | null;
   latest_run_key?: string | null;
@@ -347,6 +353,20 @@ export type AdminPairsHealth = {
   active_pair: Record<string, unknown> | null;
 };
 
+export type ManualPairSwitchResult = {
+  ok: boolean;
+  allowed: boolean;
+  status: string;
+  pending?: boolean;
+  detail: string;
+  requested_by: string;
+  previous_active_pair: Record<string, string> | null;
+  active_pair?: Record<string, string> | null;
+  target_pair: Record<string, string>;
+  running: boolean;
+  request_id: string;
+};
+
 export type CointegratedPair = {
   id: string;
   rank: number;
@@ -406,12 +426,18 @@ export type CointegratedPairDetail = {
 export type PairSupplyStatus = {
   running: boolean;
   pid: number;
+  desired_running?: boolean;
   started_at?: string | null;
   stopped_at?: string | null;
   detail?: string;
   command?: string[];
   cwd?: string;
   requested_by?: string;
+  process_mode?: string;
+  process_owner?: string;
+  request_updated_at?: string | null;
+  runner_owner?: string | null;
+  runner_heartbeat_at?: string | null;
   interval_seconds?: number;
   log_file?: string;
   status?: Record<string, unknown>;
@@ -720,6 +746,13 @@ export async function clearAdminActivePair(): Promise<{
   active_pair: null;
 }> {
   return apiRequest("/admin/pairs/active/clear", { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function switchAdminActivePair(sym1: string, sym2: string): Promise<ManualPairSwitchResult> {
+  return apiRequest<ManualPairSwitchResult>("/admin/pairs/active/switch", {
+    method: "POST",
+    body: JSON.stringify({ sym_1: sym1, sym_2: sym2 }),
+  });
 }
 
 export interface ClearLogsResult {

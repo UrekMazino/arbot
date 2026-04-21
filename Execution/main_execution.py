@@ -276,6 +276,7 @@ FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_4_divergence",
 }
 PAIR_SUPPLY_STATE_FILE = Path(__file__).resolve().parent / "state" / "pair_supply_control.json"
+MANUAL_PAIR_SWITCH_FILE = Path(__file__).resolve().parent / "state" / "manual_pair_switch.json"
 
 
 def _should_log_pnl(total_pnl):
@@ -1142,17 +1143,179 @@ def _pid_matches_pair_supply(pid):
     return True
 
 
+def _current_process_owner():
+    owner = str(os.getenv("STATBOT_PROCESS_OWNER", "execution") or "execution").strip()
+    return owner or "execution"
+
+
+def _is_remote_pair_supply_runner_state(state):
+    process_owner = str(state.get("process_owner") or "").strip()
+    process_mode = str(state.get("process_mode") or "").strip().lower()
+    return process_mode == "runner" and bool(process_owner) and process_owner != _current_process_owner()
+
+
+def _safe_pid(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _get_pair_supply_runtime_status():
     state = _read_pair_supply_state()
-    pid = state.get("pid")
-    running = bool(state.get("running")) and _pid_matches_pair_supply(pid)
+    pid = _safe_pid(state.get("pid"))
+    if _is_remote_pair_supply_runner_state(state):
+        running = bool(state.get("running"))
+    else:
+        running = bool(state.get("running")) and _pid_matches_pair_supply(pid)
     return {
         "running": running,
-        "pid": int(pid or 0) if str(pid or "").strip().isdigit() else 0,
+        "pid": pid,
         "detail": state.get("detail") or "",
         "started_at": state.get("started_at") or "",
         "interval_seconds": state.get("interval_seconds"),
+        "process_mode": state.get("process_mode") or "",
+        "process_owner": state.get("process_owner") or "",
+        "runner_heartbeat_at": state.get("runner_heartbeat_at") or "",
     }
+
+
+def _read_manual_pair_switch_request():
+    try:
+        if not MANUAL_PAIR_SWITCH_FILE.exists():
+            return None
+        data = json.loads(MANUAL_PAIR_SWITCH_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Could not read manual pair switch request: %s", exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    if str(data.get("status") or "").strip().lower() != "requested":
+        return None
+    next_t1 = str(data.get("ticker_1") or "").strip().upper()
+    next_t2 = str(data.get("ticker_2") or "").strip().upper()
+    if not next_t1 or not next_t2:
+        return None
+    return data
+
+
+def _mark_manual_pair_switch_request(request, status_text, detail="", blockers=None):
+    try:
+        payload = dict(request or {})
+        payload["status"] = str(status_text or "").strip() or "unknown"
+        payload["detail"] = str(detail or "").strip()
+        payload["blockers"] = list(blockers or [])
+        payload["updated_at"] = datetime.now().astimezone().isoformat()
+        if payload["status"] in {"applied", "rejected", "already_active"}:
+            payload["completed_at"] = payload["updated_at"]
+        MANUAL_PAIR_SWITCH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MANUAL_PAIR_SWITCH_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Could not update manual pair switch request status: %s", exc)
+
+
+def _reject_manual_pair_switch(request, blockers):
+    next_t1 = str(request.get("ticker_1") or "").strip().upper()
+    next_t2 = str(request.get("ticker_2") or "").strip().upper()
+    target_pair = f"{next_t1}/{next_t2}" if next_t1 and next_t2 else ""
+    blockers = [str(item).strip() for item in blockers if str(item).strip()]
+    detail = "; ".join(blockers) if blockers else "manual switch blocked"
+    logger.warning("Manual pair switch rejected: target=%s blockers=%s", target_pair or "n/a", detail)
+    _mark_manual_pair_switch_request(request, "rejected", detail, blockers)
+    emit_event(
+        "pair_switch",
+        payload={
+            "from_pair": f"{ticker_1}/{ticker_2}",
+            "to_pair": target_pair or None,
+            "reason": "manual_switch",
+            "status": SWITCH_RESULT_BLOCKED,
+            "requested_by": request.get("requested_by") or "",
+            "manual_request_id": request.get("id") or "",
+            "blockers": blockers,
+        },
+        severity="warn",
+        logger=logger,
+    )
+
+
+def _apply_manual_pair_switch_request(request, in_position_or_orders):
+    next_t1 = str(request.get("ticker_1") or "").strip().upper()
+    next_t2 = str(request.get("ticker_2") or "").strip().upper()
+    target_pair = f"{next_t1}/{next_t2}"
+    curr_t1, curr_t2 = ticker_1, ticker_2
+    current_pair = f"{ticker_1}/{ticker_2}"
+
+    blockers = []
+    if lock_on_pair:
+        blockers.append("lock_on_pair is enabled")
+    if in_position_or_orders:
+        blockers.append("active position or order is present")
+    if is_restricted_ticker(next_t1):
+        blockers.append(f"{next_t1} is ticker-restricted: {get_restricted_ticker_reason(next_t1) or 'restricted'}")
+    if is_restricted_ticker(next_t2):
+        blockers.append(f"{next_t2} is ticker-restricted: {get_restricted_ticker_reason(next_t2) or 'restricted'}")
+    if not next_t1 or not next_t2 or next_t1 == next_t2:
+        blockers.append("manual switch target is invalid")
+
+    if blockers:
+        _reject_manual_pair_switch(request, blockers)
+        return SWITCH_RESULT_BLOCKED
+
+    if target_pair == current_pair:
+        detail = f"{target_pair} is already active"
+        logger.info("Manual pair switch no-op: %s", detail)
+        _mark_manual_pair_switch_request(request, "already_active", detail)
+        return SWITCH_RESULT_BLOCKED
+
+    logger.warning(
+        "Manual pair switch requested by %s: %s -> %s",
+        request.get("requested_by") or "unknown",
+        current_pair,
+        target_pair,
+    )
+    if set_runtime_active_pair(next_t1, next_t2, persist=True):
+        try:
+            from func_regime_state import reset_regime_state
+            reset_regime_state(reason="pair_switch:manual_switch")
+            logger.info("Regime state reset after manual pair switch.")
+        except Exception as exc:
+            logger.warning("Failed to reset regime state after manual pair switch: %s", exc)
+        reset_health_failure(curr_t1, curr_t2)
+        set_last_switch_time()
+        _mark_manual_pair_switch_request(request, "applied", f"Switched to {target_pair}")
+        emit_event(
+            "pair_switch",
+            payload={
+                "from_pair": current_pair,
+                "to_pair": target_pair,
+                "reason": "manual_switch",
+                "status": SWITCH_RESULT_SWITCHED,
+                "requested_by": request.get("requested_by") or "",
+                "manual_request_id": request.get("id") or "",
+            },
+            severity="info",
+            flush=True,
+            logger=logger,
+        )
+        return SWITCH_RESULT_SWITCHED
+
+    detail = f"failed to persist manual switch target {target_pair}"
+    logger.error("Manual pair switch failed: %s", detail)
+    _mark_manual_pair_switch_request(request, "rejected", detail, [detail])
+    emit_event(
+        "pair_switch",
+        payload={
+            "from_pair": current_pair,
+            "to_pair": target_pair,
+            "reason": "manual_switch",
+            "status": SWITCH_RESULT_HARD_STOP,
+            "requested_by": request.get("requested_by") or "",
+            "manual_request_id": request.get("id") or "",
+        },
+        severity="error",
+        logger=logger,
+    )
+    return SWITCH_RESULT_HARD_STOP
 
 
 def _is_pair_supply_active():
@@ -2404,6 +2567,24 @@ if __name__ == "__main__":
             is_manage_new_trades = not any(checks_all)
             in_position_now = bool(is_p_open or is_n_open)
             in_position_or_orders = not is_manage_new_trades
+
+            manual_switch_request = _read_manual_pair_switch_request()
+            if manual_switch_request:
+                switch_result = _apply_manual_pair_switch_request(
+                    manual_switch_request,
+                    in_position_or_orders=in_position_or_orders,
+                )
+                if switch_result == SWITCH_RESULT_SWITCHED:
+                    status_dict["message"] = "Manual pair switch applied; restarting..."
+                    save_status(status_dict)
+                    logger.info("Restarting process via Subprocess Manager after manual pair switch (exit code 3).")
+                    print("Restarting to apply manually selected pair...")
+                    sys.exit(3)
+                if switch_result == SWITCH_RESULT_HARD_STOP:
+                    status_dict["message"] = "Manual pair switch failed"
+                    save_status(status_dict)
+                    logger.critical("Manual pair switch failed; hard stop.")
+                    sys.exit(1)
 
             if is_restricted_ticker(signal_positive_ticker) or is_restricted_ticker(signal_negative_ticker):
                 restricted_switch_reason = "restricted_ticker"

@@ -4,9 +4,14 @@ AVAILABLE_PERMISSION_IDS = (
     "view_dashboard",
     "view_analytics",
     "view_portfolio",
+    "view_pair_universe",
     "view_logs",
     "manage_bot",
+    "manage_pair_supply",
+    "switch_active_pair",
     "view_reports",
+    "generate_reports",
+    "manage_logs_reports",
     "edit_settings",
     "manage_api",
     "manage_users",
@@ -15,8 +20,26 @@ AVAILABLE_PERMISSION_IDS = (
 
 BUILTIN_ROLE_PERMISSIONS: dict[str, list[str]] = {
     "admin": list(AVAILABLE_PERMISSION_IDS),
-    "trader": ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "manage_bot", "view_reports"],
-    "viewer": ["view_dashboard", "view_analytics", "view_portfolio", "view_logs", "view_reports"],
+    "trader": [
+        "view_dashboard",
+        "view_analytics",
+        "view_portfolio",
+        "view_pair_universe",
+        "view_logs",
+        "manage_bot",
+        "manage_pair_supply",
+        "switch_active_pair",
+        "view_reports",
+        "generate_reports",
+    ],
+    "viewer": [
+        "view_dashboard",
+        "view_analytics",
+        "view_portfolio",
+        "view_pair_universe",
+        "view_logs",
+        "view_reports",
+    ],
 }
 
 

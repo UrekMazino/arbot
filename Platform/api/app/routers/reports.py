@@ -36,7 +36,7 @@ def _enqueue_report_job(run_id: str, report_id: str) -> str | None:
 @router.post("/runs/{run_id}/reports/generate")
 def generate_report(
     run_id: str,
-    user: User = Depends(require_permissions("view_reports")),
+    user: User = Depends(require_permissions("generate_reports")),
     db: Session = Depends(get_db_session),
 ):
     run = db.get(Run, run_id)

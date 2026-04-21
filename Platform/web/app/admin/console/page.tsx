@@ -37,6 +37,7 @@ import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
+  hasAnyPermission,
   hasPermission,
 } from "../../../lib/admin-access";
 import { clearStoredAdminSession, getStoredAdminEmail } from "../../../lib/auth";
@@ -98,6 +99,10 @@ function nextSearchIndex(currentIndex: number, totalMatches: number, direction: 
     return direction === 1 ? 0 : totalMatches - 1;
   }
   return (currentIndex + direction + totalMatches) % totalMatches;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function SearchBar({
@@ -480,7 +485,22 @@ export default function AdminConsolePage() {
   const canViewLogs = hasPermission(me, "view_logs");
   const canViewReports = hasPermission(me, "view_reports");
   const canManageBot = hasPermission(me, "manage_bot");
+  const canManageLogsReports = hasPermission(me, "manage_logs_reports");
+  const canSwitchActivePair = hasAnyPermission(me, ["switch_active_pair", "manage_bot"]);
+  const canViewPairUniverse = hasPermission(me, "view_pair_universe");
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
+  const botTargetRunning = botStatus?.desired_running ?? botStatus?.running ?? false;
+  const botTransitioning = Boolean(
+    botStatus && botStatus.desired_running !== undefined && botStatus.desired_running !== botStatus.running,
+  );
+  const botStatusLabel = botTransitioning
+    ? botTargetRunning
+      ? "starting"
+      : "stopping"
+    : botStatus?.running
+      ? "running"
+      : "stopped";
+  const botStatusTone = botTransitioning ? "warning" : botStatus?.running ? "success" : "error";
   // Use shared logTail from context when floating, otherwise use local state + SSE stream
   const displayLogTail = isFloating ? sharedLogTail : localLogTail;
   // Use SSE streamed lines when available and not floating
@@ -605,13 +625,15 @@ export default function AdminConsolePage() {
       const canLoadStatus = hasPermission(meData, "manage_bot") || hasPermission(meData, "view_logs");
       const canLoadLogs = hasPermission(meData, "view_logs");
       const canLoadReports = hasPermission(meData, "view_reports");
+      const canLoadPairHealth =
+        canLoadStatus || hasPermission(meData, "view_pair_universe") || hasPermission(meData, "switch_active_pair");
 
       // First load status and log runs to determine which run to load
       const [statusData, logsData, reportsData, healthData] = await Promise.all([
         canLoadStatus ? getAdminBotStatus() : Promise.resolve(null),
         canLoadLogs ? getAdminLogRuns() : Promise.resolve([] as AdminLogRun[]),
         canLoadReports ? getAdminReportRuns() : Promise.resolve([] as AdminReportRun[]),
-        canLoadStatus ? getAdminPairsHealth() : Promise.resolve(null),
+        canLoadPairHealth ? getAdminPairsHealth() : Promise.resolve(null),
       ]);
 
       setBotStatus(statusData);
@@ -783,7 +805,7 @@ export default function AdminConsolePage() {
   }, []);
 
   const handleDeleteRun = useCallback(async (runKey: string) => {
-    if (!canManageBot) return;
+    if (!canManageLogsReports) return;
     const targetRunKey = String(runKey || "").trim();
     if (!targetRunKey) return;
     setBusy(true);
@@ -805,7 +827,7 @@ export default function AdminConsolePage() {
         return;
       }
       if (isForbiddenError(err)) {
-        setError("Insufficient permissions to delete this log.");
+        setError("Insufficient permissions to delete logs and reports.");
         return;
       }
       const msg = err instanceof Error ? err.message : "Delete failed";
@@ -814,7 +836,7 @@ export default function AdminConsolePage() {
     } finally {
       setBusy(false);
     }
-  }, [canManageBot, logViewerRun, reportViewerRunKey, closeLogViewer, closeReportViewer, loadAdminData, clearAdminSession, setError]);
+  }, [canManageLogsReports, logViewerRun, reportViewerRunKey, closeLogViewer, closeReportViewer, loadAdminData, clearAdminSession, setError]);
 
   const requestDeleteRun = useCallback((runKey: string) => {
     const targetRunKey = String(runKey || "").trim();
@@ -832,6 +854,7 @@ export default function AdminConsolePage() {
   }, [showActionConfirm, handleDeleteRun]);
 
   const handleClearLogsAndReports = useCallback(async () => {
+    if (!canManageLogsReports) return;
     setBusy(true);
     try {
       const result = await clearAdminLogs(false);
@@ -865,11 +888,15 @@ export default function AdminConsolePage() {
       closeReportViewer();
       await loadAdminData();
     } catch (err) {
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to clear logs and reports.");
+        return;
+      }
       alert("Failed to clear logs and reports: " + (err instanceof Error ? err.message : "Unknown error"));
     } finally {
       setBusy(false);
     }
-  }, [closeReportViewer, loadAdminData]);
+  }, [canManageLogsReports, closeReportViewer, loadAdminData, setError]);
 
   const requestClearLogsAndReports = useCallback(() => {
     showActionConfirm({
@@ -885,7 +912,7 @@ export default function AdminConsolePage() {
   }, [showActionConfirm, handleClearLogsAndReports]);
 
   const handleClearActivePair = useCallback(async () => {
-    if (!canManageBot) return;
+    if (!canSwitchActivePair) return;
     setBusy(true);
     setError("");
     try {
@@ -907,7 +934,7 @@ export default function AdminConsolePage() {
     } finally {
       setBusy(false);
     }
-  }, [canManageBot, loadAdminData, clearAdminSession, setError]);
+  }, [canSwitchActivePair, loadAdminData, clearAdminSession, setError]);
 
   const requestClearActivePair = useCallback(() => {
     showActionConfirm({
@@ -1199,7 +1226,7 @@ export default function AdminConsolePage() {
     let isMounted = true;
     let inFlight = false;
     const timer = window.setInterval(async () => {
-      if (!canManageBot && !canViewLogs) return;
+      if (!canManageBot && !canViewLogs && !canSwitchActivePair && !canViewPairUniverse) return;
       if (inFlight) return;
 
       inFlight = true;
@@ -1222,6 +1249,8 @@ export default function AdminConsolePage() {
     canViewConsole,
     canManageBot,
     canViewLogs,
+    canSwitchActivePair,
+    canViewPairUniverse,
     setPairsHealth,
   ]);
 
@@ -1235,7 +1264,9 @@ export default function AdminConsolePage() {
       setWaitingForRun(true);
       const next = await startAdminBot();
       setBotStatus(next);
-      const nextRunKey = String(next.run_key || next.latest_run_key || "latest").trim() || "latest";
+      const settled = await pollBotStatus(true);
+      const effectiveStatus = settled || next;
+      const nextRunKey = String(effectiveStatus.run_key || effectiveStatus.latest_run_key || "latest").trim() || "latest";
       if (nextRunKey !== "latest" && nextRunKey !== "__control__") {
         setWaitingForRun(false);
         setLastKnownRunKey(null);
@@ -1270,6 +1301,7 @@ export default function AdminConsolePage() {
     try {
       const next = await stopAdminBot();
       setBotStatus(next);
+      await pollBotStatus(false);
       setStatus("Bot stop requested");
     } catch (err) {
       if (isUnauthorizedError(err)) {
@@ -1286,6 +1318,18 @@ export default function AdminConsolePage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function pollBotStatus(expectedRunning: boolean): Promise<AdminBotStatus | null> {
+    let latest: AdminBotStatus | null = null;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await sleep(attempt === 0 ? 400 : 750);
+      latest = await getAdminBotStatus();
+      setBotStatus(latest);
+      const latestTarget = latest.desired_running ?? latest.running;
+      if (latestTarget === expectedRunning && latest.running === expectedRunning) break;
+    }
+    return latest;
   }
 
   async function handleRefreshAll() {
@@ -1468,17 +1512,17 @@ export default function AdminConsolePage() {
                     <div className="flex gap-2">
                       <button
                         onClick={handleStart}
-                        disabled={busy || Boolean(botStatus?.running)}
+                        disabled={busy || botTargetRunning}
                         className={primaryButtonClasses}
                       >
-                        Start Bot
+                        {botTransitioning && botTargetRunning ? "Starting..." : "Start Bot"}
                       </button>
                       <button
                         className="inline-flex items-center rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
                         onClick={handleStop}
-                        disabled={busy || !botStatus?.running}
+                        disabled={busy || !botTargetRunning}
                       >
-                        Stop Bot
+                        {botTransitioning && !botTargetRunning ? "Stopping..." : "Stop Bot"}
                       </button>
                     </div>
                   ) : null
@@ -1488,7 +1532,7 @@ export default function AdminConsolePage() {
                   <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                     <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Status</p>
-                      <div className="mt-1.5"><StatusPill label={botStatus?.running ? "running" : "stopped"} tone={botStatus?.running ? "success" : "error"} /></div>
+                      <div className="mt-1.5"><StatusPill label={botStatusLabel} tone={botStatusTone} /></div>
                     </div>
                     <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
@@ -2026,15 +2070,17 @@ export default function AdminConsolePage() {
 
         {activeTab === "logs" && (
           <section className="flex flex-1 min-h-0 flex-col gap-2 overflow-hidden">
-            <div className="shrink-0 flex justify-end">
-              <button
-                className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
-                onClick={requestClearLogsAndReports}
-                disabled={busy}
-              >
-                Clear Logs and Reports
-              </button>
-            </div>
+            {canManageLogsReports ? (
+              <div className="shrink-0 flex justify-end">
+                <button
+                  className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
+                  onClick={requestClearLogsAndReports}
+                  disabled={busy}
+                >
+                  Clear Logs and Reports
+                </button>
+              </div>
+            ) : null}
             <PanelCard
               title="Logs & Reports"
               subtitle="View full logs from the run name. Deleting the selected run clears both its log and report data."
@@ -2044,7 +2090,7 @@ export default function AdminConsolePage() {
                   <span className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 py-1 font-mono text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
                     {selectedArtifactsRunKey || "No run selected"}
                   </span>
-                  {canManageBot ? (
+                  {canManageLogsReports ? (
                     <button
                       type="button"
                       onClick={() => requestDeleteRun(selectedArtifactsRunKey)}
@@ -2182,7 +2228,7 @@ export default function AdminConsolePage() {
             <PanelCard
               title="Active Pair"
               actions={
-                canManageBot ? (
+                canSwitchActivePair ? (
                   <button
                     type="button"
                     onClick={requestClearActivePair}

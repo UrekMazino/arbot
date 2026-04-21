@@ -42,7 +42,7 @@ from ..models import (
     StrategyMetric,
     Trade,
 )
-from .run_pair_segments import list_run_pair_history_rows_by_run_key
+from .run_pair_segments import list_run_pair_history_rows_by_run_key, sync_run_pair_segments_for_event
 
 
 def _utc_iso_now() -> str:
@@ -117,10 +117,23 @@ def _parse_iso_timestamp(value: str | None) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
         return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
     try:
         return datetime.fromisoformat(raw)
     except ValueError:
         return None
+
+
+def _env_float(name: str, default: float, minimum: float | None = None) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
 
 
 def _configured_log_timezone_name() -> str:
@@ -222,6 +235,28 @@ def _is_managed_bot_process(pid: int) -> bool:
         except Exception:
             continue
     return False
+
+
+def _current_process_owner() -> str:
+    owner = str(os.getenv("STATBOT_PROCESS_OWNER", "api") or "api").strip()
+    return owner or "api"
+
+
+def _is_remote_runner_state(data: dict) -> bool:
+    process_owner = str(data.get("process_owner") or "").strip()
+    process_mode = str(data.get("process_mode") or "").strip().lower()
+    return process_mode == "runner" and bool(process_owner) and process_owner != _current_process_owner()
+
+
+def _remote_runner_heartbeat_stale(data: dict) -> bool:
+    heartbeat = _parse_iso_timestamp(data.get("runner_heartbeat_at"))
+    if heartbeat is None:
+        return True
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    max_age_seconds = _env_float("STATBOT_RUNNER_HEARTBEAT_STALE_SECONDS", 20.0, minimum=5.0)
+    age_seconds = (datetime.now(timezone.utc) - heartbeat.astimezone(timezone.utc)).total_seconds()
+    return age_seconds > max_age_seconds
 
 
 def _read_state() -> dict:
@@ -836,8 +871,15 @@ def resolve_live_stream_target(run_key: str | None = None) -> dict:
 def _normalize_status(state: dict) -> dict:
     data = dict(state or {})
     pid = int(data.get("pid") or 0)
-    pid_alive = _pid_exists(pid)
-    running = _is_managed_bot_process(pid)
+    if _is_remote_runner_state(data):
+        running = bool(data.get("running"))
+        if running and _remote_runner_heartbeat_stale(data):
+            running = False
+            data["detail"] = "runner_stale"
+        pid_alive = running
+    else:
+        pid_alive = _pid_exists(pid)
+        running = _is_managed_bot_process(pid)
     data["pid"] = pid
     data["running"] = running
     if not running and pid > 0:
@@ -861,7 +903,32 @@ def get_bot_status() -> dict:
     return normalized
 
 
-def start_bot(requested_by: str | None = None) -> dict:
+def _use_bot_runner_mode() -> bool:
+    mode = str(os.getenv("STATBOT_BOT_PROCESS_MODE", "local") or "local").strip().lower()
+    return mode in {"docker", "external", "runner"}
+
+
+def _request_bot_runner(desired_running: bool, requested_by: str | None = None) -> dict:
+    state = get_bot_status()
+    running = bool(state.get("running"))
+    state["desired_running"] = bool(desired_running)
+    state["requested_by"] = requested_by or state.get("requested_by", "")
+    state["request_updated_at"] = _utc_iso_now()
+    state["process_mode"] = "runner"
+    if desired_running:
+        state["detail"] = "already_running" if running else "start_requested"
+        if not running:
+            state["stopped_at"] = None
+    else:
+        state["detail"] = "stop_requested" if running else "already_stopped"
+        if not running:
+            state["running"] = False
+            state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
+    _write_state(state)
+    return _normalize_status(state)
+
+
+def _start_bot_local(requested_by: str | None = None) -> dict:
     status = get_bot_status()
     if status.get("running"):
         status["detail"] = "already_running"
@@ -944,6 +1011,8 @@ def start_bot(requested_by: str | None = None) -> dict:
         "run_log_file": str(run_log_file),
         "starting_equity": None,
         "run_start_time": None,
+        "desired_running": True,
+        "process_owner": str(os.getenv("STATBOT_PROCESS_OWNER", "api") or "api"),
     }
     _write_state(state)
 
@@ -959,6 +1028,12 @@ def start_bot(requested_by: str | None = None) -> dict:
     snapshot_thread.start()
 
     return _normalize_status(state)
+
+
+def start_bot(requested_by: str | None = None) -> dict:
+    if _use_bot_runner_mode():
+        return _request_bot_runner(True, requested_by=requested_by)
+    return _start_bot_local(requested_by=requested_by)
 
 
 def _save_run_to_database(run_key: str, requested_by: str | None = None) -> dict:
@@ -1004,7 +1079,7 @@ def _send_stop_signal(pid: int, sig: int) -> None:
     os.kill(pid, sig)
 
 
-def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
+def _stop_bot_local(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
     state = get_bot_status()
     pid = int(state.get("pid") or 0)
     run_key = str(state.get("run_key") or "").strip()
@@ -1014,6 +1089,7 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
         state["detail"] = "already_stopped"
         state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
         state["requested_by"] = requested_by or state.get("requested_by", "")
+        state["desired_running"] = False
         _write_state(state)
         return state
 
@@ -1022,6 +1098,7 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
         state["detail"] = "stale_pid_reused" if _pid_exists(pid) else "process_exited"
         state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
         state["requested_by"] = requested_by or state.get("requested_by", "")
+        state["desired_running"] = False
         _write_state(state)
         return _normalize_status(state)
 
@@ -1067,6 +1144,7 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
     state["stopped_at"] = _utc_iso_now()
     state["detail"] = "stopped" if terminated else detail
     state["requested_by"] = requested_by or state.get("requested_by", "")
+    state["desired_running"] = False
     _write_state(state)
     if terminated and run_key:
         fallback_result = _ensure_manual_stop_artifacts(
@@ -1079,6 +1157,12 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
             state["detail"] = str(fallback_result.get("detail"))
             _write_state(state)
     return _normalize_status(state)
+
+
+def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> dict:
+    if _use_bot_runner_mode():
+        return _request_bot_runner(False, requested_by=requested_by)
+    return _stop_bot_local(requested_by=requested_by, timeout_seconds=timeout_seconds)
 
 
 def tail_run_log(run_key: str | None = None, lines: int = 400) -> dict:
@@ -1878,8 +1962,16 @@ def update_env_setting(key: str, value: str) -> dict:
 
 PAIR_STRATEGY_STATE_FILE = EXECUTION_ROOT / "state" / "pair_strategy_state.json"
 ACTIVE_PAIR_FILE = EXECUTION_ROOT / "state" / "active_pair.json"
+MANUAL_PAIR_SWITCH_FILE = EXECUTION_ROOT / "state" / "manual_pair_switch.json"
 GRAVEYARD_TICKERS_FILE = EXECUTION_ROOT / "state" / "graveyard_tickers.json"
 TICKER_GRAVEYARD_PREFIX = "ticker::"
+TICKER_ID_RE = re.compile(r"^[A-Z0-9]+-[A-Z]+-SWAP$")
+
+
+class ManualPairSwitchBlocked(RuntimeError):
+    def __init__(self, result: dict):
+        self.result = result
+        super().__init__(str(result.get("detail") or "Manual pair switch blocked"))
 
 
 def _read_json_object(path: Path) -> dict:
@@ -1890,6 +1982,307 @@ def _read_json_object(path: Path) -> dict:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _write_json_object(path: Path, data: dict) -> None:
+    payload = dict(data or {})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _normalize_ticker_id(value: object) -> str:
+    ticker = str(value or "").strip().upper()
+    if not ticker or not TICKER_ID_RE.match(ticker):
+        raise ValueError(f"Invalid OKX swap ticker: {value}")
+    return ticker
+
+
+def _pair_key(ticker_1: str | None, ticker_2: str | None) -> str | None:
+    t1 = str(ticker_1 or "").strip().upper()
+    t2 = str(ticker_2 or "").strip().upper()
+    if not t1 or not t2:
+        return None
+    return f"{t1}/{t2}"
+
+
+def _read_active_pair() -> dict | None:
+    active = _read_json_object(ACTIVE_PAIR_FILE)
+    t1 = str(active.get("ticker_1") or "").strip().upper()
+    t2 = str(active.get("ticker_2") or "").strip().upper()
+    if not t1 or not t2:
+        return None
+    return {"ticker_1": t1, "ticker_2": t2, "pair": f"{t1}/{t2}"}
+
+
+def _write_active_pair(ticker_1: str, ticker_2: str) -> None:
+    _write_json_object(
+        ACTIVE_PAIR_FILE,
+        {
+            "ticker_1": ticker_1,
+            "ticker_2": ticker_2,
+            "updated_at": _utc_iso_now(),
+            "source": "manual_dashboard_switch",
+        },
+    )
+
+
+def _append_control_log(level: str, message: str) -> None:
+    try:
+        CONTROL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ts = _log_now()
+        timestamp_text = f"{ts.strftime('%Y-%m-%d %H:%M:%S')},{int(ts.microsecond / 1000):03d}"
+        with CONTROL_LOG_FILE.open("a", encoding="utf-8", errors="ignore") as handle:
+            handle.write(f"{timestamp_text} {str(level or 'INFO').upper()} {message}\n")
+    except Exception:
+        pass
+
+
+def _manual_switch_target_in_pair_universe(ticker_1: str, ticker_2: str) -> bool:
+    try:
+        from .cointegrated_pairs import list_cointegrated_pairs
+
+        universe = list_cointegrated_pairs(limit=1000)
+        target = {ticker_1, ticker_2}
+        for pair in universe.get("pairs", []):
+            if {str(pair.get("sym_1") or "").strip().upper(), str(pair.get("sym_2") or "").strip().upper()} == target:
+                return True
+    except Exception:
+        return True
+    return False
+
+
+def _latest_run_for_manual_switch(db: Session, bot_status: dict) -> Run | None:
+    run_key = str(bot_status.get("run_key") or bot_status.get("latest_run_key") or "").strip()
+    if run_key:
+        run = db.execute(select(Run).where(Run.run_key == run_key)).scalar_one_or_none()
+        if run:
+            return run
+    return db.execute(
+        select(Run)
+        .order_by(Run.start_ts.desc(), Run.created_at.desc(), Run.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_event_payload(db: Session, run_id: str, event_type: str) -> dict:
+    row = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type == event_type)
+        .order_by(RunEvent.ts.desc(), RunEvent.created_at.desc(), RunEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if row and isinstance(row.payload_json, dict):
+        return row.payload_json
+    return {}
+
+
+def _manual_switch_blockers(db: Session, run: Run | None, *, bot_running: bool) -> list[str]:
+    if run is None:
+        return []
+
+    blockers: list[str] = []
+    latest_equity = db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.run_id == run.id)
+        .order_by(EquitySnapshot.ts.desc(), EquitySnapshot.created_at.desc(), EquitySnapshot.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if latest_equity is not None and bool(latest_equity.in_position):
+        pair = str(latest_equity.current_pair or "").strip() or "the active pair"
+        blockers.append(f"Latest runtime snapshot reports an open position/order on {pair}.")
+
+    heartbeat_payload = _latest_event_payload(db, run.id, "heartbeat")
+    if bool(heartbeat_payload.get("in_position")):
+        pair = str(heartbeat_payload.get("current_pair") or heartbeat_payload.get("pair") or "").strip() or "the active pair"
+        blockers.append(f"Latest heartbeat reports the bot is still in position/orders on {pair}.")
+
+    open_trade = db.execute(
+        select(Trade)
+        .where(Trade.run_id == run.id, Trade.exit_ts.is_(None))
+        .order_by(Trade.entry_ts.desc().nullslast(), Trade.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if open_trade is not None and (bot_running or str(run.status or "").strip().lower() == "running"):
+        blockers.append(f"Open trade record exists for {open_trade.pair_key}; wait for it to close before switching.")
+
+    return list(dict.fromkeys(blockers))
+
+
+def _record_manual_pair_switch_event(
+    db: Session,
+    run: Run | None,
+    *,
+    request_id: str,
+    requested_by: str | None,
+    from_pair: str | None,
+    to_pair: str,
+    status_text: str,
+    reason: str,
+    blockers: list[str] | None = None,
+    severity: str = "info",
+) -> RunEvent | None:
+    if run is None:
+        return None
+    row = RunEvent(
+        event_id=str(uuid.uuid4()),
+        run_id=run.id,
+        bot_instance_id=run.bot_instance_id,
+        ts=datetime.now(timezone.utc),
+        event_type="pair_switch",
+        severity=str(severity or "info").lower(),
+        payload_json={
+            "from_pair": from_pair,
+            "to_pair": to_pair,
+            "reason": reason,
+            "status": status_text,
+            "requested_by": requested_by or "",
+            "manual_request_id": request_id,
+            "blockers": blockers or [],
+        },
+    )
+    db.add(row)
+    db.flush()
+    sync_run_pair_segments_for_event(db, run, row)
+    return row
+
+
+def manual_switch_active_pair(
+    sym_1: str,
+    sym_2: str,
+    requested_by: str | None = None,
+) -> dict:
+    """Request a manual active-pair switch from the Cointegration dashboard."""
+    ticker_1_next = _normalize_ticker_id(sym_1)
+    ticker_2_next = _normalize_ticker_id(sym_2)
+    if ticker_1_next == ticker_2_next:
+        raise ValueError("Manual pair switch requires two different tickers.")
+    if not _manual_switch_target_in_pair_universe(ticker_1_next, ticker_2_next):
+        raise ValueError(f"{ticker_1_next}/{ticker_2_next} is not in the current Pair Universe.")
+
+    target_pair = f"{ticker_1_next}/{ticker_2_next}"
+    previous = _read_active_pair()
+    from_pair = previous.get("pair") if previous else None
+    request_id = str(uuid.uuid4())
+    bot_status = get_bot_status()
+    bot_running = bool(bot_status.get("running"))
+
+    db: Session = SessionLocal()
+    try:
+        run = _latest_run_for_manual_switch(db, bot_status)
+        blockers = _manual_switch_blockers(db, run, bot_running=bot_running)
+        if blockers:
+            detail = "Manual pair switch is not allowed because " + " ".join(blockers)
+            _record_manual_pair_switch_event(
+                db,
+                run,
+                request_id=request_id,
+                requested_by=requested_by,
+                from_pair=from_pair,
+                to_pair=target_pair,
+                status_text="blocked",
+                reason="manual_switch",
+                blockers=blockers,
+                severity="warn",
+            )
+            db.commit()
+            _append_control_log(
+                "WARNING",
+                f"Manual pair switch blocked by {requested_by or 'unknown'}: from={from_pair or 'n/a'} to={target_pair} blockers={' | '.join(blockers)}",
+            )
+            raise ManualPairSwitchBlocked(
+                {
+                    "ok": False,
+                    "allowed": False,
+                    "status": "blocked",
+                    "detail": detail,
+                    "blockers": blockers,
+                    "requested_by": requested_by or "",
+                    "previous_active_pair": previous,
+                    "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
+                    "running": bot_running,
+                    "request_id": request_id,
+                }
+            )
+
+        if from_pair == target_pair:
+            detail = f"{target_pair} is already the active pair."
+            _append_control_log("INFO", f"Manual pair switch no-op by {requested_by or 'unknown'}: {target_pair} is already active")
+            return {
+                "ok": True,
+                "allowed": True,
+                "status": "already_active",
+                "detail": detail,
+                "requested_by": requested_by or "",
+                "previous_active_pair": previous,
+                "active_pair": previous,
+                "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
+                "running": bot_running,
+                "request_id": request_id,
+            }
+
+        if bot_running:
+            request = {
+                "id": request_id,
+                "status": "requested",
+                "ticker_1": ticker_1_next,
+                "ticker_2": ticker_2_next,
+                "pair": target_pair,
+                "requested_by": requested_by or "",
+                "requested_at": _utc_iso_now(),
+                "from_pair": from_pair,
+            }
+            _write_json_object(MANUAL_PAIR_SWITCH_FILE, request)
+            _record_manual_pair_switch_event(
+                db,
+                run,
+                request_id=request_id,
+                requested_by=requested_by,
+                from_pair=from_pair,
+                to_pair=target_pair,
+                status_text="requested",
+                reason="manual_switch",
+                severity="info",
+            )
+            db.commit()
+            _append_control_log(
+                "INFO",
+                f"Manual pair switch requested by {requested_by or 'unknown'}: from={from_pair or 'n/a'} to={target_pair}; waiting for execution loop safety check",
+            )
+            return {
+                "ok": True,
+                "allowed": True,
+                "status": "requested",
+                "pending": True,
+                "detail": f"Manual switch to {target_pair} requested. The running bot will apply it after its safety check.",
+                "requested_by": requested_by or "",
+                "previous_active_pair": previous,
+                "active_pair": previous,
+                "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
+                "running": bot_running,
+                "request_id": request_id,
+            }
+
+        _write_active_pair(ticker_1_next, ticker_2_next)
+        active_pair = _read_active_pair()
+        _append_control_log(
+            "INFO",
+            f"Manual active pair set by {requested_by or 'unknown'} while bot stopped: from={from_pair or 'n/a'} to={target_pair}",
+        )
+        return {
+            "ok": True,
+            "allowed": True,
+            "status": "applied",
+            "pending": False,
+            "detail": f"Active pair set to {target_pair}. The next bot start will use this pair.",
+            "requested_by": requested_by or "",
+            "previous_active_pair": previous,
+            "active_pair": active_pair,
+            "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
+            "running": bot_running,
+            "request_id": request_id,
+        }
+    finally:
+        db.close()
 
 
 def _normalize_restricted_ticker_entry(ticker: str, entry: object, default_source: str) -> dict | None:

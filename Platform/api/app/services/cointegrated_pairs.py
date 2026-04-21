@@ -74,6 +74,21 @@ def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -109,6 +124,55 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def _read_process_cmdline(pid: int) -> list[str]:
+    if pid <= 0 or os.name == "nt":
+        return []
+    cmdline_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = cmdline_path.read_bytes()
+    except Exception:
+        return []
+    return [
+        part.decode("utf-8", errors="ignore")
+        for part in raw.split(b"\0")
+        if part
+    ]
+
+
+def _is_managed_pair_supply_process(pid: int) -> bool:
+    if not _pid_exists(pid):
+        return False
+    if os.name == "nt":
+        return True
+
+    cmdline = _read_process_cmdline(pid)
+    if not cmdline:
+        return False
+    joined = " ".join(cmdline).replace("\\", "/")
+    return "pair_supply_daemon.py" in joined
+
+
+def _current_process_owner() -> str:
+    owner = str(os.getenv("STATBOT_PROCESS_OWNER", "api") or "api").strip()
+    return owner or "api"
+
+
+def _is_remote_runner_state(state: dict[str, Any]) -> bool:
+    process_owner = str(state.get("process_owner") or "").strip()
+    process_mode = str(state.get("process_mode") or "").strip().lower()
+    return process_mode == "runner" and bool(process_owner) and process_owner != _current_process_owner()
+
+
+def _remote_runner_heartbeat_stale(state: dict[str, Any]) -> bool:
+    heartbeat = _parse_iso_timestamp(state.get("runner_heartbeat_at"))
+    if heartbeat is None:
+        return True
+    max_age_seconds = _safe_float(os.getenv("STATBOT_RUNNER_HEARTBEAT_STALE_SECONDS")) or 20.0
+    max_age_seconds = max(float(max_age_seconds), 5.0)
+    age_seconds = (datetime.now(timezone.utc) - heartbeat).total_seconds()
+    return age_seconds > max_age_seconds
+
+
 def _read_supply_state() -> dict[str, Any]:
     if not PAIR_SUPPLY_STATE.exists():
         return {}
@@ -142,11 +206,18 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
 def get_pair_supply_status() -> dict[str, Any]:
     state = _read_supply_state()
     pid = int(state.get("pid") or 0)
-    running = _pid_exists(pid)
+    if _is_remote_runner_state(state):
+        running = bool(state.get("running"))
+        if running and _remote_runner_heartbeat_stale(state):
+            running = False
+            state["detail"] = "runner_stale"
+    else:
+        running = _is_managed_pair_supply_process(pid)
     if pid > 0 and not running and state.get("running"):
         state["running"] = False
         state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
-        state["detail"] = "process_exited"
+        if str(state.get("detail") or "") != "runner_stale":
+            state["detail"] = "process_exited"
         _write_supply_state(state)
     return {
         **state,
@@ -157,7 +228,32 @@ def get_pair_supply_status() -> dict[str, Any]:
     }
 
 
-def start_pair_supply(requested_by: str | None = None) -> dict[str, Any]:
+def _use_pair_supply_runner_mode() -> bool:
+    mode = str(os.getenv("STATBOT_PAIR_SUPPLY_PROCESS_MODE", "local") or "local").strip().lower()
+    return mode in {"docker", "external", "runner"}
+
+
+def _request_pair_supply_runner(desired_running: bool, requested_by: str | None = None) -> dict[str, Any]:
+    state = get_pair_supply_status()
+    running = bool(state.get("running"))
+    state["desired_running"] = bool(desired_running)
+    state["requested_by"] = requested_by or state.get("requested_by", "")
+    state["request_updated_at"] = _utc_iso_now()
+    state["process_mode"] = "runner"
+    if desired_running:
+        state["detail"] = "already_running" if running else "start_requested"
+        if not running:
+            state["stopped_at"] = None
+    else:
+        state["detail"] = "stop_requested" if running else "already_stopped"
+        if not running:
+            state["running"] = False
+            state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
+    _write_supply_state(state)
+    return get_pair_supply_status()
+
+
+def _start_pair_supply_local(requested_by: str | None = None) -> dict[str, Any]:
     status = get_pair_supply_status()
     if status.get("running"):
         status["detail"] = "already_running"
@@ -202,12 +298,20 @@ def start_pair_supply(requested_by: str | None = None) -> dict[str, Any]:
         "requested_by": requested_by or "",
         "interval_seconds": interval_seconds,
         "log_file": str(PAIR_SUPPLY_LOG),
+        "desired_running": True,
+        "process_owner": str(os.getenv("STATBOT_PROCESS_OWNER", "api") or "api"),
     }
     _write_supply_state(state)
     return get_pair_supply_status()
 
 
-def stop_pair_supply(requested_by: str | None = None, timeout_seconds: float = 8.0) -> dict[str, Any]:
+def start_pair_supply(requested_by: str | None = None) -> dict[str, Any]:
+    if _use_pair_supply_runner_mode():
+        return _request_pair_supply_runner(True, requested_by=requested_by)
+    return _start_pair_supply_local(requested_by=requested_by)
+
+
+def _stop_pair_supply_local(requested_by: str | None = None, timeout_seconds: float = 8.0) -> dict[str, Any]:
     state = get_pair_supply_status()
     pid = int(state.get("pid") or 0)
     if pid <= 0 or not state.get("running"):
@@ -215,6 +319,7 @@ def stop_pair_supply(requested_by: str | None = None, timeout_seconds: float = 8
         state["detail"] = "already_stopped"
         state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
         state["requested_by"] = requested_by or state.get("requested_by", "")
+        state["desired_running"] = False
         _write_supply_state(state)
         return get_pair_supply_status()
 
@@ -253,10 +358,17 @@ def stop_pair_supply(requested_by: str | None = None, timeout_seconds: float = 8
             "stopped_at": None if running else _utc_iso_now(),
             "detail": "stop_failed" if running else "stopped",
             "requested_by": requested_by or state.get("requested_by", ""),
+            "desired_running": False,
         }
     )
     _write_supply_state(state)
     return get_pair_supply_status()
+
+
+def stop_pair_supply(requested_by: str | None = None, timeout_seconds: float = 8.0) -> dict[str, Any]:
+    if _use_pair_supply_runner_mode():
+        return _request_pair_supply_runner(False, requested_by=requested_by)
+    return _stop_pair_supply_local(requested_by=requested_by, timeout_seconds=timeout_seconds)
 
 
 def _read_pairs_frame() -> pd.DataFrame:

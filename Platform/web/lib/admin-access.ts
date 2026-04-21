@@ -37,7 +37,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
         href: "/admin/dashboard/cointegrated-pair",
         label: "Cointegration",
         group: "Monitor",
-        requiredPermissions: ["view_dashboard"],
+        requiredPermissions: ["view_pair_universe", "view_dashboard"],
       },
     ],
   },
@@ -47,7 +47,13 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     hint: "Control plane",
     group: "Operate",
     icon: "console",
-    requiredPermissions: ["view_logs", "manage_bot"],
+    requiredPermissions: [
+      "view_logs",
+      "manage_bot",
+      "switch_active_pair",
+      "manage_logs_reports",
+      "view_reports",
+    ],
   },
   {
     href: "/admin/settings",

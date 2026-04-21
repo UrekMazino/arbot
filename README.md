@@ -159,6 +159,16 @@ STATBOT_STRATEGY_CACHE_REFRESH_BARS=100
 STATBOT_STRATEGY_CACHE_SLEEP=0.05
 ```
 
+Enable a guarded soft-pass for orderbook depth when one side is only slightly
+below the hard floor:
+
+```env
+STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH=8000
+STATBOT_STRATEGY_SOFT_ORDERBOOK_DEPTH=6000
+STATBOT_STRATEGY_MAX_ORDERBOOK_IMBALANCE=12
+STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS=7
+```
+
 ## Strategy Outputs
 
 Strategy outputs are stored under `OKXStatBot/Strategy/output`:

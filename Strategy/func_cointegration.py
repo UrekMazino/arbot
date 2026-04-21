@@ -14,6 +14,8 @@ from config_strategy_api import (
     min_avg_quote_volume,
     liquidity_pct,
     min_orderbook_depth_usdt,
+    soft_orderbook_depth_usdt,
+    max_orderbook_imbalance,
     min_orderbook_levels,
     fast_path_enabled,
     corr_min_filter,
@@ -445,6 +447,7 @@ def get_cointegrated_pairs(
 
     filtered_breakdown = {}
     orderbook_cache = {}
+    orderbook_soft_pass_tickers = set()
 
     def _get_orderbook_liquidity_status(ticker):
         cached = orderbook_cache.get(ticker)
@@ -519,19 +522,54 @@ def get_cointegrated_pairs(
                 orderbook_cache[ticker] = result
                 return result
 
+            weak_depth_usdt = min(bid_depth_usdt, ask_depth_usdt)
+            strong_depth_usdt = max(bid_depth_usdt, ask_depth_usdt)
+            imbalance = (
+                strong_depth_usdt / weak_depth_usdt
+                if weak_depth_usdt > 0
+                else float("inf")
+            )
+            hard_ok = bid_depth_usdt >= min_orderbook_depth_usdt and ask_depth_usdt >= min_orderbook_depth_usdt
+            soft_ok = (
+                not hard_ok
+                and soft_orderbook_depth_usdt > 0
+                and weak_depth_usdt >= soft_orderbook_depth_usdt
+                and (
+                    max_orderbook_imbalance <= 0
+                    or imbalance <= max_orderbook_imbalance
+                )
+            )
+            pass_mode = "strict" if hard_ok else ("soft" if soft_ok else "fail")
             result = {
-                "ok": bid_depth_usdt >= min_orderbook_depth_usdt and ask_depth_usdt >= min_orderbook_depth_usdt,
+                "ok": hard_ok or soft_ok,
                 "reason": "orderbook_depth",
                 "bid_depth_usdt": bid_depth_usdt,
                 "ask_depth_usdt": ask_depth_usdt,
+                "weak_depth_usdt": weak_depth_usdt,
+                "orderbook_imbalance": imbalance,
+                "pass_mode": pass_mode,
             }
             if not result["ok"]:
                 logger.info(
-                    "Skipping low liquidity: %s (bid_depth=%.0f USDT, ask_depth=%.0f USDT, min=%.0f USDT)",
+                    "Skipping low liquidity: %s (bid_depth=%.0f USDT, ask_depth=%.0f USDT, min=%.0f USDT, soft_min=%.0f USDT, imbalance=%.2fx, max_imbalance=%.2fx)",
                     ticker,
                     bid_depth_usdt,
                     ask_depth_usdt,
                     min_orderbook_depth_usdt,
+                    soft_orderbook_depth_usdt,
+                    imbalance,
+                    max_orderbook_imbalance,
+                )
+            elif soft_ok:
+                orderbook_soft_pass_tickers.add(ticker)
+                logger.info(
+                    "Liquidity soft-pass: %s (bid_depth=%.0f USDT, ask_depth=%.0f USDT, hard_min=%.0f USDT, soft_min=%.0f USDT, imbalance=%.2fx)",
+                    ticker,
+                    bid_depth_usdt,
+                    ask_depth_usdt,
+                    min_orderbook_depth_usdt,
+                    soft_orderbook_depth_usdt,
+                    imbalance,
                 )
             else:
                 logger.debug(
@@ -765,6 +803,10 @@ def get_cointegrated_pairs(
         "min_equity_filter_usdt": active_min_equity_filter,
         "liquidity_pct": active_liquidity_pct,
         "liquidity_pct_cutoff": liquidity_pct_cutoff,
+        "orderbook_depth_hard_min_usdt": min_orderbook_depth_usdt,
+        "orderbook_depth_soft_min_usdt": soft_orderbook_depth_usdt,
+        "orderbook_max_imbalance": max_orderbook_imbalance,
+        "orderbook_soft_pass_tickers": len(orderbook_soft_pass_tickers),
         "min_equity_filtered": filtered_count,
         "restricted_removed": restricted_removed,
         "pairs_kept": len(df_coint),

@@ -97,6 +97,17 @@ if liquidity_pct < 0:
 if liquidity_pct > 1:
     liquidity_pct = 1.0
 min_orderbook_depth_usdt = _env_float("STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH", 5000.0)
+soft_orderbook_depth_usdt = _env_float(
+    "STATBOT_STRATEGY_SOFT_ORDERBOOK_DEPTH",
+    min_orderbook_depth_usdt * 0.75,
+)
+if soft_orderbook_depth_usdt < 0:
+    soft_orderbook_depth_usdt = 0.0
+if soft_orderbook_depth_usdt >= min_orderbook_depth_usdt:
+    soft_orderbook_depth_usdt = min_orderbook_depth_usdt * 0.75
+max_orderbook_imbalance = _env_float("STATBOT_STRATEGY_MAX_ORDERBOOK_IMBALANCE", 12.0)
+if max_orderbook_imbalance < 0:
+    max_orderbook_imbalance = 0.0
 min_orderbook_levels = _env_int("STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS", 7)
 fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
 corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.60 if fast_path_enabled else 0.0)  # Increased from 0.2 - need strong correlation

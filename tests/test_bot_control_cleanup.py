@@ -115,6 +115,7 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
             "deleted_logs": 1,
             "deleted_reports": 1,
             "deleted_log_files": 1,
+            "deleted_run_rows": 1,
             "deleted_report_rows": 1,
             "deleted_report_files": 1,
             "deleted_indexes": 4,
@@ -137,8 +138,10 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
 
         verify_db = session_factory()
         try:
+            remaining_runs = verify_db.execute(select(Run).order_by(Run.id.asc())).scalars().all()
             remaining_reports = verify_db.execute(select(Report).order_by(Report.id.asc())).scalars().all()
             remaining_report_files = verify_db.execute(select(ReportFile).order_by(ReportFile.id.asc())).scalars().all()
+            assert [row.id for row in remaining_runs] == ["run-db-2"]
             assert [row.id for row in remaining_reports] == ["report-latest"]
             assert [row.id for row in remaining_report_files] == ["report-file-latest"]
         finally:

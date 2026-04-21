@@ -228,7 +228,7 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     if (!showLive) return;
-    const wsUrl = `${process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8081"}/ws/dashboard`;
+    const wsUrl = `${process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8082"}/ws/dashboard`;
     const w = new WebSocket(wsUrl);
     w.onmessage = (evt) => {
       try {

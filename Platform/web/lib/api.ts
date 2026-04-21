@@ -417,7 +417,7 @@ export type PairSupplyStatus = {
   status?: Record<string, unknown>;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8082/api/v2";
 
 async function apiRequest<T>(
   path: string,
@@ -848,7 +848,7 @@ export function apiRootUrl(): string {
 }
 
 export function wsDashboardUrl(botInstanceId: string): string {
-  const wsBase = process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8081";
+  const wsBase = process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8082";
   const encoded = encodeURIComponent(botInstanceId);
   return `${wsBase}/ws/dashboard?bot_instance_id=${encoded}`;
 }

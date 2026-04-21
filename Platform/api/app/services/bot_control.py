@@ -168,6 +168,49 @@ def _pid_exists(pid: int) -> bool:
     return True
 
 
+def _read_process_cmdline(pid: int) -> list[str]:
+    if pid <= 0 or os.name == "nt":
+        return []
+    cmdline_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = cmdline_path.read_bytes()
+    except Exception:
+        return []
+    return [
+        part.decode("utf-8", errors="ignore")
+        for part in raw.split(b"\0")
+        if part
+    ]
+
+
+def _is_managed_bot_process(pid: int) -> bool:
+    if not _pid_exists(pid):
+        return False
+    if os.name == "nt":
+        return True
+
+    cmdline = _read_process_cmdline(pid)
+    if not cmdline:
+        return False
+
+    # Docker PID namespaces can reuse a stale bot PID for uvicorn/node/etc. Only
+    # trust the persisted PID when it still points at the execution entrypoint.
+    joined = " ".join(cmdline).replace("\\", "/")
+    if "Execution.main_execution" in joined:
+        return True
+
+    for arg in cmdline:
+        normalized = arg.replace("\\", "/")
+        if normalized.endswith("/Execution/main_execution.py") or normalized.endswith("Execution/main_execution.py"):
+            return True
+        try:
+            if Path(arg).name == "main_execution.py":
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _read_state() -> dict:
     if not STATE_FILE.exists():
         return {}
@@ -780,14 +823,15 @@ def resolve_live_stream_target(run_key: str | None = None) -> dict:
 def _normalize_status(state: dict) -> dict:
     data = dict(state or {})
     pid = int(data.get("pid") or 0)
-    running = _pid_exists(pid)
+    pid_alive = _pid_exists(pid)
+    running = _is_managed_bot_process(pid)
     data["pid"] = pid
     data["running"] = running
     if not running and pid > 0:
         data["stopped_at"] = data.get("stopped_at") or _utc_iso_now()
         prior_detail = str(data.get("detail") or "").strip().lower()
         if prior_detail in {"", "started", "already_running"}:
-            data["detail"] = "process_exited"
+            data["detail"] = "stale_pid_reused" if pid_alive else "process_exited"
     run_key, run_log_file = _latest_run_log_file()
     data["latest_run_key"] = run_key
     data["latest_log_file"] = str(run_log_file) if run_log_file else None
@@ -959,6 +1003,14 @@ def stop_bot(requested_by: str | None = None, timeout_seconds: float = 12.0) -> 
         state["requested_by"] = requested_by or state.get("requested_by", "")
         _write_state(state)
         return state
+
+    if not _is_managed_bot_process(pid):
+        state["running"] = False
+        state["detail"] = "stale_pid_reused" if _pid_exists(pid) else "process_exited"
+        state["stopped_at"] = state.get("stopped_at") or _utc_iso_now()
+        state["requested_by"] = requested_by or state.get("requested_by", "")
+        _write_state(state)
+        return _normalize_status(state)
 
     terminated = False
     detail = "interrupt_sent"

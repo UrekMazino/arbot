@@ -295,6 +295,7 @@ def test_stop_bot_prefers_interrupt_for_graceful_shutdown(monkeypatch):
         lambda: {"running": True, "pid": 123, "requested_by": "", "detail": "started"},
     )
     monkeypatch.setattr(bot_control, "_normalize_status", lambda state: state)
+    monkeypatch.setattr(bot_control, "_is_managed_bot_process", lambda _pid: True)
     monkeypatch.setattr(bot_control, "_write_state", lambda state: writes.append(dict(state)))
     monkeypatch.setattr(bot_control, "_pid_exists", lambda _pid: False)
     monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
@@ -306,4 +307,39 @@ def test_stop_bot_prefers_interrupt_for_graceful_shutdown(monkeypatch):
     assert signal_calls == [(123, signal.SIGINT)]
     assert result["running"] is False
     assert result["detail"] == "stopped"
+    assert writes[-1]["requested_by"] == "tester@example.com"
+
+
+def test_normalize_status_rejects_reused_non_bot_pid(monkeypatch):
+    monkeypatch.setattr(bot_control, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(bot_control, "_read_process_cmdline", lambda _pid: ["python", "-m", "uvicorn", "app.main:app"])
+    monkeypatch.setattr(bot_control, "_latest_run_log_file", lambda: (None, None))
+    monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
+
+    result = bot_control._normalize_status({"running": True, "pid": 13, "detail": "started"})
+
+    assert result["running"] is False
+    assert result["detail"] == "stale_pid_reused"
+
+
+def test_stop_bot_does_not_signal_reused_non_bot_pid(monkeypatch):
+    writes = []
+    signal_calls = []
+
+    monkeypatch.setattr(
+        bot_control,
+        "get_bot_status",
+        lambda: {"running": True, "pid": 13, "requested_by": "", "detail": "started"},
+    )
+    monkeypatch.setattr(bot_control, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(bot_control, "_is_managed_bot_process", lambda _pid: False)
+    monkeypatch.setattr(bot_control, "_normalize_status", lambda state: state)
+    monkeypatch.setattr(bot_control, "_write_state", lambda state: writes.append(dict(state)))
+    monkeypatch.setattr(bot_control.os, "killpg", lambda pgid, sig: signal_calls.append((pgid, sig)), raising=False)
+
+    result = bot_control.stop_bot(requested_by="tester@example.com", timeout_seconds=1.0)
+
+    assert signal_calls == []
+    assert result["running"] is False
+    assert result["detail"] == "stale_pid_reused"
     assert writes[-1]["requested_by"] == "tester@example.com"

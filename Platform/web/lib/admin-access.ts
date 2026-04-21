@@ -35,7 +35,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
       },
       {
         href: "/admin/dashboard/cointegrated-pair",
-        label: "Cointegrated Pair",
+        label: "Cointegration",
         group: "Monitor",
         requiredPermissions: ["view_dashboard"],
       },

@@ -291,15 +291,38 @@ export default function CointegratedPairPage() {
             title="Pair Universe"
             subtitle="Grid/list view of the canonical pair supply. Search still works even when Strategy preserves a previous scan."
             titleRight={
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {preservedExisting ? <StatusPill label="Last-good preserved" tone="warn" /> : <StatusPill label="Fresh" tone="success" />}
+              <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
+                <span
+                  className={[
+                    "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.06em]",
+                    preservedExisting
+                      ? "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400"
+                      : "border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400",
+                  ].join(" ")}
+                >
+                  {preservedExisting ? "Last-good preserved" : "Fresh"}
+                </span>
                 <button
                   type="button"
-                  className={UI_CLASSES.secondaryButton}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                   onClick={refreshCatalog}
                   disabled={pairsLoading}
+                  aria-label="Refresh pair universe"
+                  title="Refresh pair universe"
                 >
-                  Refresh
+                  <svg
+                    aria-hidden="true"
+                    className={pairsLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"}
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6" />
+                    <path d="M16.5 4.5v4h-4" />
+                  </svg>
                 </button>
                 <button
                   type="button"

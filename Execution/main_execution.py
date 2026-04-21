@@ -1,4 +1,5 @@
 ﻿# Remove Pandas Future Warnings
+import csv
 import os
 import json
 import warnings
@@ -230,6 +231,11 @@ SWITCH_RESULT_SWITCHED = "switched"
 SWITCH_RESULT_BLOCKED = "blocked"
 SWITCH_RESULT_HARD_STOP = "hard_stop"
 STRATEGY_REFRESH_SLEEP_SECONDS = _env_int("STATBOT_STRATEGY_REFRESH_SLEEP_SECONDS", 5, minimum=1)
+PAIR_SUPPLY_WAIT_SECONDS = _env_int(
+    "STATBOT_PAIR_SUPPLY_WAIT_SECONDS",
+    STRATEGY_REFRESH_SLEEP_SECONDS,
+    minimum=1,
+)
 STRATEGY_STARTUP_RETRY_SECONDS = _env_int(
     "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",
     STRATEGY_REFRESH_SLEEP_SECONDS,
@@ -259,6 +265,7 @@ FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_3_coint_grace",
     "exit_tier_4_divergence",
 }
+PAIR_SUPPLY_STATE_FILE = Path(__file__).resolve().parent / "state" / "pair_supply_control.json"
 
 
 def _should_log_pnl(total_pnl):
@@ -1072,7 +1079,134 @@ def _sleep_with_progress(seconds, label="Sleeping"):
     sys.stdout.flush()
 
 
+def _read_pair_supply_state():
+    try:
+        if not PAIR_SUPPLY_STATE_FILE.exists():
+            return {}
+        data = json.loads(PAIR_SUPPLY_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _pid_matches_pair_supply(pid):
+    try:
+        pid_int = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+    except OSError:
+        return False
+
+    proc_cmdline = Path("/proc") / str(pid_int) / "cmdline"
+    if proc_cmdline.exists():
+        try:
+            cmd = proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore")
+        except Exception:
+            return False
+        return "pair_supply_daemon.py" in cmd
+
+    return True
+
+
+def _get_pair_supply_runtime_status():
+    state = _read_pair_supply_state()
+    pid = state.get("pid")
+    running = bool(state.get("running")) and _pid_matches_pair_supply(pid)
+    return {
+        "running": running,
+        "pid": int(pid or 0) if str(pid or "").strip().isdigit() else 0,
+        "detail": state.get("detail") or "",
+        "started_at": state.get("started_at") or "",
+        "interval_seconds": state.get("interval_seconds"),
+    }
+
+
+def _is_pair_supply_active():
+    return bool(_get_pair_supply_runtime_status().get("running"))
+
+
+def _wait_for_pair_supply(context):
+    status = _get_pair_supply_runtime_status()
+    if not status.get("running"):
+        return False
+    logger.warning(
+        "Pair supply is active (pid=%s); waiting for supplied Pair Universe instead of running Strategy refresh (%s).",
+        status.get("pid") or "unknown",
+        context,
+    )
+    logger.info(
+        "Sleeping for %s before rechecking supplied pair universe.",
+        _format_uptime(PAIR_SUPPLY_WAIT_SECONDS),
+    )
+    _sleep_with_progress(PAIR_SUPPLY_WAIT_SECONDS, label="Waiting for pair supply")
+    return True
+
+
+def _csv_has_pair_rows(csv_path):
+    try:
+        return csv_path.exists() and csv_path.stat().st_size > 200
+    except Exception:
+        return False
+
+
+def _wait_for_pair_supply_csv(csv_path):
+    if not _is_pair_supply_active():
+        return False
+
+    logger.warning(
+        "Cointegrated pairs CSV is empty or missing, but pair supply is active. "
+        "Execution will wait for the supplied Pair Universe instead of starting its own Strategy scan."
+    )
+
+    while True:
+        if _csv_has_pair_rows(csv_path):
+            logger.info("Pair supply provided Pair Universe CSV. Continuing startup.")
+            return True
+        if not _is_pair_supply_active():
+            logger.warning("Pair supply stopped before providing pairs; falling back to startup Strategy discovery.")
+            return False
+        _wait_for_pair_supply("startup_waiting_for_pairs")
+
+
+def _candidate_pair_indices(current_index, pair_count):
+    if pair_count <= 0:
+        return []
+    if current_index < 0:
+        return list(range(pair_count))
+    return [((current_index + offset) % pair_count) for offset in range(1, pair_count)]
+
+
+def _active_pair_in_pair_universe(csv_path):
+    current_key = normalize_pair_key(ticker_1, ticker_2)
+    if not current_key or not _csv_has_pair_rows(csv_path):
+        return True
+    rows_seen = 0
+    try:
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                rows_seen += 1
+                pair_key = normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+                if pair_key == current_key:
+                    return True
+    except Exception as exc:
+        logger.warning("Could not inspect Pair Universe CSV for active pair: %s", exc)
+        return True
+    return rows_seen == 0
+
+
 def _run_strategy_refresh():
+    if _is_pair_supply_active():
+        status = _get_pair_supply_runtime_status()
+        logger.warning(
+            "Pair supply is active (pid=%s); skipping local Strategy refresh and waiting for supplied pairs.",
+            status.get("pid") or "unknown",
+        )
+        return False
+
     strategy_path = Path(__file__).resolve().parent.parent / "Strategy" / "main_strategy.py"
     if not strategy_path.exists():
         logger.error("Cannot refresh pairs: Strategy script not found at %s", strategy_path)
@@ -1097,6 +1231,9 @@ def _run_strategy_at_startup():
     """Run Strategy at startup to discover pairs if CSV is empty or missing."""
     strategy_path = Path(__file__).resolve().parent.parent / "Strategy" / "main_strategy.py"
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"
+    if _wait_for_pair_supply_csv(csv_path):
+        return True
+
     if not strategy_path.exists():
         logger.error("Cannot run Strategy: script not found at %s", strategy_path)
         return False
@@ -1267,6 +1404,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             "restricted_ticker",
             "compliance_restricted",
             "startup_invalid_pair",
+            "pair_supply_available",
         }
 
     bypass_switch_limits = _bypass_switch_limits(switch_reason)
@@ -1339,16 +1477,24 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     precheck_limit = _get_switch_precheck_limit()
     precheck_window = _get_switch_precheck_window()
     precheck_cache = {}
+    trust_pair_supply = _is_pair_supply_active()
     if precheck_coint_enabled:
-        logger.info(
-            "Pair switch pre-check enabled (coint, limit=%d, window=%d, fail_open=%d).",
-            precheck_limit,
-            precheck_window,
-            int(precheck_fail_open),
-        )
+        if trust_pair_supply:
+            logger.info(
+                "Pair supply is active; trusting supplied Pair Universe candidates and skipping extra switch coint pre-check."
+            )
+        else:
+            logger.info(
+                "Pair switch pre-check enabled (coint, limit=%d, window=%d, fail_open=%d).",
+                precheck_limit,
+                precheck_window,
+                int(precheck_fail_open),
+            )
 
     def _pair_passes_switch_precheck(t1, t2):
         if not precheck_coint_enabled:
+            return True
+        if trust_pair_supply:
             return True
 
         pair_key = normalize_pair_key(t1, t2) or f"{t1}/{t2}"
@@ -1515,8 +1661,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 logger.info("Prioritizing ready hospital pair %s/%s (cooldown complete, state cleared).", t1, t2)
                 return t1, t2
 
-        for i in range(1, len(pairs)):
-            idx = (curr_idx + i) % len(pairs)
+        for idx in _candidate_pair_indices(curr_idx, len(pairs)):
             pair = pairs[idx]
             t1, t2 = pair["sym_1"], pair["sym_2"]
             if (t1 == curr_t1 and t2 == curr_t2) or (t1 == curr_t2 and t2 == curr_t1):
@@ -1564,6 +1709,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         while next_t1 is None:
             pairs = _read_pairs()
             if not pairs:
+                if _wait_for_pair_supply("no_pairs_in_csv"):
+                    continue
                 refreshed = _run_strategy_refresh()
                 if refreshed:
                     pairs = _read_pairs()
@@ -1583,6 +1730,8 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
             next_t1, next_t2 = _find_next_pair(pairs)
             if next_t1 is None:
+                if _wait_for_pair_supply("no_switch_candidate"):
+                    continue
                 refreshed = _run_strategy_refresh()
                 if refreshed:
                     pairs = _read_pairs()
@@ -1602,7 +1751,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         curr_t1 = ticker_1
         curr_t2 = ticker_2
         # Commit graveyard only after a replacement is found.
-        if switch_reason != "min_capital":
+        if switch_reason not in ("min_capital", "pair_supply_available"):
             if switch_reason in ("health", "cointegration_lost", "idle_timeout"):
                 stats = get_pair_history_stats(curr_t1, curr_t2)
                 if stats and stats.get("trades", 0) == 0:
@@ -1922,10 +2071,14 @@ if __name__ == "__main__":
         logger.warning("Failed to cleanup hospital entries: %s", exc)
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
-        logger.info("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")
-        print("Running Strategy to discover cointegrated pairs...")
+        if _is_pair_supply_active():
+            logger.info("Cointegrated pairs CSV is empty or missing. Waiting for active pair supply.")
+            print("Waiting for Pair Universe supply to provide cointegrated pairs...")
+        else:
+            logger.info("Cointegrated pairs CSV is empty or missing. Running Strategy to discover pairs...")
+            print("Running Strategy to discover cointegrated pairs...")
 
-        # Run Strategy to populate the CSV
+        # Run Strategy only when independent pair supply is not already responsible.
         strategy_success = _run_strategy_at_startup()
         if not strategy_success:
             logger.error("Strategy failed to produce pairs. Exiting.")
@@ -1977,6 +2130,30 @@ if __name__ == "__main__":
             sys.exit(3)
         logger.critical("No suitable replacement pair found for startup-invalid active pair.")
         sys.exit(1)
+
+    if _is_pair_supply_active() and not _active_pair_in_pair_universe(csv_path):
+        if lock_on_pair:
+            logger.warning(
+                "Active pair %s/%s is not in the supplied Pair Universe, but lock_on_pair is enabled.",
+                ticker_1,
+                ticker_2,
+            )
+        else:
+            logger.warning(
+                "Active pair %s/%s is not in the supplied Pair Universe. Switching to supplied candidate.",
+                ticker_1,
+                ticker_2,
+            )
+            set_last_switch_reason("pair_supply_available")
+            switch_result = _switch_to_next_pair(health_score=0, switch_reason="pair_supply_available")
+            if switch_result == SWITCH_RESULT_SWITCHED:
+                logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                print("Restarting to apply supplied pair...")
+                sys.exit(3)
+            if switch_result == SWITCH_RESULT_HARD_STOP:
+                logger.critical("No suitable supplied replacement pair found at startup.")
+                sys.exit(1)
+            logger.warning("Supplied pair switch was blocked. Continuing with current active pair for now.")
 
     per_leg_capital = _get_per_leg_allocation()
     if not _pair_meets_min_capital(ticker_1, ticker_2, per_leg_capital):

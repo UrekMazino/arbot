@@ -322,6 +322,17 @@ def test_normalize_status_rejects_reused_non_bot_pid(monkeypatch):
     assert result["detail"] == "stale_pid_reused"
 
 
+def test_bot_child_env_uses_internal_api_port_inside_docker(monkeypatch):
+    monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
+    monkeypatch.setattr(bot_control.Path, "exists", lambda self: str(self) == "/workspace")
+
+    env = bot_control._normalize_bot_child_env(
+        {"STATBOT_EVENT_API_BASE": "http://127.0.0.1:8082/api/v2"}
+    )
+
+    assert env["STATBOT_EVENT_API_BASE"] == "http://127.0.0.1:8080/api/v2"
+
+
 def test_stop_bot_does_not_signal_reused_non_bot_pid(monkeypatch):
     writes = []
     signal_calls = []

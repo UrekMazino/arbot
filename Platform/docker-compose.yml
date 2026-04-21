@@ -51,7 +51,7 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       BOT_CONTROL_WORKSPACE_ROOT: /workspace
       BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
-      STATBOT_EVENT_API_BASE: http://127.0.0.1:8082/api/v2
+      STATBOT_EVENT_API_BASE: http://127.0.0.1:8080/api/v2
     ports:
       - "8082:8080"
     volumes:
@@ -60,7 +60,7 @@ services:
     command: >
       sh -c "pip install --no-cache-dir -r /workspace/Platform/api/requirements.txt &&
              alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload"
+             uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload --timeout-graceful-shutdown 5"
 
   worker:
     build:

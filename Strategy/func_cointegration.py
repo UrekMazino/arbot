@@ -3,6 +3,7 @@ from config_strategy_api import (
     shared_coint_pvalue_threshold,
     cointegration_zero_cross_threshold_ratio,
     min_equity_filter_usdt,
+    max_supply_pairs,
     max_pairs_per_ticker,
     min_p_value_filter,
     max_p_value_filter,
@@ -914,6 +915,17 @@ def get_cointegrated_pairs(
         df_coint = df_coint[mask].copy()
         filtered_count = before - len(df_coint)
         filtered_breakdown["min_equity"] = filtered_count
+
+    active_max_supply_pairs = max(int(max_supply_pairs or 10), 1)
+    if not df_coint.empty and len(df_coint) > active_max_supply_pairs:
+        before = len(df_coint)
+        sort_columns = [col for col in ("zero_crossing", "p_value") if col in df_coint.columns]
+        if sort_columns:
+            ascending = [False if col == "zero_crossing" else True for col in sort_columns]
+            df_coint = df_coint.sort_values(by=sort_columns, ascending=ascending)
+        df_coint = df_coint.head(active_max_supply_pairs).copy()
+        filtered_breakdown["supply_cap"] = before - len(df_coint)
+
     output_dir = Path(__file__).resolve().parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
@@ -940,6 +952,7 @@ def get_cointegrated_pairs(
         "orderbook_soft_pass_tickers": len(orderbook_soft_pass_tickers),
         "order_capacity_min_usdt": min_order_capacity_usdt,
         "order_capacity_filtered": filtered_breakdown.get("order_capacity", 0),
+        "max_supply_pairs": active_max_supply_pairs,
         "canonical_pairs_rows": output_status.get("canonical_rows"),
         "canonical_pairs_updated": output_status.get("canonical_updated"),
         "latest_attempt_rows": output_status.get("latest_attempt_rows"),

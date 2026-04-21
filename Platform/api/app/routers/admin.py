@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -93,6 +93,7 @@ def admin_run_runtime(
 
 @router.get("/bot/logs/stream")
 async def admin_bot_logs_stream(
+    request: Request,
     run_key: str | None = Query(default=None),
     _: User = Depends(require_permissions("view_logs")),
 ):
@@ -113,7 +114,13 @@ async def admin_bot_logs_stream(
         yield ": connected\n\n"
 
         while True:
-            await asyncio.sleep(2)  # Poll every 2 seconds
+            if await request.is_disconnected():
+                return
+
+            try:
+                await asyncio.sleep(2)  # Poll every 2 seconds
+            except asyncio.CancelledError:
+                return
 
             try:
                 if not run_key or str(run_key).strip().lower() == "latest":

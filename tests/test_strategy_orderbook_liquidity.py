@@ -110,6 +110,48 @@ def test_get_cointegrated_pairs_caches_orderbook_by_ticker(monkeypatch):
     assert calls.count("CCC-USDT-SWAP") == 1
 
 
+def test_pair_supply_caps_canonical_pairs_at_configured_max(monkeypatch, tmp_path):
+    def fake_get_orderbook(instId: str, sz: int = 50):
+        levels = [["100", "100", "0", "1"]] * 10
+        return {"code": "0", "data": [{"bids": levels, "asks": levels}]}
+
+    json_symbols = {
+        f"SYM{idx}-USDT-SWAP": _build_symbol(
+            f"SYM{idx}-USDT-SWAP",
+            [10.0 + idx, 10.1 + idx, 10.2 + idx, 10.3 + idx],
+            ct_val=1.0,
+        )
+        for idx in range(6)
+    }
+
+    monkeypatch.setattr(
+        fc,
+        "calculate_cointegration_from_log",
+        lambda *_args, **_kwargs: (1, 0.001, -4.0, -3.0, 1.0, 5),
+    )
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=fake_get_orderbook))
+    monkeypatch.setattr(fc, "min_orderbook_levels", 7)
+    monkeypatch.setattr(fc, "min_orderbook_depth_usdt", 1000.0)
+    monkeypatch.setattr(fc, "max_supply_pairs", 10)
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+    output_path = Path(fc.__file__).resolve().parent / "output" / "2_cointegrated_pairs.csv"
+    canonical = pd.read_csv(output_path)
+
+    assert len(df) == 10
+    assert len(canonical) == 10
+    assert summary["pairs_kept"] == 10
+    assert summary["max_supply_pairs"] == 10
+    assert summary["filtered_breakdown"]["supply_cap"] == 5
+
+
 def test_orderbook_soft_pass_accepts_slightly_low_balanced_depth(monkeypatch):
     calls: list[str] = []
 

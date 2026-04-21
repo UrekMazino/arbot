@@ -83,6 +83,9 @@ kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)  # 1 day @ 1m bars;
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
+max_supply_pairs = _env_int("STATBOT_PAIR_SUPPLY_MAX_PAIRS", _env_int("STATBOT_STRATEGY_MAX_SUPPLY_PAIRS", 10))
+if max_supply_pairs < 1:
+    max_supply_pairs = 1
 min_p_value_filter = _env_float("STATBOT_STRATEGY_MIN_P_VALUE", 1e-8)
 max_p_value_filter = _env_float("STATBOT_STRATEGY_MAX_P_VALUE", 0.01)  # Tightened from 0.02 - only top 1% statistical strength
 min_zero_crossings = _env_int("STATBOT_STRATEGY_MIN_ZERO_CROSSINGS", 3)  # Require frequent mean reversions
@@ -168,9 +171,10 @@ def log_strategy_config(logger=None, to_console=False):
     if settle_ccy_filter:
         lines.append(f"Settle CCY filter: {', '.join(settle_ccy_filter)}")
     lines.append(
-        "Pair filters: max_per_ticker={0}, p_value=[{1}, {2}], "
-        "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}, "
-        "min_order_capacity={7}".format(
+        "Pair filters: max_supply={0}, max_per_ticker={1}, p_value=[{2}, {3}], "
+        "min_zero_crossings={4}, hedge_ratio=[{5}, {6}], min_capital_per_leg={7}, "
+        "min_order_capacity={8}".format(
+            max_supply_pairs,
             max_pairs_per_ticker,
             min_p_value_filter,
             max_p_value_filter,

@@ -100,6 +100,19 @@ def _resolve_bot_command() -> list[str]:
         return _default_bot_command()
 
 
+def _normalize_bot_child_env(env: dict[str, str]) -> dict[str, str]:
+    child_env = dict(env)
+    raw_base = str(child_env.get("STATBOT_EVENT_API_BASE") or "").strip()
+    if os.name != "nt" and Path("/workspace").exists():
+        if not raw_base:
+            child_env["STATBOT_EVENT_API_BASE"] = "http://127.0.0.1:8080/api/v2"
+        elif raw_base.startswith(("http://127.0.0.1:8081/", "http://localhost:8081/")):
+            child_env["STATBOT_EVENT_API_BASE"] = raw_base.replace(":8081/", ":8080/", 1)
+        elif raw_base.startswith(("http://127.0.0.1:8082/", "http://localhost:8082/")):
+            child_env["STATBOT_EVENT_API_BASE"] = raw_base.replace(":8082/", ":8080/", 1)
+    return child_env
+
+
 def _parse_iso_timestamp(value: str | None) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -872,7 +885,7 @@ def start_bot(requested_by: str | None = None) -> dict:
     CONTROL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     log_handle = CONTROL_LOG_FILE.open("a", encoding="utf-8", errors="ignore")
 
-    env = os.environ.copy()
+    env = _normalize_bot_child_env(os.environ.copy())
     # Start the top-level execution manager so exit code 3 can trigger in-process restarts.
     env.pop("STATBOT_MANAGED", None)
     env["PYTHONUNBUFFERED"] = "1"

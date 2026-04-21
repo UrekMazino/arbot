@@ -167,6 +167,23 @@ Strategy outputs are stored under `OKXStatBot/Strategy/output`:
 - `3_backtest_file.csv`
 - `4_summary_report.csv` (overwritten each run)
 
+## Offline Replay Simulation
+
+Use the replay simulator to search for profitable entry/exit profiles without
+touching live execution state:
+
+```bash
+python Simulation/replay_pairs.py --entry-z 1.8,2.0,2.2 --exit-z 0.25,0.35,0.5 --z-window 60,120
+```
+
+The simulator reads Strategy outputs, replays candidate pairs candle-by-candle,
+subtracts configurable fees/slippage, and writes results under
+`Simulation/output`:
+- `simulation_summary.csv`
+- `simulation_top_trades.csv`
+- `simulation_best.json`
+- `simulation_skipped_pairs.csv`
+
 ## Documentation
 
 For a detailed explanation of the bot's architecture, trading logic, risk management, and computations, please see:

@@ -13,9 +13,60 @@ from func_strategy_log import get_strategy_logger
 
 from func_cointegration import extract_close_prices, calculate_spread, calculate_zscore
 
+REPORT_COLUMNS = [
+    "generated_at",
+    "rank",
+    "sym_1",
+    "sym_2",
+    "zero_crossings",
+    "p_value",
+    "adf_stat",
+    "hedge_ratio",
+    "zscore_current",
+    "overbought_signals",
+    "oversold_signals",
+    "spread_mean",
+    "spread_std",
+    "price_1_current",
+    "price_2_current",
+    "total_symbols",
+    "total_cointegrated_pairs",
+    "analysis_candles",
+]
+
 
 def _output_dir():
     return Path(__file__).resolve().parent / "output"
+
+
+def _report_path():
+    return _output_dir() / "4_summary_report.csv"
+
+
+def _display_report_path(report_path):
+    try:
+        return str(report_path.relative_to(Path(__file__).resolve().parent))
+    except ValueError:
+        return str(report_path)
+
+
+def _clear_summary_report(reason, logger=None):
+    """
+    Replace stale summary rows with a header-only report.
+
+    The execution engine uses 2_cointegrated_pairs.csv as its source of truth.
+    The summary report is a display artifact, so leaving old rows around after a
+    no-pairs scan is more misleading than an empty report.
+    """
+    output_dir = _output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = _report_path()
+    pd.DataFrame(columns=REPORT_COLUMNS).to_csv(report_path, index=False)
+    message = f"Summary report cleared: no current pair rows ({reason})."
+    print(message)
+    if logger:
+        logger.warning(message)
+    return _display_report_path(report_path)
 
 
 def _load_inputs():
@@ -33,7 +84,11 @@ def _load_inputs():
 
     with price_path.open("r", encoding="utf-8") as handle:
         price_data = json.load(handle)
-    df_coint = pd.read_csv(coint_path)
+    try:
+        df_coint = pd.read_csv(coint_path)
+    except Exception:
+        print(f"ERROR: Could not read cointegrated pairs CSV - {coint_path}")
+        return price_data, pd.DataFrame()
 
     return price_data, df_coint
 
@@ -123,12 +178,12 @@ def generate_summary_report(top_n=3):
 
     price_data, df_coint = _load_inputs()
     if price_data is None or df_coint is None:
-        return None
+        return _clear_summary_report("missing required input", logger)
 
     if len(df_coint) == 0:
         print("Summary report skipped: no cointegrated pairs.")
         logger.warning("Summary report skipped: no cointegrated pairs")
-        return None
+        return _clear_summary_report("no cointegrated pairs", logger)
 
     first_symbol = next(iter(price_data.values()), {})
     symbol_info = first_symbol.get("symbol_info", {}) if isinstance(first_symbol, dict) else {}
@@ -149,18 +204,15 @@ def generate_summary_report(top_n=3):
     if not rows:
         print("Summary report skipped: no valid pair stats.")
         logger.warning("Summary report skipped: no valid pair stats")
-        return None
+        return _clear_summary_report("no valid pair stats", logger)
 
-    output_dir = _output_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / "4_summary_report.csv"
+    report_path = _report_path()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     df_report = pd.DataFrame(rows)
+    df_report = df_report.reindex(columns=REPORT_COLUMNS)
     df_report.to_csv(report_path, index=False)
 
-    try:
-        rel_path = report_path.relative_to(Path(__file__).resolve().parent)
-    except ValueError:
-        rel_path = report_path
+    rel_path = _display_report_path(report_path)
 
     print(f"Summary report saved: {rel_path} (rows {len(df_report)})")
     logger.info("Summary report saved: %s rows=%d", rel_path, len(df_report))

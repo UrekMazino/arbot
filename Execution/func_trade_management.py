@@ -9,6 +9,9 @@ from config_execution_api import (
     ENTRY_Z_MAX,
     EXIT_Z,
     MIN_PERSIST_BARS,
+    ENTRY_Z_TOLERANCE,
+    ENTRY_MIN_QUALIFIED_BARS,
+    ENTRY_EXTREME_CLEAN_BARS,
     tradeable_capital_usdt,
     limit_order_basis,
     stop_loss_fail_safe,
@@ -128,6 +131,39 @@ def _env_flag(name, default=False):
     if value in ("0", "false", "no", "n", "off"):
         return False
     return default
+
+
+def _resolve_entry_persistence_settings(min_persist_bars):
+    try:
+        persist = int(float(min_persist_bars))
+    except (TypeError, ValueError):
+        persist = MIN_PERSIST_BARS
+    persist = max(persist, 1)
+
+    try:
+        configured_min = int(float(ENTRY_MIN_QUALIFIED_BARS))
+    except (TypeError, ValueError):
+        configured_min = 0
+    min_qualified = configured_min if configured_min > 0 else max(1, persist - 1)
+    min_qualified = min(max(min_qualified, 1), persist)
+
+    try:
+        clean_bars = int(float(ENTRY_EXTREME_CLEAN_BARS))
+    except (TypeError, ValueError):
+        clean_bars = 2
+    clean_bars = min(max(clean_bars, 0), persist)
+
+    try:
+        tolerance = float(ENTRY_Z_TOLERANCE)
+    except (TypeError, ValueError):
+        tolerance = 0.0
+    tolerance = max(tolerance, 0.0)
+
+    return min_qualified, clean_bars, tolerance
+
+
+def _entry_band_floor(entry_z, tolerance):
+    return max(float(entry_z) - float(tolerance), 0.0)
 
 
 def _env_str(name, default=""):
@@ -957,64 +993,102 @@ def generate_signal(
         persistence_history = get_persistence_history()
 
         if len(persistence_history) >= effective_min_persist_bars:
-            recent_zscores = persistence_history[-effective_min_persist_bars:]
+            recent_zscores = [float(z) for z in persistence_history[-effective_min_persist_bars:]]
             rounded_history = [round(z, 2) for z in recent_zscores]
-
-            # Check if all recent z-scores are in the same extreme zone
-            # Also enforce ENTRY_Z_MAX to avoid regime breaks
-            all_oversold = all(
-                z <= -effective_entry_z and z >= -effective_entry_z_max
-                for z in recent_zscores
+            min_qualified, clean_bars, tolerance = _resolve_entry_persistence_settings(
+                effective_min_persist_bars
             )
-            all_overbought = all(
-                z >= effective_entry_z and z <= effective_entry_z_max
-                for z in recent_zscores
+            entry_floor = _entry_band_floor(effective_entry_z, tolerance)
+
+            def _long_qualified(z_value):
+                return z_value <= -entry_floor and z_value >= -effective_entry_z_max
+
+            def _short_qualified(z_value):
+                return z_value >= entry_floor and z_value <= effective_entry_z_max
+
+            long_qualified = [_long_qualified(z) for z in recent_zscores]
+            short_qualified = [_short_qualified(z) for z in recent_zscores]
+            long_count = sum(1 for item in long_qualified if item)
+            short_count = sum(1 for item in short_qualified if item)
+            recent_long_clean = (
+                clean_bars == 0
+                or all(_long_qualified(z) for z in recent_zscores[-clean_bars:])
+            )
+            recent_short_clean = (
+                clean_bars == 0
+                or all(_short_qualified(z) for z in recent_zscores[-clean_bars:])
             )
 
-            if all_oversold:
+            if (
+                _long_qualified(float(current_z))
+                and long_count >= min_qualified
+                and recent_long_clean
+            ):
                 return (
                     "BUY_SPREAD",
-                    f"Entry signal: Z={current_z:.4f} persistent at -{effective_entry_z:.2f} "
-                    f"(oversold, bars={effective_min_persist_bars})",
+                    f"Entry signal: Z={current_z:.4f} adaptive persistence at -{effective_entry_z:.2f} "
+                    f"(oversold, qualified={long_count}/{effective_min_persist_bars}, "
+                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f})",
                 )
-            elif all_overbought:
+            if (
+                _short_qualified(float(current_z))
+                and short_count >= min_qualified
+                and recent_short_clean
+            ):
                 return (
                     "SELL_SPREAD",
-                    f"Entry signal: Z={current_z:.4f} persistent at +{effective_entry_z:.2f} "
-                    f"(overbought, bars={effective_min_persist_bars})",
+                    f"Entry signal: Z={current_z:.4f} adaptive persistence at +{effective_entry_z:.2f} "
+                    f"(overbought, qualified={short_count}/{effective_min_persist_bars}, "
+                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f})",
                 )
-            else:
-                all_oversold_raw = all(z <= -effective_entry_z for z in recent_zscores)
-                all_overbought_raw = all(z >= effective_entry_z for z in recent_zscores)
 
-                if all_oversold_raw and any(z < -effective_entry_z_max for z in recent_zscores):
-                    min_recent_z = min(recent_zscores)
+            if float(current_z) < -effective_entry_z_max:
+                return (
+                    None,
+                    f"No entry - Z-score too extreme for long entry "
+                    f"(current_z={current_z:.2f} < -{effective_entry_z_max:.2f}, "
+                    f"history: {rounded_history})",
+                )
+
+            if float(current_z) > effective_entry_z_max:
+                return (
+                    None,
+                    f"No entry - Z-score too extreme for short entry "
+                    f"(current_z={current_z:.2f} > +{effective_entry_z_max:.2f}, "
+                    f"history: {rounded_history})",
+                )
+
+            if float(current_z) <= -entry_floor:
+                if any(z < -effective_entry_z_max for z in recent_zscores) and not recent_long_clean:
                     return (
                         None,
-                        f"No entry - Z-score too extreme for long entry "
-                        f"(min_recent_z={min_recent_z:.2f} < -{effective_entry_z_max:.2f}, "
-                        f"history: {rounded_history})",
+                        f"No entry - recovering from too-extreme long entry "
+                        f"(qualified={long_count}/{effective_min_persist_bars}, need={min_qualified}, "
+                        f"clean={clean_bars}, history: {rounded_history})",
                     )
+                return (
+                    None,
+                    f"No entry - adaptive persistence not satisfied for long entry "
+                    f"(qualified={long_count}/{effective_min_persist_bars}, need={min_qualified}, "
+                    f"clean={clean_bars}, tolerance={tolerance:.2f}, history: {rounded_history})",
+                )
 
-                if all_overbought_raw and any(z > effective_entry_z_max for z in recent_zscores):
-                    max_recent_z = max(recent_zscores)
+            if float(current_z) >= entry_floor:
+                if any(z > effective_entry_z_max for z in recent_zscores) and not recent_short_clean:
                     return (
                         None,
-                        f"No entry - Z-score too extreme for short entry "
-                        f"(max_recent_z={max_recent_z:.2f} > +{effective_entry_z_max:.2f}, "
-                        f"history: {rounded_history})",
+                        f"No entry - recovering from too-extreme short entry "
+                        f"(qualified={short_count}/{effective_min_persist_bars}, need={min_qualified}, "
+                        f"clean={clean_bars}, history: {rounded_history})",
                     )
+                return (
+                    None,
+                    f"No entry - adaptive persistence not satisfied for short entry "
+                    f"(qualified={short_count}/{effective_min_persist_bars}, need={min_qualified}, "
+                    f"clean={clean_bars}, tolerance={tolerance:.2f}, history: {rounded_history})",
+                )
 
-                same_sign = all(z >= 0 for z in recent_zscores) or all(z <= 0 for z in recent_zscores)
-                if same_sign:
-                    return (
-                        None,
-                        f"No entry - Z-score did not stay within the allowed entry band "
-                        f"[{effective_entry_z:.2f}, {effective_entry_z_max:.2f}] "
-                        f"(history: {rounded_history})",
-                    )
-
-                return None, f"No entry - Z-score not persistent (history: {rounded_history})"
+            return None, f"No entry - Z-score not persistent (history: {rounded_history})"
         else:
             return None, (
                 f"Insufficient history: {len(persistence_history)} cycles < "
@@ -1195,24 +1269,28 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
     return should_switch, health_score, recommendation
 
 
-def _log_zscore_status(zscore):
+def _log_zscore_status(zscore, entry_z=None, entry_z_max=None, tolerance=None):
     """
     Log Z-score status with descriptive labels and emojis.
     """
     global _LAST_ZSCORE_STATUS
     global _LAST_ZSCORE_LOG_TS
+    effective_entry_z = ENTRY_Z if entry_z is None else float(entry_z)
+    effective_entry_z_max = ENTRY_Z_MAX if entry_z_max is None else float(entry_z_max)
+    effective_tolerance = ENTRY_Z_TOLERANCE if tolerance is None else float(tolerance)
+    entry_floor = _entry_band_floor(effective_entry_z, effective_tolerance)
     if abs(zscore) < 1.0:
         bucket = "quiet"
         status = "😴 Very quiet (|Z| < 1.0)"
-    elif abs(zscore) < 2.0:
+    elif abs(zscore) < entry_floor:
         bucket = "waiting"
-        status = "⏳ Waiting (1.0 < |Z| < 2.0)"
-    elif abs(zscore) < 3.0:
+        status = f"⏳ Waiting (|Z| < {entry_floor:.2f})"
+    elif abs(zscore) <= effective_entry_z_max:
         bucket = "tradeable"
-        status = "🎯 TRADEABLE (|Z| > 2.0)"
+        status = f"🎯 TRADEABLE (|Z| >= {entry_floor:.2f})"
     else:
         bucket = "extreme"
-        status = "🚨 Extreme (|Z| > 3.0)"
+        status = f"🚨 Extreme (|Z| > {effective_entry_z_max:.2f})"
     
     msg = f"Current Z-Score: {zscore:+.2f} - {status}"
     now = time.time()
@@ -1360,7 +1438,12 @@ def manage_new_trades(
         )
     
     # 1. Log Current Z-score status every cycle
-    _log_zscore_status(latest_zscore)
+    _log_zscore_status(
+        latest_zscore,
+        entry_z=effective_entry_z,
+        entry_z_max=effective_entry_z_max,
+        tolerance=ENTRY_Z_TOLERANCE,
+    )
 
     # 2. Run Health Check if due or if cointegration is lost
     if health_check_due or coint_flag == 0:
@@ -1500,7 +1583,8 @@ def manage_new_trades(
             coint_flag=int(coint_flag),
         )
         # Log waiting status
-        if abs(latest_zscore) < effective_entry_z:
+        entry_floor = _entry_band_floor(effective_entry_z, ENTRY_Z_TOLERANCE)
+        if abs(latest_zscore) < entry_floor:
             _log_waiting("⏳ WAITING: Not at entry threshold yet")
         else:
             # It's beyond threshold but not persistent yet

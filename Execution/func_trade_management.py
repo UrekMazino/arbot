@@ -2169,16 +2169,21 @@ def manage_new_trades(
         )
 
         if not preflight_long.get("ok") or not preflight_short.get("ok"):
+            reject_category = "order_size_limit" if (
+                not preflight_long.get("size_limit_ok", True)
+                or not preflight_short.get("size_limit_ok", True)
+            ) else "trade_details"
+            reject_reason = "order_size_exceeds_okx_instrument_limit" if reject_category == "order_size_limit" else "invalid_trade_details"
             msg = (
-                "ERROR: Invalid trade details; "
+                "ERROR: Entry preflight failed; "
                 f"long={preflight_long.get('error') or 'ok'} "
                 f"short={preflight_short.get('error') or 'ok'}. Skipping entry."
             )
             print(msg)
             logger.error(msg)
             _emit_entry_reject(
-                "trade_details",
-                "invalid_trade_details",
+                reject_category,
+                reject_reason,
                 pair=_active_pair_key(),
                 strategy=strategy_name,
                 regime=regime_name,

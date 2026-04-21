@@ -81,6 +81,8 @@ STATBOT_STRATEGY_Z_SCORE_WINDOW=60
 STATBOT_STRATEGY_KLINE_LIMIT=10080
 STATBOT_STRATEGY_STARTUP_RETRY_SECONDS=5
 STATBOT_STRATEGY_STARTUP_MAX_ATTEMPTS=0
+STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=900
+STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY=1
 STATBOT_STRATEGY_SETTLE_CCY=USDT
 STATBOT_STRATEGY_MIN_EQUITY=0
 STATBOT_STRATEGY_FAST_PATH=1
@@ -98,6 +100,7 @@ STATBOT_STRATEGY_LIQUIDITY_PCT=0
 STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER=10
 STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH=5000
 STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS=10
+STATBOT_STRATEGY_MIN_ORDER_CAPACITY=50
 ```
 
 ## Usage
@@ -170,6 +173,7 @@ STATBOT_STRATEGY_MIN_ORDERBOOK_DEPTH=8000
 STATBOT_STRATEGY_SOFT_ORDERBOOK_DEPTH=6000
 STATBOT_STRATEGY_MAX_ORDERBOOK_IMBALANCE=12
 STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS=7
+STATBOT_STRATEGY_MIN_ORDER_CAPACITY=50  # Filters symbols with tiny OKX maxMktSz/maxStopSz capacity
 ```
 
 ## Strategy Outputs
@@ -177,8 +181,24 @@ STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS=7
 Strategy outputs are stored under `OKXStatBot/Strategy/output`:
 - `1_price_list.json`
 - `2_cointegrated_pairs.csv`
+- `2_cointegrated_pairs_latest_attempt.csv`
+- `2_cointegrated_pairs_status.json`
 - `3_backtest_file.csv`
 - `4_summary_report.csv` (overwritten each run)
+
+`2_cointegrated_pairs.csv` is the last-good canonical pair supply used by
+execution. Empty Strategy scans are written to `2_cointegrated_pairs_latest_attempt.csv`
+and recorded in `2_cointegrated_pairs_status.json`; they do not erase the
+canonical CSV when a prior valid pair list exists.
+
+The dashboard can run an independent continuous pair-supply scanner. It starts
+`Strategy/pair_supply_daemon.py`, which periodically runs Strategy discovery and
+uses the same last-good CSV protection:
+
+```env
+STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=900
+STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY=1
+```
 
 ## Offline Replay Simulation
 

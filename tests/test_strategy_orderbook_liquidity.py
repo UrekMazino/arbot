@@ -4,12 +4,23 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 STRATEGY_ROOT = ROOT / "Strategy"
 if str(STRATEGY_ROOT) not in sys.path:
     sys.path.insert(0, str(STRATEGY_ROOT))
 
 import func_cointegration as fc
+
+
+@pytest.fixture(autouse=True)
+def isolate_strategy_output(monkeypatch, tmp_path):
+    strategy_file = tmp_path / "Strategy" / "func_cointegration.py"
+    strategy_file.parent.mkdir(parents=True, exist_ok=True)
+    strategy_file.write_text("# isolated test module path\n", encoding="utf-8")
+    monkeypatch.setattr(fc, "__file__", str(strategy_file))
 
 
 def _build_symbol(inst_id: str, closes: list[float], *, ct_val: float) -> dict:
@@ -35,6 +46,8 @@ def _build_symbol(inst_id: str, closes: list[float], *, ct_val: float) -> dict:
             "ctVal": ct_val,
             "ctMult": 1.0,
             "ctValCcy": inst_id.split("-")[0],
+            "maxMktSz": 100000.0,
+            "maxStopSz": 100000.0,
         },
         "klines": klines,
     }
@@ -171,3 +184,57 @@ def test_orderbook_soft_pass_rejects_excessive_imbalance(monkeypatch):
     assert len(df) == 0
     assert summary["pairs_kept"] == 0
     assert summary["filtered_breakdown"]["orderbook_depth"] == 1
+
+
+def test_order_capacity_filter_rejects_tiny_okx_max_order_symbols(monkeypatch):
+    def fake_get_orderbook(instId: str, sz: int = 50):
+        levels = [["100", "100", "0", "1"]] * 7
+        return {"code": "0", "data": [{"bids": levels, "asks": levels}]}
+
+    tiny = _build_symbol("TINY-USDT-SWAP", [0.026, 0.027, 0.0265, 0.0272], ct_val=1.0)
+    tiny["symbol_info"]["maxMktSz"] = 100.0
+    tiny["symbol_info"]["maxStopSz"] = 100.0
+    json_symbols = {
+        "TINY-USDT-SWAP": tiny,
+        "AAA-USDT-SWAP": _build_symbol("AAA-USDT-SWAP", [10.0, 10.1, 10.2, 10.3], ct_val=1.0),
+    }
+
+    monkeypatch.setattr(
+        fc,
+        "calculate_cointegration_from_log",
+        lambda *_args, **_kwargs: (1, 0.001, -4.0, -3.0, 1.0, 5),
+    )
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=fake_get_orderbook))
+    monkeypatch.setattr(fc, "min_order_capacity_usdt", 50.0)
+    monkeypatch.setattr(fc, "min_orderbook_levels", 7)
+    monkeypatch.setattr(fc, "min_orderbook_depth_usdt", 1000.0)
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+
+    assert len(df) == 0
+    assert summary["pairs_kept"] == 0
+    assert summary["filtered_breakdown"]["order_capacity"] == 1
+
+
+def test_cointegrated_pairs_writer_preserves_last_good_csv_on_empty_scan(tmp_path):
+    output_path = tmp_path / "2_cointegrated_pairs.csv"
+    previous = pd.DataFrame([{"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "zero_crossing": 9}])
+    previous.to_csv(output_path, index=False)
+
+    empty_attempt = pd.DataFrame(columns=["sym_1", "sym_2", "zero_crossing"])
+    status = fc._write_cointegrated_pairs_csv(empty_attempt, output_path)
+    preserved = pd.read_csv(output_path)
+    latest_attempt = pd.read_csv(tmp_path / "2_cointegrated_pairs_latest_attempt.csv")
+
+    assert status["canonical_updated"] is False
+    assert status["preserved_existing"] is True
+    assert len(preserved) == 1
+    assert preserved.iloc[0]["sym_1"] == "AAA-USDT-SWAP"
+    assert latest_attempt.empty

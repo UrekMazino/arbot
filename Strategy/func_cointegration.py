@@ -17,6 +17,7 @@ from config_strategy_api import (
     soft_orderbook_depth_usdt,
     max_orderbook_imbalance,
     min_orderbook_levels,
+    min_order_capacity_usdt,
     fast_path_enabled,
     corr_min_filter,
     corr_lookback,
@@ -26,6 +27,7 @@ import time
 from pathlib import Path
 import json
 import sys
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 import math
@@ -279,6 +281,75 @@ def _calculate_min_capital(last_price, min_sz, lot_sz, instrument_info=None, ins
     return min_qty, float(min_qty) * float(last_price)
 
 
+def _calculate_max_order_notional(last_price, max_sz, instrument_info=None, inst_id=""):
+    max_qty = _safe_float(max_sz)
+    if max_qty is None or max_qty <= 0 or last_price is None or last_price <= 0:
+        return None
+    contract_value_quote = _resolve_contract_value_quote(last_price, instrument_info, inst_id=inst_id)
+    if contract_value_quote > 0:
+        return float(max_qty) * contract_value_quote
+    return float(max_qty) * float(last_price)
+
+
+def _count_csv_rows(path):
+    if not path.exists():
+        return 0
+    try:
+        return int(len(pd.read_csv(path)))
+    except Exception:
+        return 0
+
+
+def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None):
+    """
+    Keep 2_cointegrated_pairs.csv as the last-good pair supply.
+
+    Strategy fallback attempts can legitimately produce zero rows. Those empty
+    attempts should be visible for diagnostics, but they should not erase the
+    canonical CSV that execution uses for pair switching.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    latest_attempt_path = output_path.with_name(f"{output_path.stem}_latest_attempt{output_path.suffix}")
+    status_path = output_path.with_name(f"{output_path.stem}_status.json")
+    temp_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
+
+    df_coint.to_csv(latest_attempt_path, index=False)
+    attempt_rows = int(len(df_coint))
+    canonical_updated = False
+    preserved_existing = False
+
+    if attempt_rows > 0:
+        df_coint.to_csv(temp_path, index=False)
+        temp_path.replace(output_path)
+        canonical_updated = True
+    elif output_path.exists() and output_path.stat().st_size > 0:
+        preserved_existing = True
+        if logger:
+            logger.warning(
+                "No pairs found in latest Strategy attempt; preserving existing canonical pair CSV at %s.",
+                output_path,
+            )
+    else:
+        df_coint.to_csv(output_path, index=False)
+        canonical_updated = True
+
+    status = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "canonical_path": str(output_path),
+        "latest_attempt_path": str(latest_attempt_path),
+        "latest_attempt_rows": attempt_rows,
+        "canonical_rows": _count_csv_rows(output_path),
+        "canonical_updated": canonical_updated,
+        "preserved_existing": preserved_existing,
+    }
+    try:
+        status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to write cointegrated pair status metadata: %s", exc)
+    return status
+
+
 def _calculate_orderbook_depth_usdt(levels, instrument_info=None, inst_id="", fallback_price=None):
     total = 0.0
     for level in levels or []:
@@ -385,6 +456,24 @@ def get_cointegrated_pairs(
         last_close = series[-1] if series.size else None
         contract_value_quote = _resolve_contract_value_quote(last_close, info, inst_id=sym)
         min_qty, min_capital = _calculate_min_capital(last_close, min_sz, lot_sz, info, inst_id=sym)
+        max_market_notional = _calculate_max_order_notional(
+            last_close,
+            info.get("maxMktSz") if isinstance(info, dict) else None,
+            info,
+            inst_id=sym,
+        )
+        max_stop_notional = _calculate_max_order_notional(
+            last_close,
+            info.get("maxStopSz") if isinstance(info, dict) else None,
+            info,
+            inst_id=sym,
+        )
+        capacity_values = [
+            value
+            for value in (max_market_notional, max_stop_notional)
+            if value is not None and value > 0
+        ]
+        order_capacity_usdt = min(capacity_values) if capacity_values else None
         avg_quote_volume = _average_quote_volume(klines, liquidity_window)
         symbol_meta[sym] = {
             "min_qty": min_qty,
@@ -392,6 +481,9 @@ def get_cointegrated_pairs(
             "last_close": last_close,
             "avg_quote_volume": avg_quote_volume,
             "contract_value_quote": contract_value_quote,
+            "max_market_notional": max_market_notional,
+            "max_stop_notional": max_stop_notional,
+            "order_capacity_usdt": order_capacity_usdt,
             "instrument_info": info,
         }
 
@@ -448,6 +540,25 @@ def get_cointegrated_pairs(
     filtered_breakdown = {}
     orderbook_cache = {}
     orderbook_soft_pass_tickers = set()
+    order_capacity_logged = set()
+
+    def _order_capacity_passes(ticker):
+        if not min_order_capacity_usdt or min_order_capacity_usdt <= 0:
+            return True
+        capacity = symbol_meta.get(ticker, {}).get("order_capacity_usdt")
+        if capacity is None:
+            return True
+        if capacity >= min_order_capacity_usdt:
+            return True
+        if ticker not in order_capacity_logged:
+            logger.info(
+                "Skipping low OKX order capacity: %s (capacity=%.2f USDT, min=%.2f USDT)",
+                ticker,
+                capacity,
+                min_order_capacity_usdt,
+            )
+            order_capacity_logged.add(ticker)
+        return False
 
     def _get_orderbook_liquidity_status(ticker):
         cached = orderbook_cache.get(ticker)
@@ -602,6 +713,10 @@ def get_cointegrated_pairs(
             filtered_breakdown["graveyard"] = filtered_breakdown.get("graveyard", 0) + 1
             continue
 
+        if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):
+            filtered_breakdown["order_capacity"] = filtered_breakdown.get("order_capacity", 0) + 1
+            continue
+
         if corr_min and corr_min > 0:
             ret_1 = returns_by_symbol.get(sym_1)
             ret_2 = returns_by_symbol.get(sym_2)
@@ -647,6 +762,15 @@ def get_cointegrated_pairs(
             pair_liquidity = None
             if avg_vol_1 is not None and avg_vol_2 is not None:
                 pair_liquidity = min(avg_vol_1, avg_vol_2)
+            max_market_1 = symbol_meta.get(sym_1, {}).get("max_market_notional")
+            max_market_2 = symbol_meta.get(sym_2, {}).get("max_market_notional")
+            max_stop_1 = symbol_meta.get(sym_1, {}).get("max_stop_notional")
+            max_stop_2 = symbol_meta.get(sym_2, {}).get("max_stop_notional")
+            order_capacity_1 = symbol_meta.get(sym_1, {}).get("order_capacity_usdt")
+            order_capacity_2 = symbol_meta.get(sym_2, {}).get("order_capacity_usdt")
+            pair_order_capacity = None
+            if order_capacity_1 is not None and order_capacity_2 is not None:
+                pair_order_capacity = min(order_capacity_1, order_capacity_2)
 
             coint_pair_list.append({
                 "sym_1": sym_1,
@@ -663,6 +787,13 @@ def get_cointegrated_pairs(
                 "avg_quote_volume_1": avg_vol_1,
                 "avg_quote_volume_2": avg_vol_2,
                 "pair_liquidity_min": pair_liquidity,
+                "max_market_notional_1": max_market_1,
+                "max_market_notional_2": max_market_2,
+                "max_stop_notional_1": max_stop_1,
+                "max_stop_notional_2": max_stop_2,
+                "order_capacity_usdt_1": order_capacity_1,
+                "order_capacity_usdt_2": order_capacity_2,
+                "pair_order_capacity_usdt": pair_order_capacity,
             })
 
     # Output results
@@ -786,7 +917,7 @@ def get_cointegrated_pairs(
     output_dir = Path(__file__).resolve().parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
-    df_coint.to_csv(output_path, index=False)
+    output_status = _write_cointegrated_pairs_csv(df_coint, output_path, logger=logger)
     summary = {
         "total_pairs": total_comparisons,
         "cointegrated_pairs": len(coint_pair_list),
@@ -807,6 +938,12 @@ def get_cointegrated_pairs(
         "orderbook_depth_soft_min_usdt": soft_orderbook_depth_usdt,
         "orderbook_max_imbalance": max_orderbook_imbalance,
         "orderbook_soft_pass_tickers": len(orderbook_soft_pass_tickers),
+        "order_capacity_min_usdt": min_order_capacity_usdt,
+        "order_capacity_filtered": filtered_breakdown.get("order_capacity", 0),
+        "canonical_pairs_rows": output_status.get("canonical_rows"),
+        "canonical_pairs_updated": output_status.get("canonical_updated"),
+        "latest_attempt_rows": output_status.get("latest_attempt_rows"),
+        "preserved_existing_pairs_csv": output_status.get("preserved_existing"),
         "min_equity_filtered": filtered_count,
         "restricted_removed": restricted_removed,
         "pairs_kept": len(df_coint),

@@ -14,30 +14,23 @@
         "source": "seed"
     },
     "ZETA-USDT-SWAP": {
-        "reason": "failed_pairs_large_losses",
+        "reason": "persistent_thin_orderbook",
         "code": "",
-        "msg": "Trap token, 5+ failed pairs, -2.22 USDT total",
-        "ttl_days": null,
-        "source": "seed"
-    },
-    "IMX-USDT-SWAP": {
-        "reason": "failed_pairs_large_losses",
-        "code": "",
-        "msg": "-2.13 USDT single loss, high fees",
+        "msg": "Repeated Strategy skips with ask-side depth below the configured 7-level minimum; exclude until manual liquidity review",
         "ttl_days": null,
         "source": "seed"
     },
     "SPK-USDT-SWAP": {
-        "reason": "regime_break_unreliable",
-        "code": "",
-        "msg": "Regime break -37.82 USDT loss, Z whipsaw -3.83 to +4.18",
+        "reason": "exchange_max_order_capacity_too_small",
+        "code": "51202",
+        "msg": "OKX maxMktSz/maxStopSz=100 contracts makes practical pair execution unsafe",
         "ttl_days": null,
         "source": "seed"
     },
     "XPL-USDT-SWAP": {
-        "reason": "regime_break_unreliable",
+        "reason": "repeated_pair_losses",
         "code": "",
-        "msg": "Multiple failures in previous runs, unreliable cointegration",
+        "msg": "Pair history shows repeated XPL failures across SKY/XPL and CRV/XPL with materially negative realized PnL; exclude until manual review",
         "ttl_days": null,
         "source": "seed"
     }

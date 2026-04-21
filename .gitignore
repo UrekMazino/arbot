@@ -41,6 +41,8 @@ wheels/
 # Project-specific data files
 1_price_list.json
 2_cointegrated_pairs.csv
+2_cointegrated_pairs_latest_attempt.csv
+2_cointegrated_pairs_status.json
 3_backtest_file.csv
 Simulation/output/
 

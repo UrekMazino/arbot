@@ -33,6 +33,12 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
         group: "Monitor",
         requiredPermissions: ["view_portfolio"],
       },
+      {
+        href: "/admin/dashboard/cointegrated-pair",
+        label: "Cointegrated Pair",
+        group: "Monitor",
+        requiredPermissions: ["view_dashboard"],
+      },
     ],
   },
   {
@@ -107,6 +113,13 @@ export function canAccessAdminPath(user: UserRecord | null | undefined, href: st
 
 export function getAdminNavItems(user: UserRecord | null | undefined): Omit<AdminNavItem, "requiredPermissions">[] {
   const result: Omit<AdminNavItem, "requiredPermissions">[] = [];
+  const toPublicNavItem = (item: AdminNavItem): Omit<AdminNavItem, "requiredPermissions"> => ({
+    href: item.href,
+    label: item.label,
+    hint: item.hint,
+    group: item.group,
+    icon: item.icon,
+  });
 
   const processItems = (items: AdminNavItem[]) => {
     for (const item of items) {
@@ -120,20 +133,15 @@ export function getAdminNavItems(user: UserRecord | null | undefined): Omit<Admi
       if (item.children && item.children.length > 0) {
         // Parent with children: only show if there are accessible children
         if (accessibleChildren.length > 0) {
-          const { requiredPermissions, children, ...navItem } = item;
           result.push({
-            ...navItem,
-            children: accessibleChildren.map(({ requiredPermissions, ...child }) => {
-              void requiredPermissions;
-              return child;
-            }),
+            ...toPublicNavItem(item),
+            children: accessibleChildren.map(toPublicNavItem),
           });
         }
       } else {
         // Item without children: include if user has direct permission
         if (hasPermission) {
-          const { requiredPermissions, children, ...navItem } = item;
-          result.push(navItem);
+          result.push(toPublicNavItem(item));
         }
       }
     }

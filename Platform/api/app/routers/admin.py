@@ -27,6 +27,13 @@ from ..services.bot_control import (
     tail_run_log,
     update_env_setting,
 )
+from ..services.cointegrated_pairs import (
+    get_cointegrated_pair_detail,
+    get_pair_supply_status,
+    list_cointegrated_pairs,
+    start_pair_supply,
+    stop_pair_supply,
+)
 from ..services.run_runtime import get_run_runtime_snapshot
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -269,6 +276,57 @@ def admin_env_settings_update(
 @router.get("/pairs/health")
 def admin_pairs_health(_: User = Depends(require_permissions("view_logs", "manage_bot"))):
     return get_pair_health_data()
+
+
+@router.get("/cointegrated-pairs")
+def admin_cointegrated_pairs(
+    limit: int = Query(default=500, ge=1, le=1000),
+    _: User = Depends(require_permissions("view_dashboard")),
+):
+    try:
+        return list_cointegrated_pairs(limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/detail")
+def admin_cointegrated_pair_detail(
+    sym_1: str = Query(..., min_length=1),
+    sym_2: str = Query(..., min_length=1),
+    limit: int = Query(default=720, ge=50, le=2000),
+    _: User = Depends(require_permissions("view_dashboard")),
+):
+    try:
+        return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/supply/status")
+def admin_cointegrated_pair_supply_status(
+    _: User = Depends(require_permissions("view_dashboard")),
+):
+    return get_pair_supply_status()
+
+
+@router.post("/cointegrated-pairs/supply/start")
+def admin_cointegrated_pair_supply_start(
+    user: User = Depends(require_permissions("manage_bot")),
+):
+    return start_pair_supply(requested_by=user.email)
+
+
+@router.post("/cointegrated-pairs/supply/stop")
+def admin_cointegrated_pair_supply_stop(
+    user: User = Depends(require_permissions("manage_bot")),
+):
+    return stop_pair_supply(requested_by=user.email)
 
 
 @router.post("/pairs/active/clear")

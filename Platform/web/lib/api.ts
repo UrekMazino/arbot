@@ -347,6 +347,76 @@ export type AdminPairsHealth = {
   active_pair: Record<string, unknown> | null;
 };
 
+export type CointegratedPair = {
+  id: string;
+  rank: number;
+  sym_1: string;
+  sym_2: string;
+  pair: string;
+  p_value: number | null;
+  adf_stat: number | null;
+  hedge_ratio: number | null;
+  zero_crossing: number | null;
+  min_capital_per_leg: number | null;
+  min_equity_recommended: number | null;
+  pair_liquidity_min: number | null;
+  pair_order_capacity_usdt: number | null;
+};
+
+export type CointegratedPairsResponse = {
+  source_path: string;
+  price_path: string;
+  updated_at: string | null;
+  price_updated_at: string | null;
+  status: Record<string, unknown>;
+  pair_count: number;
+  pairs: CointegratedPair[];
+};
+
+export type CointegratedPairPoint = {
+  idx: number;
+  ts: string;
+  price_1: number;
+  price_2: number;
+  price_1_norm: number;
+  price_2_norm: number;
+  spread: number;
+  spread_mean: number;
+  zscore: number;
+  z_upper: number;
+  z_lower: number;
+  z_mid: number;
+};
+
+export type CointegratedPairDetail = {
+  pair: CointegratedPair;
+  updated_at: string | null;
+  price_updated_at: string | null;
+  points: CointegratedPairPoint[];
+  stats: {
+    point_count: number;
+    spread_mean: number | null;
+    spread_std: number | null;
+    zscore_current: number | null;
+    price_1_current: number | null;
+    price_2_current: number | null;
+  };
+};
+
+export type PairSupplyStatus = {
+  running: boolean;
+  pid: number;
+  started_at?: string | null;
+  stopped_at?: string | null;
+  detail?: string;
+  command?: string[];
+  cwd?: string;
+  requested_by?: string;
+  interval_seconds?: number;
+  log_file?: string;
+  status?: Record<string, unknown>;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8081/api/v2";
 
 async function apiRequest<T>(
@@ -612,6 +682,31 @@ export async function updateAdminEnvSetting(key: string, value: string): Promise
 
 export async function getAdminPairsHealth(): Promise<AdminPairsHealth> {
   return apiRequest<AdminPairsHealth>("/admin/pairs/health", { method: "GET" });
+}
+
+export async function getCointegratedPairs(limit = 500): Promise<CointegratedPairsResponse> {
+  return apiRequest<CointegratedPairsResponse>(`/admin/cointegrated-pairs?limit=${limit}`, { method: "GET" });
+}
+
+export async function getCointegratedPairDetail(
+  sym1: string,
+  sym2: string,
+  limit = 720,
+): Promise<CointegratedPairDetail> {
+  const params = new URLSearchParams({ sym_1: sym1, sym_2: sym2, limit: String(limit) });
+  return apiRequest<CointegratedPairDetail>(`/admin/cointegrated-pairs/detail?${params.toString()}`, { method: "GET" });
+}
+
+export async function getPairSupplyStatus(): Promise<PairSupplyStatus> {
+  return apiRequest<PairSupplyStatus>("/admin/cointegrated-pairs/supply/status", { method: "GET" });
+}
+
+export async function startPairSupply(): Promise<PairSupplyStatus> {
+  return apiRequest<PairSupplyStatus>("/admin/cointegrated-pairs/supply/start", { method: "POST", body: JSON.stringify({}) });
+}
+
+export async function stopPairSupply(): Promise<PairSupplyStatus> {
+  return apiRequest<PairSupplyStatus>("/admin/cointegrated-pairs/supply/stop", { method: "POST", body: JSON.stringify({}) });
 }
 
 export async function clearAdminActivePair(): Promise<{

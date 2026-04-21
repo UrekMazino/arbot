@@ -10,7 +10,7 @@ from config_execution_api import (
     depth,
 )
 from func_calculation import get_trade_details, get_contract_value_quote
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 
 
 def _bool_str(value):
@@ -132,7 +132,7 @@ def _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=None):
     lot_sz_raw = info.get("lotSz")
     try:
         lot_sz = Decimal(str(lot_sz_raw))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidOperation):
         return quantity
 
     if lot_sz <= 0:
@@ -141,7 +141,7 @@ def _adjust_quantity_to_lot_size(inst_id, quantity, instrument_info=None):
     min_sz_raw = info.get("minSz")
     try:
         min_sz = Decimal(str(min_sz_raw)) if min_sz_raw else Decimal("0")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidOperation):
         min_sz = Decimal("0")
 
     size_dec = Decimal(str(quantity))
@@ -166,11 +166,11 @@ def _get_min_order_qty(instrument_info):
     min_sz_raw = instrument_info.get("minSz")
     try:
         lot_sz = Decimal(str(lot_sz_raw)) if lot_sz_raw is not None else Decimal("0")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidOperation):
         lot_sz = Decimal("0")
     try:
         min_sz = Decimal(str(min_sz_raw)) if min_sz_raw is not None else Decimal("0")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidOperation):
         min_sz = Decimal("0")
 
     if lot_sz <= 0 and min_sz <= 0:
@@ -197,6 +197,101 @@ def _calculate_min_capital(entry_price, instrument_info):
     else:
         min_capital = float(min_qty) * contract_value_quote
     return float(min_qty), min_capital
+
+
+def _decimal_from_info(instrument_info, key):
+    if not instrument_info:
+        return Decimal("0")
+    raw = instrument_info.get(key)
+    try:
+        value = Decimal(str(raw)) if raw not in (None, "") else Decimal("0")
+    except (TypeError, ValueError):
+        return Decimal("0")
+    return value if value > 0 else Decimal("0")
+
+
+def _format_qty(value):
+    try:
+        return f"{float(value):.8f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _get_max_order_qty(instrument_info, order_type):
+    order_type = _normalize_value(order_type) or "market"
+    if order_type == "limit":
+        return _decimal_from_info(instrument_info, "maxLmtSz"), "maxLmtSz"
+    return _decimal_from_info(instrument_info, "maxMktSz"), "maxMktSz"
+
+
+def _validate_order_size_limits(
+    inst_id,
+    quantity,
+    entry_price,
+    instrument_info,
+    order_type="market",
+    place_stop=True,
+):
+    """
+    Validate OKX max order-size fields before placing either leg.
+
+    OKX derivative `sz` is contract count, so maxMktSz/maxLmtSz/maxStopSz must
+    be checked against the rounded contract quantity, not only USDT notional.
+    """
+    result = {
+        "ok": True,
+        "order_type": _normalize_value(order_type) or "market",
+        "max_order_size": None,
+        "max_order_size_field": "",
+        "max_stop_size": None,
+        "max_order_notional_usdt": None,
+        "max_stop_notional_usdt": None,
+        "error": "",
+    }
+    if not instrument_info:
+        return result
+
+    try:
+        qty_dec = Decimal(str(quantity))
+    except (TypeError, ValueError):
+        result["ok"] = False
+        result["error"] = f"invalid quantity for max-size check: {quantity}"
+        return result
+
+    contract_value_quote = get_contract_value_quote(entry_price, instrument_info, inst_id=inst_id)
+    order_max, order_field = _get_max_order_qty(instrument_info, result["order_type"])
+    stop_max = _decimal_from_info(instrument_info, "maxStopSz")
+    failures = []
+
+    if order_max > 0:
+        result["max_order_size"] = float(order_max)
+        result["max_order_size_field"] = order_field
+        if contract_value_quote > 0:
+            result["max_order_notional_usdt"] = float(order_max) * contract_value_quote
+        if qty_dec > order_max:
+            max_notional = result["max_order_notional_usdt"]
+            notional_text = f", max_notional={max_notional:.2f} USDT" if max_notional else ""
+            failures.append(
+                f"{inst_id} {result['order_type']} quantity {_format_qty(qty_dec)} "
+                f"exceeds {order_field} {_format_qty(order_max)}{notional_text}"
+            )
+
+    if place_stop and stop_max > 0:
+        result["max_stop_size"] = float(stop_max)
+        if contract_value_quote > 0:
+            result["max_stop_notional_usdt"] = float(stop_max) * contract_value_quote
+        if qty_dec > stop_max:
+            max_notional = result["max_stop_notional_usdt"]
+            notional_text = f", max_notional={max_notional:.2f} USDT" if max_notional else ""
+            failures.append(
+                f"{inst_id} stop quantity {_format_qty(qty_dec)} "
+                f"exceeds maxStopSz {_format_qty(stop_max)}{notional_text}"
+            )
+
+    if failures:
+        result["ok"] = False
+        result["error"] = "; ".join(failures)
+    return result
 
 
 def get_min_capital_requirements(inst_id, orderbook_payload=None, instrument_info=None):
@@ -240,7 +335,8 @@ def get_min_capital_requirements(inst_id, orderbook_payload=None, instrument_inf
 
 
 def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
-                          enforce_lot_size=True, instrument_info=None):
+                          enforce_lot_size=True, instrument_info=None,
+                          order_type="market", place_stop=True):
     entry_side = _resolve_entry_side(direction)
     if not entry_side:
         return {"ok": False, "error": "direction must be long/short or buy/sell."}
@@ -274,6 +370,17 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
     notional_usdt = 0.0
     if contract_value_quote > 0 and quantity > 0:
         notional_usdt = float(quantity) * contract_value_quote
+    size_limits = _validate_order_size_limits(
+        inst_id,
+        quantity,
+        entry_price,
+        info,
+        order_type=order_type,
+        place_stop=place_stop,
+    )
+    if ok and not size_limits.get("ok", True):
+        ok = False
+        error = size_limits.get("error", "")
 
     return {
         "ok": ok,
@@ -287,6 +394,12 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         "min_capital": min_capital,
         "contract_value_quote": contract_value_quote,
         "notional_usdt": notional_usdt,
+        "size_limit_ok": size_limits.get("ok", True),
+        "max_order_size": size_limits.get("max_order_size"),
+        "max_order_size_field": size_limits.get("max_order_size_field"),
+        "max_stop_size": size_limits.get("max_stop_size"),
+        "max_order_notional_usdt": size_limits.get("max_order_notional_usdt"),
+        "max_stop_notional_usdt": size_limits.get("max_stop_notional_usdt"),
         "orderbook_payload": orderbook_payload,
         "instrument_info": info,
         "error": error,
@@ -374,6 +487,35 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         print(f"ERROR: Invalid trade details (entry={entry_price}, quantity={quantity}, stop={stop_price}).")
         return None
 
+    order_type = "limit" if limit_offset and limit_offset != 0 else "market"
+    size_limits = _validate_order_size_limits(
+        inst_id,
+        quantity,
+        entry_price,
+        info,
+        order_type=order_type,
+        place_stop=place_stop,
+    )
+    details = {
+        "inst_id": inst_id,
+        "direction": direction,
+        "entry_side": entry_side,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "stop_price": stop_price,
+        "size_limit_ok": size_limits.get("ok", True),
+        "max_order_size": size_limits.get("max_order_size"),
+        "max_order_size_field": size_limits.get("max_order_size_field"),
+        "max_stop_size": size_limits.get("max_stop_size"),
+        "max_order_notional_usdt": size_limits.get("max_order_notional_usdt"),
+        "max_stop_notional_usdt": size_limits.get("max_stop_notional_usdt"),
+    }
+
+    if not size_limits.get("ok", True):
+        error = size_limits.get("error") or "order size exceeds OKX instrument limit"
+        print(f"ERROR: {error}")
+        return {"entry": None, "stop": None, "details": details, "ok": False, "error": error}
+
     if limit_offset and limit_offset != 0:
         offset = abs(float(limit_offset))
         if entry_side == "buy":
@@ -396,15 +538,6 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
             td_mode_override=td_mode_override,
             dry_run_override=dry_run_override,
         )
-
-    details = {
-        "inst_id": inst_id,
-        "direction": direction,
-        "entry_side": entry_side,
-        "entry_price": entry_price,
-        "quantity": quantity,
-        "stop_price": stop_price,
-    }
 
     result = {"entry": entry_res, "stop": None, "details": details, "ok": _is_ok_response(entry_res)}
     if not result["ok"]:

@@ -109,6 +109,9 @@ max_orderbook_imbalance = _env_float("STATBOT_STRATEGY_MAX_ORDERBOOK_IMBALANCE",
 if max_orderbook_imbalance < 0:
     max_orderbook_imbalance = 0.0
 min_orderbook_levels = _env_int("STATBOT_STRATEGY_MIN_ORDERBOOK_LEVELS", 7)
+min_order_capacity_usdt = _env_float("STATBOT_STRATEGY_MIN_ORDER_CAPACITY", 50.0)
+if min_order_capacity_usdt < 0:
+    min_order_capacity_usdt = 0.0
 fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
 corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.60 if fast_path_enabled else 0.0)  # Increased from 0.2 - need strong correlation
 corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)
@@ -166,7 +169,8 @@ def log_strategy_config(logger=None, to_console=False):
         lines.append(f"Settle CCY filter: {', '.join(settle_ccy_filter)}")
     lines.append(
         "Pair filters: max_per_ticker={0}, p_value=[{1}, {2}], "
-        "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}".format(
+        "min_zero_crossings={3}, hedge_ratio=[{4}, {5}], min_capital_per_leg={6}, "
+        "min_order_capacity={7}".format(
             max_pairs_per_ticker,
             min_p_value_filter,
             max_p_value_filter,
@@ -174,6 +178,7 @@ def log_strategy_config(logger=None, to_console=False):
             min_hedge_ratio,
             max_hedge_ratio,
             min_capital_per_leg,
+            min_order_capacity_usdt,
         )
     )
     if min_avg_quote_volume > 0 or liquidity_pct > 0:

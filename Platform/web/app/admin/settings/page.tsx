@@ -61,7 +61,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   ENTRY_Z_MAX: { description: "Maximum Z-score allowed for a new entry to avoid regime breaks", default: "3.0" },
   EXIT_Z: { description: "Base Z-score threshold used for mean reversion exits", default: "0.35" },
   MIN_PERSIST_BARS: { description: "Minimum consecutive bars a signal must persist before entry", default: "4" },
-  MAX_CONSECUTIVE_LOSSES: { description: "Consecutive pair losses allowed before pair retirement logic escalates", default: "2" },
+  MAX_CONSECUTIVE_LOSSES: { description: "Consecutive losses on the same pair before pair retirement logic escalates", default: "2" },
   COINT_GATE_THRESHOLD: { description: "Consecutive cointegration-gate failures required before execution triggers a pair switch", default: "2" },
   HEALTH_CHECK_INTERVAL: { description: "Seconds between pair health evaluations while running", default: "3600" },
   STATUS_UPDATE_INTERVAL: { description: "Seconds between execution status updates", default: "60" },
@@ -94,6 +94,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   BLACKLIST_MIN_TRADES: { description: "Minimum trades before pair can be blacklisted", default: "10" },
   BLACKLIST_MAX_LOSS_RATE: { description: "Maximum loss rate before blacklisting (0-1)", default: "0.75" },
   BLACKLIST_REQUIRE_LOSS_DOMINANCE: { description: "Require loss dominance for blacklisting", default: "1" },
+  PAIR_HISTORY_BREAKEVEN_EPSILON_USDT: { description: "Absolute PnL in USDT treated as neutral pair history instead of win/loss", default: "0.01" },
   HOSPITAL_COOLDOWN_SECONDS: { description: "Cooldown time in seconds for pairs in hospital", default: "3600" },
   STRATEGY_REFRESH_SLEEP_SECONDS: { description: "Sleep seconds between retry attempts when execution refreshes Strategy for replacement pairs", default: "5" },
   // Strategy settings (exposed ones)
@@ -243,6 +244,7 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_BLACKLIST_MIN_TRADES",
       "STATBOT_BLACKLIST_MAX_LOSS_RATE",
       "STATBOT_BLACKLIST_REQUIRE_LOSS_DOMINANCE",
+      "STATBOT_PAIR_HISTORY_BREAKEVEN_EPSILON_USDT",
     ],
   },
   {

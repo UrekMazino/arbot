@@ -1603,7 +1603,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                     unproven_reason = f"{switch_reason}_unproven"
                     add_to_hospital(curr_t1, curr_t2, reason=unproven_reason)
                     logger.warning(
-                        "Pair moved to hospital (unproven): %s/%s reason=%s trades=0",
+                        "Pair moved to hospital: %s/%s reason=%s trades=0 history_status=unproven",
                         curr_t1,
                         curr_t2,
                         unproven_reason,
@@ -1612,13 +1612,15 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                     add_to_hospital(curr_t1, curr_t2, reason=switch_reason)
                     if stats:
                         logger.warning(
-                            "Pair moved to hospital: %s/%s reason=%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            "Pair moved to hospital: %s/%s reason=%s trades=%d wins=%d losses=%d breakevens=%d consecutive_losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
                             curr_t1,
                             curr_t2,
                             switch_reason,
                             stats["trades"],
                             stats["wins"],
                             stats["losses"],
+                            stats.get("breakevens", 0),
+                            stats.get("consecutive_losses", 0),
                             stats["win_rate"] * 100,
                             stats["win_usdt"],
                             stats["loss_usdt"],
@@ -1630,18 +1632,20 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                             curr_t2,
                             switch_reason,
                         )
-                else:
+                elif should_blacklist_pair(curr_t1, curr_t2):
                     bad_reason = f"{switch_reason}_bad_history"
                     add_to_graveyard(curr_t1, curr_t2, reason=bad_reason)
                     if stats:
                         logger.warning(
-                            "Pair moved to graveyard: %s/%s reason=%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            "Pair moved to graveyard: %s/%s reason=%s trades=%d wins=%d losses=%d breakevens=%d consecutive_losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
                             curr_t1,
                             curr_t2,
                             bad_reason,
                             stats["trades"],
                             stats["wins"],
                             stats["losses"],
+                            stats.get("breakevens", 0),
+                            stats.get("consecutive_losses", 0),
                             stats["win_rate"] * 100,
                             stats["win_usdt"],
                             stats["loss_usdt"],
@@ -1652,6 +1656,31 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                             curr_t1,
                             curr_t2,
                             bad_reason,
+                        )
+                else:
+                    weak_reason = f"{switch_reason}_weak_history"
+                    add_to_hospital(curr_t1, curr_t2, reason=weak_reason)
+                    if stats:
+                        logger.warning(
+                            "Pair moved to hospital: %s/%s reason=%s trades=%d wins=%d losses=%d breakevens=%d consecutive_losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            curr_t1,
+                            curr_t2,
+                            weak_reason,
+                            stats["trades"],
+                            stats["wins"],
+                            stats["losses"],
+                            stats.get("breakevens", 0),
+                            stats.get("consecutive_losses", 0),
+                            stats["win_rate"] * 100,
+                            stats["win_usdt"],
+                            stats["loss_usdt"],
+                        )
+                    else:
+                        logger.warning(
+                            "Pair moved to hospital: %s/%s reason=%s",
+                            curr_t1,
+                            curr_t2,
+                            weak_reason,
                         )
             else:
                 add_to_graveyard(curr_t1, curr_t2, reason=switch_reason)
@@ -3365,12 +3394,14 @@ if __name__ == "__main__":
                     stats = get_pair_history_stats(ticker_1, ticker_2)
                     if stats:
                         logger.info(
-                            "Pair history updated: %s/%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                            "Pair history updated: %s/%s trades=%d wins=%d losses=%d breakevens=%d consecutive_losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
                             ticker_1,
                             ticker_2,
                             stats["trades"],
                             stats["wins"],
                             stats["losses"],
+                            stats.get("breakevens", 0),
+                            stats.get("consecutive_losses", 0),
                             stats["win_rate"] * 100,
                             stats["win_usdt"],
                             stats["loss_usdt"],
@@ -3380,12 +3411,14 @@ if __name__ == "__main__":
                             set_last_switch_reason("bad_history")
                             blacklist_pair = True
                             logger.warning(
-                                "Pair blacklisted: %s/%s trades=%d wins=%d losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
+                                "Pair blacklisted: %s/%s trades=%d wins=%d losses=%d breakevens=%d consecutive_losses=%d win_rate=%.1f%% win=%.2f loss=%.2f",
                                 ticker_1,
                                 ticker_2,
                                 stats["trades"],
                                 stats["wins"],
                                 stats["losses"],
+                                stats.get("breakevens", 0),
+                                stats.get("consecutive_losses", 0),
                                 stats["win_rate"] * 100,
                                 stats["win_usdt"],
                                 stats["loss_usdt"],

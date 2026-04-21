@@ -16,6 +16,8 @@ DEFAULT_HOSPITAL_COOLDOWN_SECONDS = 3600
 DEFAULT_BLACKLIST_MIN_TRADES = 10
 DEFAULT_BLACKLIST_MAX_LOSS_RATE = 0.75
 DEFAULT_BLACKLIST_REQUIRE_LOSS_DOMINANCE = True
+DEFAULT_BLACKLIST_MAX_CONSECUTIVE_LOSSES = 2
+DEFAULT_PAIR_HISTORY_BREAKEVEN_EPSILON_USDT = 0.01
 
 # Min-capital cooldown defaults (seconds)
 MIN_CAPITAL_COOLDOWN_SHORT = 180
@@ -92,6 +94,17 @@ BLACKLIST_MAX_LOSS_RATE = _env_float("STATBOT_BLACKLIST_MAX_LOSS_RATE", DEFAULT_
 BLACKLIST_REQUIRE_LOSS_DOMINANCE = _env_flag(
     "STATBOT_BLACKLIST_REQUIRE_LOSS_DOMINANCE",
     DEFAULT_BLACKLIST_REQUIRE_LOSS_DOMINANCE,
+)
+BLACKLIST_MAX_CONSECUTIVE_LOSSES = max(
+    1,
+    _env_int("STATBOT_MAX_CONSECUTIVE_LOSSES", DEFAULT_BLACKLIST_MAX_CONSECUTIVE_LOSSES),
+)
+PAIR_HISTORY_BREAKEVEN_EPSILON_USDT = max(
+    0.0,
+    _env_float(
+        "STATBOT_PAIR_HISTORY_BREAKEVEN_EPSILON_USDT",
+        DEFAULT_PAIR_HISTORY_BREAKEVEN_EPSILON_USDT,
+    ),
 )
 
 
@@ -248,7 +261,7 @@ def load_pair_state():
             "switch_rate_limit_until_ts": 0.0,
             "graveyard": {}, # { "ticker_1/ticker_2": fail_timestamp }
             "hospital": {}, # { "ticker_1/ticker_2": {"ts": float, "cooldown": int, "reason": str} }
-            "pair_history": {}, # { "ticker_1/ticker_2": {wins, losses, win_usdt, loss_usdt, trades} }
+            "pair_history": {}, # { "ticker_1/ticker_2": {wins, losses, breakevens, consecutive_losses, win_usdt, loss_usdt, trades} }
             "restricted_tickers": {}, # Legacy field kept for migration; ticker exclusions now live in graveyard.
             "consecutive_losses": 0,
             "last_health_score": None,
@@ -423,8 +436,11 @@ def _get_pair_history_entry(history, key):
     return {
         "wins": int(entry.get("wins", 0) or 0),
         "losses": int(entry.get("losses", 0) or 0),
+        "breakevens": int(entry.get("breakevens", 0) or 0),
+        "consecutive_losses": int(entry.get("consecutive_losses", 0) or 0),
         "win_usdt": float(entry.get("win_usdt", 0.0) or 0.0),
         "loss_usdt": float(entry.get("loss_usdt", 0.0) or 0.0),
+        "breakeven_usdt": float(entry.get("breakeven_usdt", 0.0) or 0.0),
         "trades": int(entry.get("trades", 0) or 0),
         "last_trade_ts": float(entry.get("last_trade_ts", 0.0) or 0.0),
     }
@@ -441,14 +457,21 @@ def record_pair_trade_result(t1, t2, pnl_usdt):
     state = load_pair_state()
     history = state.get("pair_history", {})
     entry = _get_pair_history_entry(history, key)
+    breakeven_epsilon = max(float(PAIR_HISTORY_BREAKEVEN_EPSILON_USDT), 0.0)
 
     entry["trades"] += 1
-    if pnl_val > 0:
+    if pnl_val > breakeven_epsilon:
         entry["wins"] += 1
         entry["win_usdt"] += pnl_val
-    else:
+        entry["consecutive_losses"] = 0
+    elif pnl_val < -breakeven_epsilon:
         entry["losses"] += 1
         entry["loss_usdt"] += abs(pnl_val)
+        entry["consecutive_losses"] += 1
+    else:
+        entry["breakevens"] += 1
+        entry["breakeven_usdt"] += pnl_val
+        entry["consecutive_losses"] = 0
     entry["last_trade_ts"] = time.time()
 
     history[key] = entry
@@ -514,11 +537,11 @@ def should_blacklist_pair(
     if require_loss_dominance is None:
         require_loss_dominance = BLACKLIST_REQUIRE_LOSS_DOMINANCE
 
-    # Check consecutive losses first (immediate blacklist)
-    from config_execution_api import MAX_CONSECUTIVE_LOSSES
-    consecutive_losses = get_consecutive_losses()
-    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
-        return True  # Blacklist after MAX_CONSECUTIVE_LOSSES consecutive losses
+    # Check this pair's own loss streak first. The global/session loss streak
+    # is still tracked separately, but should not retire unrelated pairs.
+    pair_consecutive_losses = int(stats.get("consecutive_losses", 0) or 0)
+    if pair_consecutive_losses >= BLACKLIST_MAX_CONSECUTIVE_LOSSES:
+        return True
 
     # Original logic for overall performance
     trades = stats.get("trades", 0) or 0
@@ -711,7 +734,7 @@ def _graveyard_days_for_reason(reason):
 
 def add_to_graveyard(t1, t2, reason=""):
     state = load_pair_state()
-    pair_key = f"{t1}/{t2}"
+    pair_key = normalize_pair_key(t1, t2) or f"{t1}/{t2}"
     ttl_days = _graveyard_days_for_reason(reason)
     state["graveyard"][pair_key] = {
         "ts": time.time(),

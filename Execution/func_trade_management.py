@@ -23,7 +23,7 @@ from config_execution_api import (
 )
 
 from func_pair_state import (
-    get_consecutive_losses,
+    get_pair_history_stats,
     set_last_health_score,
     set_last_switch_reason,
     set_min_capital_cooldown,
@@ -1147,12 +1147,13 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         health_score -= int(15 * health_penalty_modifier)
 
     # 7. Recent Trading Performance
-    losses = get_consecutive_losses()
+    pair_stats = get_pair_history_stats(signal_positive_ticker, signal_negative_ticker)
+    losses = int((pair_stats or {}).get("consecutive_losses", 0) or 0)
     if losses >= 3:
-        warnings_list.append(f"Consecutive Losses ({losses})")
+        warnings_list.append(f"Pair Consecutive Losses ({losses})")
         health_score -= int(20 * health_penalty_modifier)
     elif losses > 0:
-        warnings_list.append(f"Recent Loss detected ({losses})")
+        warnings_list.append(f"Recent Pair Loss detected ({losses})")
         health_score -= int(5 * losses * health_penalty_modifier)
 
     # Action determination with profit protection

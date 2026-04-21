@@ -94,11 +94,12 @@ def _apply_run_metrics_from_event(run: Run, event) -> None:
         session_pnl = _coerce_float(payload.get("session_pnl_usdt"))
         if end_equity is not None:
             run.end_equity = end_equity
-        start_equity = _coerce_float(run.start_equity)
-        if end_equity is not None and start_equity is not None:
-            run.session_pnl = end_equity - start_equity
-        elif session_pnl is not None:
+        if session_pnl is not None:
             run.session_pnl = session_pnl
+        else:
+            start_equity = _coerce_float(run.start_equity)
+            if end_equity is not None and start_equity is not None:
+                run.session_pnl = round(end_equity - start_equity, 8)
 
 
 @router.post("/{bot_instance_id}/events/batch", response_model=EventIngestResultOut)

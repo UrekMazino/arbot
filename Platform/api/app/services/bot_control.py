@@ -572,6 +572,14 @@ def _load_run_snapshot(run_key: str | None) -> dict[str, float | None]:
             line_count=500,
             started_after_text=state_started_text,
         )
+        if control_snapshot["starting_equity"] is None and control_snapshot["run_start_time"] is None:
+            # Be forgiving if the control log timezone and state timestamp do
+            # not line up; the latest startup snapshot in the tail is still the
+            # best active-run fallback.
+            control_snapshot = _read_recent_start_snapshot(
+                CONTROL_LOG_FILE,
+                line_count=500,
+            )
 
     return {
         "starting_equity": (

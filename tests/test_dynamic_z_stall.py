@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -37,6 +38,7 @@ def _install_okx_stub():
     sys.modules["okx.MarketData"] = market_mod
 
 os.environ["STATBOT_SKIP_INSTRUMENT_FETCH"] = "1"
+os.environ["STATBOT_LOG_PATH"] = os.path.join(tempfile.gettempdir(), "okxstatbot-test-dynamic-z.log")
 _install_okx_stub()
 
 TEST_DIR = os.path.dirname(__file__)

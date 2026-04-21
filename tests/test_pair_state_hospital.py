@@ -62,3 +62,70 @@ def test_drain_ready_hospital_pairs_removes_expired_entries_and_returns_valid_re
             "reason": "cointegration_lost",
         }
     }
+
+
+def test_pair_blacklist_uses_pair_specific_consecutive_losses(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "pair_strategy_state.json"
+
+    monkeypatch.setattr(fps, "_STATE_DIR", state_dir)
+    monkeypatch.setattr(fps, "STATE_FILE", state_file)
+    monkeypatch.setattr(fps, "BLACKLIST_ENABLED", True)
+    monkeypatch.setattr(fps, "BLACKLIST_MIN_TRADES", 10)
+    monkeypatch.setattr(fps, "BLACKLIST_MAX_LOSS_RATE", 0.75)
+    monkeypatch.setattr(fps, "BLACKLIST_REQUIRE_LOSS_DOMINANCE", True)
+    monkeypatch.setattr(fps, "BLACKLIST_MAX_CONSECUTIVE_LOSSES", 2)
+
+    fps.record_pair_trade_result("AAA-USDT-SWAP", "BBB-USDT-SWAP", -1.0)
+    fps.record_trade_result(False)
+    fps.record_trade_result(False)
+
+    first_stats = fps.get_pair_history_stats("AAA-USDT-SWAP", "BBB-USDT-SWAP")
+    assert first_stats["consecutive_losses"] == 1
+    assert fps.should_blacklist_pair("AAA-USDT-SWAP", "BBB-USDT-SWAP") is False
+
+    fps.record_pair_trade_result("CCC-USDT-SWAP", "DDD-USDT-SWAP", -1.0)
+    fps.record_pair_trade_result("CCC-USDT-SWAP", "DDD-USDT-SWAP", -1.0)
+
+    second_stats = fps.get_pair_history_stats("CCC-USDT-SWAP", "DDD-USDT-SWAP")
+    assert second_stats["consecutive_losses"] == 2
+    assert fps.should_blacklist_pair("CCC-USDT-SWAP", "DDD-USDT-SWAP") is True
+
+    fps.record_pair_trade_result("CCC-USDT-SWAP", "DDD-USDT-SWAP", 0.5)
+    reset_stats = fps.get_pair_history_stats("CCC-USDT-SWAP", "DDD-USDT-SWAP")
+    assert reset_stats["consecutive_losses"] == 0
+
+
+def test_pair_history_tracks_breakevens_without_extending_loss_streak(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "pair_strategy_state.json"
+
+    monkeypatch.setattr(fps, "_STATE_DIR", state_dir)
+    monkeypatch.setattr(fps, "STATE_FILE", state_file)
+    monkeypatch.setattr(fps, "PAIR_HISTORY_BREAKEVEN_EPSILON_USDT", 0.01)
+
+    fps.record_pair_trade_result("BBB-USDT-SWAP", "AAA-USDT-SWAP", -1.0)
+    fps.record_pair_trade_result("BBB-USDT-SWAP", "AAA-USDT-SWAP", -0.005)
+
+    stats = fps.get_pair_history_stats("AAA-USDT-SWAP", "BBB-USDT-SWAP")
+    assert stats["trades"] == 2
+    assert stats["losses"] == 1
+    assert stats["breakevens"] == 1
+    assert stats["consecutive_losses"] == 0
+
+
+def test_add_to_graveyard_stores_normalized_pair_key(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "pair_strategy_state.json"
+
+    monkeypatch.setattr(fps, "_STATE_DIR", state_dir)
+    monkeypatch.setattr(fps, "STATE_FILE", state_file)
+
+    fps.add_to_graveyard("BBB-USDT-SWAP", "AAA-USDT-SWAP", reason="bad_history")
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert "AAA-USDT-SWAP/BBB-USDT-SWAP" in state["graveyard"]
+    assert "BBB-USDT-SWAP/AAA-USDT-SWAP" not in state["graveyard"]

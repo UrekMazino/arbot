@@ -79,6 +79,11 @@ from strategy_router import (
     should_block_new_entries as should_block_strategy_entries,
 )
 from func_strategy_state import record_strategy_trade_result
+from cointegration_health import (
+    COINT_HEALTH_WATCH,
+    classify_cointegration_health,
+    get_cointegration_health_settings,
+)
 from fee_tracker import FeeTracker
 from func_pair_state import (
     add_to_graveyard,
@@ -180,6 +185,9 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "entry_extreme_clean_bars": ENTRY_EXTREME_CLEAN_BARS,
             "exit_z": EXIT_Z,
             "p_value_critical": P_VALUE_CRITICAL,
+            "coint_watch_p_value": _env_text("STATBOT_COINT_WATCH_P_VALUE", "0.25"),
+            "coint_fail_p_value": _env_text("STATBOT_COINT_FAIL_P_VALUE", "0.35"),
+            "coint_adf_margin_pct": _env_text("STATBOT_COINT_ADF_MARGIN_PCT", "0.10"),
             "zero_crossings_min": ZERO_CROSSINGS_MIN,
             "correlation_min": CORRELATION_MIN,
             "trend_critical": TREND_CRITICAL,
@@ -258,6 +266,8 @@ _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
 _COINT_GATE_STREAK = 0  # Track consecutive cointegration gate occurrences
 _COINT_GATE_THRESHOLD = 2  # Trigger switch after N consecutive coint_gate decisions
+_COINT_WATCH_STREAK = 0  # Track softer watch-band cointegration misses separately
+_COINT_WATCH_GATE_THRESHOLD = 6  # Watch-band misses get a longer grace window
 FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_1_stop_loss",
     "exit_tier_15_riskoff_coint_loss",
@@ -342,6 +352,26 @@ def _get_coint_gate_threshold():
         value = 1
     if value > 10:
         value = 10
+    return value
+
+
+def _get_coint_watch_gate_threshold(hard_threshold=None):
+    """Get the longer grace streak for near-cointegrated watch-band pairs."""
+    base_hard = hard_threshold if hard_threshold is not None else _get_coint_gate_threshold()
+    try:
+        base_hard = int(base_hard)
+    except (TypeError, ValueError):
+        base_hard = 2
+    default_value = max(6, base_hard * 3)
+    raw = os.getenv("STATBOT_COINT_WATCH_GATE_THRESHOLD", str(default_value))
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = default_value
+    if value < base_hard:
+        value = base_hard
+    if value > 60:
+        value = 60
     return value
 
 
@@ -1752,7 +1782,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         curr_t2 = ticker_2
         # Commit graveyard only after a replacement is found.
         if switch_reason not in ("min_capital", "pair_supply_available"):
-            if switch_reason in ("health", "cointegration_lost", "idle_timeout"):
+            if switch_reason in ("health", "cointegration_lost", "cointegration_watch_timeout", "idle_timeout"):
                 stats = get_pair_history_stats(curr_t1, curr_t2)
                 if stats and stats.get("trades", 0) == 0:
                     unproven_reason = f"{switch_reason}_unproven"
@@ -2215,9 +2245,19 @@ if __name__ == "__main__":
     last_strategy_decision = None
     last_strategy_gate_log_ts = 0.0
     _COINT_GATE_THRESHOLD = _get_coint_gate_threshold()
+    _COINT_WATCH_GATE_THRESHOLD = _get_coint_watch_gate_threshold(_COINT_GATE_THRESHOLD)
+    coint_health_settings = get_cointegration_health_settings(P_VALUE_CRITICAL)
     logger.info(
         "Cointegration gate streak threshold set to: %d consecutive evaluations before pair switch",
         _COINT_GATE_THRESHOLD,
+    )
+    logger.info(
+        "Cointegration watch band: strict_p<%.2f watch_p<=%.2f fail_p>=%.2f adf_margin=%.0f%% watch_threshold=%d",
+        coint_health_settings["strict_pvalue"],
+        coint_health_settings["watch_pvalue"],
+        coint_health_settings["fail_pvalue"],
+        coint_health_settings["adf_margin_pct"] * 100.0,
+        _COINT_WATCH_GATE_THRESHOLD,
     )
     event_context = get_event_context(logger=logger)
     event_heartbeat_seconds = _get_event_heartbeat_seconds()
@@ -2708,40 +2748,77 @@ if __name__ == "__main__":
                             )
 
                         if "coint_gate" in strategy_decision.reason_codes:
+                            coint_health = classify_cointegration_health(
+                                metrics,
+                                strict_pvalue=P_VALUE_CRITICAL,
+                            )
+                            coint_state = coint_health["state"]
+                            coint_reason = coint_health["reason"]
                             logger.info(
-                                "COINT_GATE: strategy=%s coint_flag=0 allow_new=0 mode=%s",
+                                "COINT_GATE: strategy=%s coint_flag=0 allow_new=0 mode=%s health=%s reason=%s p=%.4f adf_gap=%.4f",
                                 strategy_decision.active_strategy,
                                 strategy_mode,
+                                coint_state,
+                                coint_reason,
+                                coint_health["p_value"],
+                                coint_health["adf_gap"],
                             )
-                            # Track cointegration gate streak and trigger switch if persistent
-                            _COINT_GATE_STREAK += 1
-                            logger.warning(
-                                "Cointegration gate streak: %d/%d (threshold for pair switch)",
-                                _COINT_GATE_STREAK,
-                                _COINT_GATE_THRESHOLD,
-                            )
-                            if _COINT_GATE_STREAK >= _COINT_GATE_THRESHOLD:
+                            if coint_state == COINT_HEALTH_WATCH:
+                                _COINT_WATCH_STREAK += 1
+                                if _COINT_GATE_STREAK > 0:
+                                    logger.info(
+                                        "Cointegration moved from broken to watch band. Resetting hard streak from %d to 0.",
+                                        _COINT_GATE_STREAK,
+                                    )
+                                    _COINT_GATE_STREAK = 0
                                 logger.warning(
-                                    "Cointegration lost for %d consecutive evaluations. Triggering pair switch (reason=cointegration_lost).",
+                                    "Cointegration watch streak: %d/%d (near band, entries paused, switch delayed)",
+                                    _COINT_WATCH_STREAK,
+                                    _COINT_WATCH_GATE_THRESHOLD,
+                                )
+                                should_switch_for_coint = _COINT_WATCH_STREAK >= _COINT_WATCH_GATE_THRESHOLD
+                                switch_reason_for_coint = "cointegration_watch_timeout"
+                            else:
+                                _COINT_GATE_STREAK += 1
+                                if _COINT_WATCH_STREAK > 0:
+                                    logger.info(
+                                        "Cointegration left watch band. Resetting watch streak from %d to 0.",
+                                        _COINT_WATCH_STREAK,
+                                    )
+                                    _COINT_WATCH_STREAK = 0
+                                logger.warning(
+                                    "Cointegration broken streak: %d/%d (threshold for pair switch)",
                                     _COINT_GATE_STREAK,
+                                    _COINT_GATE_THRESHOLD,
+                                )
+                                should_switch_for_coint = _COINT_GATE_STREAK >= _COINT_GATE_THRESHOLD
+                                switch_reason_for_coint = "cointegration_lost"
+                            if should_switch_for_coint:
+                                logger.warning(
+                                    "Cointegration %s persisted. Triggering pair switch (reason=%s).",
+                                    coint_state,
+                                    switch_reason_for_coint,
                                 )
                                 switch_result = _switch_to_next_pair(
                                     health_score=0,
-                                    switch_reason="cointegration_lost"
+                                    switch_reason=switch_reason_for_coint,
                                 )
                                 logger.info(
-                                    "Pair switch triggered due to cointegration loss: result=%s",
+                                    "Pair switch triggered due to cointegration health: result=%s",
                                     switch_result,
                                 )
                                 _COINT_GATE_STREAK = 0  # Reset after switch attempt
+                                _COINT_WATCH_STREAK = 0
                         else:
                             # Reset cointegration gate streak when cointegration recovers
-                            if _COINT_GATE_STREAK > 0:
+                            if _COINT_GATE_STREAK > 0 or _COINT_WATCH_STREAK > 0:
                                 logger.info(
-                                    "Cointegration recovered. Resetting gate streak from %d to 0.",
+                                    "Cointegration recovered. Resetting gate streaks from hard=%d watch=%d to 0.",
                                     _COINT_GATE_STREAK,
+                                    _COINT_WATCH_STREAK,
                                 )
                                 _COINT_GATE_STREAK = 0
+                                _COINT_WATCH_STREAK = 0
                         if "mean_shift_gate" in strategy_decision.reason_codes:
                             logger.info(
                                 "MEAN_SHIFT_GATE: strategy=TREND_SPREAD shift_z=%.3f threshold=%.3f allow_new=0 mode=%s basis=%s",

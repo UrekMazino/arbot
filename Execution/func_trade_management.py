@@ -24,6 +24,7 @@ from config_execution_api import (
     td_mode,
     z_score_window,
 )
+from cointegration_health import classify_cointegration_health
 
 from func_pair_state import (
     get_pair_history_stats,
@@ -1186,8 +1187,19 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         health_penalty_modifier = 1.0
         protection_active = False
 
+    coint_health = classify_cointegration_health(
+        metrics,
+        strict_pvalue=P_VALUE_CRITICAL_ADJUSTED,
+    )
+    coint_health_state = coint_health["state"]
+
     # 1. Statistical Strength (P-value) with adaptive threshold
-    if p_val >= P_VALUE_CRITICAL_ADJUSTED:
+    if coint_health_state == "watch":
+        warnings_list.append(
+            f"Cointegration watch band (p={p_val:.4f}, reason={coint_health['reason']})"
+        )
+        health_score -= int(20 * health_penalty_modifier)
+    elif p_val >= P_VALUE_CRITICAL_ADJUSTED:
         critical_issues.append(f"P-value ({p_val:.4f}) >= {P_VALUE_CRITICAL_ADJUSTED}")
         health_score -= int(50 * health_penalty_modifier)
     elif p_val > 0.05:
@@ -1250,6 +1262,13 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         if protection_active:
             logger.info(f"Trade Status: {'PROFITABLE' if trade_pnl_pct >= MIN_PROFIT_FOR_PROTECTION_PCT else 'NEAR BREAKEVEN'} ({trade_pnl_pct:+.2f}%)")
             logger.info(f"Adjusted P-value threshold: {P_VALUE_CRITICAL_ADJUSTED:.2f} (modifier: {health_penalty_modifier:.1f}x)")
+        logger.info(
+            "Cointegration health: %s (%s, watch_p<=%.2f, fail_p>=%.2f)",
+            coint_health_state,
+            coint_health["reason"],
+            coint_health["watch_pvalue"],
+            coint_health["fail_pvalue"],
+        )
         logger.info(f"P-value: {p_val:.4f} {'✅' if p_val < P_VALUE_CRITICAL_ADJUSTED else '❌'}")
         logger.info(f"Zero crossings: {z_cross} {'✅' if z_cross >= ZERO_CROSSINGS_MIN else '❌'}")
         logger.info(f"Correlation: {correlation:.2f} {'✅' if correlation >= CORRELATION_MIN else '❌'}")
@@ -1490,7 +1509,7 @@ def manage_new_trades(
                         grace_seconds - elapsed,
                     )
                 return kill_switch, False, False
-            if coint_flag == 0:
+            if coint_flag == 0 and coint_health_state != "watch":
                 set_last_switch_reason("cointegration_lost")
             else:
                 set_last_switch_reason("health")

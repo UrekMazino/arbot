@@ -24,6 +24,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from shared_cointegration_validator import calculate_zscore_series, evaluate_cointegration
+from cointegration_health import classify_cointegration_health
 
 # Setup logging
 logger = get_logger("func_get_zscore")
@@ -324,6 +325,19 @@ def get_latest_zscore(
             "correlation": float(coint_metrics.get("correlation", 0.0) or 0.0),
             "returns_correlation": float(coint_metrics.get("returns_correlation", 0.0) or 0.0),
             "hedge_ratio": float(coint_metrics.get("hedge_ratio", 0.0) or 0.0),
+        }
+    )
+    coint_health = classify_cointegration_health(metrics, strict_pvalue=P_VALUE_CRITICAL)
+    metrics.update(
+        {
+            "coint_health": coint_health["state"],
+            "coint_health_reason": coint_health["reason"],
+            "coint_watch": bool(coint_health["is_watch"]),
+            "coint_broken": bool(coint_health["is_broken"]),
+            "coint_adf_gap": float(coint_health["adf_gap"]),
+            "coint_adf_margin": float(coint_health["adf_margin"]),
+            "coint_watch_p_value": float(coint_health["watch_pvalue"]),
+            "coint_fail_p_value": float(coint_health["fail_pvalue"]),
         }
     )
 

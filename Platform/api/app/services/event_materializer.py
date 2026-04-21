@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     BotConfig,
+    EquitySnapshot,
     PositionSnapshot,
     RegimeMetric,
     Run,
@@ -24,6 +25,12 @@ def _coerce_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _zero_near(value: float | None, tolerance: float = 1e-8) -> float | None:
+    if value is None:
+        return None
+    return 0.0 if abs(value) < tolerance else value
 
 
 def _coerce_datetime(value: object) -> datetime | None:
@@ -296,6 +303,104 @@ def _sync_position_snapshot_for_event(db: Session, run: Run, event: RunEvent) ->
     db.flush()
 
 
+def _sync_equity_snapshot_for_event(db: Session, run: Run, event: RunEvent) -> None:
+    event_type = str(event.event_type or "").strip().lower()
+    payload = _payload_dict(event)
+    source = event_type
+    equity_usdt = None
+
+    if event_type == "heartbeat":
+        equity_usdt = _coerce_float(payload.get("equity_usdt"))
+        source = "heartbeat"
+    elif event_type == "status_update":
+        status_text = str(payload.get("status") or "").strip().lower()
+        if status_text != "startup_complete":
+            return
+        equity_usdt = _coerce_float(payload.get("starting_equity_usdt"))
+        source = "startup"
+    elif event_type == "trade_close":
+        equity_usdt = _coerce_float(payload.get("ending_equity_usdt"))
+        source = "trade_close"
+    else:
+        return
+
+    if equity_usdt is None:
+        return
+
+    existing = db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.source_event_id == event.event_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    snapshot = existing or EquitySnapshot(
+        run_id=run.id,
+        ts=event.ts,
+        equity_usdt=equity_usdt,
+        source=source,
+        source_event_id=event.event_id,
+    )
+    if existing is None:
+        db.add(snapshot)
+
+    start_equity = _coerce_float(run.start_equity)
+    session_pnl_usdt = _coerce_float(payload.get("session_pnl_usdt"))
+    if session_pnl_usdt is None and start_equity is not None:
+        session_pnl_usdt = equity_usdt - start_equity
+    session_pnl_usdt = _zero_near(session_pnl_usdt)
+
+    session_pnl_pct = _coerce_float(payload.get("session_pnl_pct"))
+    if session_pnl_pct is None and session_pnl_usdt is not None and start_equity and start_equity > 0:
+        session_pnl_pct = (session_pnl_usdt / start_equity) * 100.0
+    session_pnl_pct = _zero_near(session_pnl_pct)
+
+    snapshot.run_id = run.id
+    snapshot.ts = event.ts
+    snapshot.equity_usdt = equity_usdt
+    snapshot.session_pnl_usdt = session_pnl_usdt
+    snapshot.session_pnl_pct = session_pnl_pct
+    snapshot.current_pair = _normalize_pair_text(payload.get("current_pair") or payload.get("pair"))
+    snapshot.regime = _normalize_upper(payload.get("regime"))
+    snapshot.strategy = _normalize_upper(payload.get("strategy"))
+    snapshot.in_position = bool(payload.get("in_position"))
+    snapshot.entry_z = _coerce_float(payload.get("entry_z"))
+    snapshot.current_z = _coerce_float(payload.get("current_z"))
+    snapshot.hold_minutes = _coerce_float(payload.get("hold_minutes"))
+    snapshot.unrealized_pnl_usdt = _coerce_float(payload.get("unrealized_pnl_usdt"))
+    snapshot.source = source
+    snapshot.source_event_id = event.event_id
+    db.flush()
+
+    _rebuild_run_equity_summary(db, run)
+
+
+def _rebuild_run_equity_summary(db: Session, run: Run) -> None:
+    rows = db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.run_id == run.id)
+        .order_by(EquitySnapshot.ts.asc(), EquitySnapshot.created_at.asc(), EquitySnapshot.id.asc())
+    ).scalars().all()
+    if not rows:
+        return
+
+    latest_equity = _coerce_float(rows[-1].equity_usdt)
+    start_equity = _coerce_float(run.start_equity) or _coerce_float(rows[0].equity_usdt)
+    if latest_equity is not None:
+        run.end_equity = latest_equity
+    if latest_equity is not None and start_equity is not None:
+        run.session_pnl = _zero_near(latest_equity - start_equity)
+
+    peak = None
+    max_drawdown = 0.0
+    for row in rows:
+        equity = _coerce_float(row.equity_usdt)
+        if equity is None:
+            continue
+        peak = equity if peak is None else max(peak, equity)
+        max_drawdown = min(max_drawdown, equity - peak)
+    run.max_drawdown = _zero_near(max_drawdown)
+    db.flush()
+
+
 def _rebuild_strategy_metrics_for_run(db: Session, run: Run) -> None:
     closed_trades = db.execute(
         select(Trade)
@@ -424,6 +529,7 @@ def _rebuild_regime_metrics_for_run(db: Session, run: Run) -> None:
 def materialize_run_entities_for_event(db: Session, run: Run, event: RunEvent) -> None:
     event_type = str(event.event_type or "").strip().lower()
     _sync_bot_config_for_event(db, run, event)
+    _sync_equity_snapshot_for_event(db, run, event)
 
     if event_type == "trade_open":
         _sync_trade_open_for_event(db, run, event)

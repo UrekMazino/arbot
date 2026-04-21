@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
-from ..models import Run, RunEvent
+from ..models import EquitySnapshot, Run, RunEvent
 from .run_pair_segments import list_run_pair_history_rows
 
 _STARTUP_STATUS = "startup_complete"
@@ -88,11 +88,35 @@ def _latest_status_event(db: Session, run_id: str, allowed_statuses: set[str]) -
     return None
 
 
+def _earliest_status_event(db: Session, run_id: str, allowed_statuses: set[str]) -> RunEvent | None:
+    rows = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type == "status_update")
+        .order_by(asc(RunEvent.ts), asc(RunEvent.created_at), asc(RunEvent.id))
+        .limit(25)
+    ).scalars().all()
+    for row in rows:
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        status_text = str(payload.get("status") or "").strip().lower()
+        if status_text in allowed_statuses:
+            return row
+    return None
+
+
 def _latest_runtime_event(db: Session, run_id: str) -> RunEvent | None:
     return db.execute(
         select(RunEvent)
         .where(RunEvent.run_id == run_id)
         .order_by(desc(RunEvent.ts), desc(RunEvent.created_at), desc(RunEvent.id))
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _latest_equity_snapshot(db: Session, run_id: str) -> EquitySnapshot | None:
+    return db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.run_id == run_id)
+        .order_by(desc(EquitySnapshot.ts), desc(EquitySnapshot.created_at), desc(EquitySnapshot.id))
         .limit(1)
     ).scalar_one_or_none()
 
@@ -129,23 +153,32 @@ def get_run_runtime_snapshot(
         }
 
     latest_heartbeat = _latest_event(db, run.id, "heartbeat")
-    startup_event = _latest_status_event(db, run.id, {_STARTUP_STATUS})
+    startup_event = _earliest_status_event(db, run.id, {_STARTUP_STATUS})
+    latest_startup_event = _latest_status_event(db, run.id, {_STARTUP_STATUS})
     stop_event = _latest_status_event(db, run.id, _STOP_STATUSES)
     latest_regime = _latest_event(db, run.id, "regime_update")
     latest_strategy = _latest_event(db, run.id, "strategy_update")
     latest_event = _latest_runtime_event(db, run.id)
+    latest_equity = _latest_equity_snapshot(db, run.id)
 
     heartbeat_payload = latest_heartbeat.payload_json if latest_heartbeat and isinstance(latest_heartbeat.payload_json, dict) else {}
     startup_payload = startup_event.payload_json if startup_event and isinstance(startup_event.payload_json, dict) else {}
+    latest_startup_payload = latest_startup_event.payload_json if latest_startup_event and isinstance(latest_startup_event.payload_json, dict) else {}
     regime_payload = latest_regime.payload_json if latest_regime and isinstance(latest_regime.payload_json, dict) else {}
     strategy_payload = latest_strategy.payload_json if latest_strategy and isinstance(latest_strategy.payload_json, dict) else {}
 
-    started_at = _as_utc(run.start_ts)
+    started_candidates = [
+        candidate
+        for candidate in (
+            _as_utc(run.start_ts),
+            _as_utc(startup_event.ts) if startup_event is not None else None,
+        )
+        if candidate is not None
+    ]
+    started_at = min(started_candidates) if started_candidates else None
     uptime_seconds = _coerce_float(heartbeat_payload.get("uptime_seconds"))
-    if latest_heartbeat is not None and uptime_seconds is not None and uptime_seconds >= 0:
+    if started_at is None and latest_heartbeat is not None and uptime_seconds is not None and uptime_seconds >= 0:
         started_at = _as_utc(latest_heartbeat.ts) - timedelta(seconds=uptime_seconds)
-    elif startup_event is not None:
-        started_at = _as_utc(startup_event.ts)
 
     stopped_at = _as_utc(run.end_ts)
     if stopped_at is None and stop_event is not None:
@@ -164,15 +197,17 @@ def get_run_runtime_snapshot(
     if state_run_key and state_run_key == str(run.run_key or "").strip():
         state_started_at = _parse_iso(bot_status.get("started_at"))
         state_stopped_at = _parse_iso(bot_status.get("stopped_at"))
-        if started_at is None and state_started_at is not None:
-            started_at = state_started_at
+        if state_started_at is not None:
+            started_at = min(started_at, state_started_at) if started_at is not None else state_started_at
         if not bool(bot_status.get("running")):
             running = False
             if state_stopped_at is not None:
                 stopped_at = state_stopped_at
 
     updated_at = None
-    if latest_heartbeat is not None:
+    if latest_equity is not None:
+        updated_at = _as_utc(latest_equity.ts)
+    elif latest_heartbeat is not None:
         updated_at = _as_utc(latest_heartbeat.ts)
     elif latest_event is not None:
         updated_at = _as_utc(latest_event.ts)
@@ -193,20 +228,29 @@ def get_run_runtime_snapshot(
         starting_equity = _coerce_float(startup_payload.get("starting_equity_usdt"))
 
     equity = _coerce_float(run.end_equity)
+    snapshot_equity = _coerce_float(latest_equity.equity_usdt) if latest_equity is not None else None
     heartbeat_equity = _coerce_float(heartbeat_payload.get("equity_usdt"))
-    if heartbeat_equity is not None:
+    if snapshot_equity is not None:
+        equity = snapshot_equity
+    elif heartbeat_equity is not None:
         equity = heartbeat_equity
     elif equity is None:
         equity = starting_equity
 
-    session_pnl = _coerce_float(run.session_pnl)
-    heartbeat_session_pnl = _coerce_float(heartbeat_payload.get("session_pnl_usdt"))
-    if heartbeat_session_pnl is not None:
-        session_pnl = heartbeat_session_pnl
+    session_pnl = None
+    if equity is not None and starting_equity is not None:
+        session_pnl = equity - starting_equity
+    else:
+        session_pnl = _coerce_float(run.session_pnl)
+        heartbeat_session_pnl = _coerce_float(heartbeat_payload.get("session_pnl_usdt"))
+        if heartbeat_session_pnl is not None:
+            session_pnl = heartbeat_session_pnl
 
-    session_pnl_pct = _coerce_float(heartbeat_payload.get("session_pnl_pct"))
-    if session_pnl_pct is None and session_pnl is not None and starting_equity and starting_equity > 0:
+    session_pnl_pct = None
+    if session_pnl is not None and starting_equity and starting_equity > 0:
         session_pnl_pct = (session_pnl / starting_equity) * 100.0
+    else:
+        session_pnl_pct = _coerce_float(heartbeat_payload.get("session_pnl_pct"))
 
     pair_history: list[dict] = []
     if include_pair_history:
@@ -221,9 +265,11 @@ def get_run_runtime_snapshot(
     if pair_history:
         current_pair = str(pair_history[-1].get("pair") or "").strip() or None
     if current_pair is None:
+        current_pair = str(latest_equity.current_pair or "").strip() if latest_equity is not None else None
+    if current_pair is None:
         current_pair = _payload_text(heartbeat_payload, "current_pair", "pair")
     if current_pair is None:
-        current_pair = _payload_text(startup_payload, "current_pair", "pair")
+        current_pair = _payload_text(latest_startup_payload, "current_pair", "pair")
 
     return {
         "run_id": run.id,
@@ -243,7 +289,15 @@ def get_run_runtime_snapshot(
         "pair_history": pair_history,
         "pair_count": len(pair_history),
         "current_pair": current_pair,
-        "latest_regime": _payload_text(regime_payload, "regime"),
-        "latest_strategy": _payload_text(strategy_payload, "strategy"),
+        "latest_regime": (
+            _payload_text(regime_payload, "regime")
+            or (str(latest_equity.regime or "").strip() if latest_equity is not None else None)
+            or _payload_text(heartbeat_payload, "regime")
+        ),
+        "latest_strategy": (
+            _payload_text(strategy_payload, "strategy")
+            or (str(latest_equity.strategy or "").strip() if latest_equity is not None else None)
+            or _payload_text(heartbeat_payload, "strategy")
+        ),
         "source": "events_db",
     }

@@ -111,7 +111,7 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
 
         result = bot_control.clear_logs_and_reports(keep_latest=True)
 
-        assert result == {
+        expected = {
             "deleted_logs": 1,
             "deleted_reports": 1,
             "deleted_log_files": 1,
@@ -121,6 +121,9 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
             "kept_latest": True,
             "errors": [],
         }
+        for key, value in expected.items():
+            assert result[key] == value
+        assert result["deleted_equity_snapshots"] == 0
 
         assert not old_log_run.exists()
         assert latest_log_run.exists()

@@ -70,8 +70,20 @@ def _apply_run_metrics_from_event(run: Run, event) -> None:
         status_text = str(payload.get("status") or "").strip().lower()
         if status_text == "startup_complete":
             start_equity = _coerce_float(payload.get("starting_equity_usdt"))
-            if start_equity is not None:
+            existing_start_equity = _coerce_float(run.start_equity)
+            if start_equity is not None and existing_start_equity is None:
                 run.start_equity = start_equity
+            elif (
+                start_equity is not None
+                and existing_start_equity is not None
+                and abs(existing_start_equity - start_equity) > 0.00000001
+            ):
+                logger.info(
+                    "Ignoring later startup equity for run=%s: existing=%s incoming=%s",
+                    run.run_key or run.id,
+                    existing_start_equity,
+                    start_equity,
+                )
             run.status = "running"
         elif status_text in {"manual_stop", "run_end"}:
             run.status = "stopped"
@@ -82,7 +94,10 @@ def _apply_run_metrics_from_event(run: Run, event) -> None:
         session_pnl = _coerce_float(payload.get("session_pnl_usdt"))
         if end_equity is not None:
             run.end_equity = end_equity
-        if session_pnl is not None:
+        start_equity = _coerce_float(run.start_equity)
+        if end_equity is not None and start_equity is not None:
+            run.session_pnl = end_equity - start_equity
+        elif session_pnl is not None:
             run.session_pnl = session_pnl
 
 

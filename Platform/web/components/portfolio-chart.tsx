@@ -1,51 +1,37 @@
 "use client";
 
+import { format } from "date-fns";
+import { useMemo } from "react";
 import {
-  LineChart,
-  Line,
   Area,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts';
-import { format } from 'date-fns';
-import React from 'react';
-import { useMemo } from 'react';
+} from "recharts";
 
 interface ExtendedChartPoint {
   ts: string;
   equity: number;
   drawdown: number;
-  benchmark?: number;
+  drawdown_pct?: number | null;
+  pnl_usdt?: number | null;
+  pnl_pct?: number | null;
+  run_key?: string | null;
+  samples?: number;
 }
 
 interface PortfolioChartProps {
   data: ExtendedChartPoint[];
   height?: number;
-  windowSize?: string;
+  caption?: string;
   title?: string;
   subtitle?: string;
 }
-
-export function PortfolioChart({
-  data,
-  height = 250,
-  windowSize = '80',
-  title = 'Portfolio Performance',
-  subtitle = 'Equity curve vs benchmark (realized PnL)',
-}: PortfolioChartProps) {
-  const chartData = useMemo(() => {
-    return data.map((point, idx) => ({
-      ...point,
-      benchmark: point.equity * 1.01 + (Math.sin(idx / 10) * point.equity * 0.005), // Mock benchmark
-    }));
-  }, [data]);
-
-
-
 
 interface TooltipPayloadItem {
   payload: ExtendedChartPoint;
@@ -56,19 +42,53 @@ interface CustomTooltipProps {
   payload?: TooltipPayloadItem[];
 }
 
-const CustomTooltipWithProps = ({ active, payload }: CustomTooltipProps) => {
+function formatMoney(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(3)}%`;
+}
+
+function formatDate(value: string, pattern: string): string {
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+  return format(dt, pattern);
+}
+
+export function PortfolioChart({
+  data,
+  height = 250,
+  caption = "Portfolio equity history",
+  title = "Portfolio Performance",
+  subtitle = "Account equity and drawdown from run heartbeat data",
+}: PortfolioChartProps) {
+  const chartData = useMemo(() => data.map((point) => ({ ...point })), [data]);
+
+  const tickFormat = useMemo(() => {
+    if (chartData.length < 2) return "MMM dd HH:mm";
+    const first = new Date(chartData[0].ts).getTime();
+    const last = new Date(chartData[chartData.length - 1].ts).getTime();
+    const spanHours = Number.isFinite(first) && Number.isFinite(last) ? Math.abs(last - first) / 3_600_000 : 0;
+    if (spanHours <= 48) return "HH:mm";
+    if (spanHours <= 24 * 45) return "MMM dd";
+    return "MMM yyyy";
+  }, [chartData]);
+
+  const CustomTooltipWithProps = ({ active, payload }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
       const point = payload[0].payload;
       return (
-        <div className="rounded-lg bg-white p-3 shadow-lg border border-gray-200 dark:bg-gray-900 dark:border-gray-800 dark:text-gray-100">
-          <p className="font-semibold text-gray-900 dark:text-white">{format(new Date(point.ts), 'MMM dd yyyy HH:mm')}</p>
+        <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100">
+          <p className="font-semibold text-gray-900 dark:text-white">{formatDate(point.ts, "MMM dd yyyy HH:mm")}</p>
           <div className="mt-1 space-y-1 text-sm">
-            <p><span className="font-mono text-brand-600">Equity:</span> {point.equity.toFixed(2)} USDT</p>
-            <p><span className="font-mono text-gray-600">Benchmark:</span> {point.benchmark?.toFixed(2)} USDT</p>
-            <p><span className="font-mono text-orange-600">Drawdown:</span> {point.drawdown.toFixed(2)} USDT</p>
-            {data.length > 1 && (
-              <p><span className="font-mono text-brand-600">Δ:</span> {((point.equity - data[data.length - 2]?.equity || 0).toFixed(2))} USDT</p>
-            )}
+            <p><span className="font-mono text-brand-600">Equity:</span> {formatMoney(point.equity)} USDT</p>
+            <p><span className="font-mono text-success-600">Change:</span> {formatMoney(point.pnl_usdt)} USDT ({formatPct(point.pnl_pct)})</p>
+            <p><span className="font-mono text-orange-600">Drawdown:</span> {formatMoney(point.drawdown)} USDT ({formatPct(point.drawdown_pct)})</p>
+            {point.run_key ? <p><span className="font-mono text-gray-600">Run:</span> {point.run_key}</p> : null}
+            {point.samples && point.samples > 1 ? <p><span className="font-mono text-gray-600">Samples:</span> {point.samples}</p> : null}
           </div>
         </div>
       );
@@ -82,36 +102,45 @@ const CustomTooltipWithProps = ({ active, payload }: CustomTooltipProps) => {
         <div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>
-          <p className="mt-1 text-xs text-gray-400">Window: {windowSize} points | {chartData.length} data points</p>
+          <p className="mt-1 text-xs text-gray-400">{caption} | {chartData.length} data points</p>
         </div>
       </div>
       <ResponsiveContainer width="100%" height={height}>
         <LineChart data={chartData}>
           <defs>
             <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#465fff" stopOpacity={0.4}/>
-              <stop offset="80%" stopColor="#465fff" stopOpacity={0.05}/>
-            </linearGradient>
-            <linearGradient id="benchmarkGradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#6b7280" stopOpacity={0.3}/>
-              <stop offset="100%" stopColor="#6b7280" stopOpacity={0.05}/>
+              <stop offset="0%" stopColor="#465fff" stopOpacity={0.4} />
+              <stop offset="80%" stopColor="#465fff" stopOpacity={0.05} />
             </linearGradient>
           </defs>
-          <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--gray-200))" />
+          <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
             dataKey="ts"
             tickLine={false}
             axisLine={false}
-            tickFormatter={(value) => format(new Date(value), 'MMM dd')}
+            tickFormatter={(value) => formatDate(String(value), tickFormat)}
             tickMargin={12}
             fontSize={12}
             height={60}
           />
           <YAxis
+            yAxisId="equity"
             tickLine={false}
             axisLine={false}
             tickMargin={12}
             fontSize={12}
+            domain={["auto", "auto"]}
+            tickFormatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          />
+          <YAxis
+            yAxisId="drawdown"
+            orientation="right"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={12}
+            fontSize={12}
+            domain={["auto", 0]}
+            tickFormatter={(value) => Number(value).toFixed(2)}
           />
           <Tooltip
             content={({ active, payload }) => (
@@ -122,18 +151,21 @@ const CustomTooltipWithProps = ({ active, payload }: CustomTooltipProps) => {
           <Area
             type="monotone"
             dataKey="equity"
+            yAxisId="equity"
+            name="Equity"
             stroke="#465fff"
             strokeWidth={3}
             fillOpacity={1}
             fill="url(#equityGradient)"
+            dot={false}
           />
           <Line
             type="monotone"
-            dataKey="benchmark"
-            stroke="#6b7280"
+            dataKey="drawdown"
+            yAxisId="drawdown"
+            name="Drawdown"
+            stroke="#f97316"
             strokeWidth={2}
-            strokeDasharray="5 5"
-            name="Benchmark"
             dot={false}
           />
         </LineChart>

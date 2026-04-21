@@ -31,6 +31,7 @@ from ..models import (
     Alert,
     BotConfig,
     BotInstance,
+    EquitySnapshot,
     PositionSnapshot,
     RegimeMetric,
     Report,
@@ -611,10 +612,12 @@ def _update_current_run_state_snapshot(
         if state.get("run_log_file") != run_log_text:
             state["run_log_file"] = run_log_text
             changed = True
-    if starting_equity is not None and _coerce_float(state.get("starting_equity")) != float(starting_equity):
+    existing_starting_equity = _coerce_float(state.get("starting_equity"))
+    if starting_equity is not None and existing_starting_equity is None:
         state["starting_equity"] = float(starting_equity)
         changed = True
-    if run_start_time is not None and _coerce_float(state.get("run_start_time")) != float(run_start_time):
+    existing_run_start_time = _coerce_float(state.get("run_start_time"))
+    if run_start_time is not None and existing_run_start_time is None:
         state["run_start_time"] = float(run_start_time)
         changed = True
 
@@ -648,7 +651,8 @@ def _persist_run_start_snapshot(
                 return {"saved": False, "detail": "run_not_found"}
 
             changed = False
-            if starting_equity is not None and _coerce_float(run.start_equity) != float(starting_equity):
+            existing_start_equity = _coerce_float(run.start_equity)
+            if starting_equity is not None and existing_start_equity is None:
                 run.start_equity = float(starting_equity)
                 changed = True
             if run_start_time is not None and getattr(run, "start_ts", None) is None:
@@ -1251,6 +1255,7 @@ def _delete_run_database_records(db: Session, run_key: str) -> dict[str, int]:
         "deleted_regime_metrics": 0,
         "deleted_bot_configs": 0,
         "deleted_alerts": 0,
+        "deleted_equity_snapshots": 0,
         "deleted_position_snapshots": 0,
         "deleted_report_rows": 0,
         "deleted_report_files": 0,
@@ -1281,6 +1286,7 @@ def _delete_run_database_records(db: Session, run_key: str) -> dict[str, int]:
         ("deleted_regime_metrics", RegimeMetric),
         ("deleted_bot_configs", BotConfig),
         ("deleted_alerts", Alert),
+        ("deleted_equity_snapshots", EquitySnapshot),
         ("deleted_position_snapshots", PositionSnapshot),
     ):
         counts[key] = int(db.execute(delete(model).where(model.run_id == run.id)).rowcount or 0)
@@ -1592,6 +1598,7 @@ def clear_logs_and_reports(keep_latest: bool = False) -> dict:
     deleted_regime_metrics = 0
     deleted_bot_configs = 0
     deleted_alerts = 0
+    deleted_equity_snapshots = 0
     deleted_position_snapshots = 0
     deleted_report_rows = 0
     deleted_report_files = 0
@@ -1690,6 +1697,7 @@ def clear_logs_and_reports(keep_latest: bool = False) -> dict:
             deleted_regime_metrics += counts["deleted_regime_metrics"]
             deleted_bot_configs += counts["deleted_bot_configs"]
             deleted_alerts += counts["deleted_alerts"]
+            deleted_equity_snapshots += counts["deleted_equity_snapshots"]
             deleted_position_snapshots += counts["deleted_position_snapshots"]
             deleted_report_rows += counts["deleted_report_rows"]
             deleted_report_files += counts["deleted_report_files"]
@@ -1727,6 +1735,7 @@ def clear_logs_and_reports(keep_latest: bool = False) -> dict:
         "deleted_regime_metrics": deleted_regime_metrics,
         "deleted_bot_configs": deleted_bot_configs,
         "deleted_alerts": deleted_alerts,
+        "deleted_equity_snapshots": deleted_equity_snapshots,
         "deleted_position_snapshots": deleted_position_snapshots,
         "deleted_report_rows": deleted_report_rows,
         "deleted_report_files": deleted_report_files,

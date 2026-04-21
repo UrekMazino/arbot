@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import BotConfig, PositionSnapshot, RegimeMetric, Run, RunEvent, StrategyMetric, Trade
+from ..models import BotConfig, EquitySnapshot, PositionSnapshot, RegimeMetric, Run, RunEvent, StrategyMetric, Trade
 from .run_runtime import get_run_runtime_snapshot
 
 
@@ -461,30 +461,63 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         if str(row[0] or "").strip()
     }
 
-    heartbeat_rows = db.execute(
-        select(RunEvent)
-        .where(RunEvent.run_id == run.id, RunEvent.event_type == "heartbeat")
-        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
-    ).scalars().all()
     equity_curve = []
-    for row in heartbeat_rows:
-        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
-        equity_curve.append(
-            {
-                "timestamp": _coerce_timestamp(row.ts),
-                "equity_usdt": _coerce_float(payload.get("equity_usdt")),
-                "session_pnl_usdt": _coerce_float(payload.get("session_pnl_usdt")),
-                "session_pnl_pct": _coerce_float(payload.get("session_pnl_pct")),
-                "pair": str(payload.get("current_pair") or payload.get("pair") or "").strip(),
-                "regime": str(payload.get("regime") or "").strip(),
-                "strategy": str(payload.get("strategy") or "").strip(),
-                "in_position": bool(payload.get("in_position")),
-                "entry_z": _coerce_float(payload.get("entry_z")),
-                "current_z": _coerce_float(payload.get("current_z")),
-                "hold_minutes": _coerce_float(payload.get("hold_minutes")),
-                "unrealized_pnl_usdt": _coerce_float(payload.get("unrealized_pnl_usdt")),
-            }
-        )
+    equity_snapshot_rows = db.execute(
+        select(EquitySnapshot)
+        .where(EquitySnapshot.run_id == run.id)
+        .order_by(EquitySnapshot.ts.asc(), EquitySnapshot.created_at.asc(), EquitySnapshot.id.asc())
+    ).scalars().all()
+    if equity_snapshot_rows:
+        for row in equity_snapshot_rows:
+            equity_curve.append(
+                {
+                    "timestamp": _coerce_timestamp(row.ts),
+                    "equity_usdt": _coerce_float(row.equity_usdt),
+                    "session_pnl_usdt": _coerce_float(row.session_pnl_usdt),
+                    "session_pnl_pct": _coerce_float(row.session_pnl_pct),
+                    "pair": str(row.current_pair or "").strip(),
+                    "regime": str(row.regime or "").strip(),
+                    "strategy": str(row.strategy or "").strip(),
+                    "in_position": bool(row.in_position),
+                    "entry_z": _coerce_float(row.entry_z),
+                    "current_z": _coerce_float(row.current_z),
+                    "hold_minutes": _coerce_float(row.hold_minutes),
+                    "unrealized_pnl_usdt": _coerce_float(row.unrealized_pnl_usdt),
+                    "source": str(row.source or "").strip(),
+                }
+            )
+    else:
+        heartbeat_rows = db.execute(
+            select(RunEvent)
+            .where(RunEvent.run_id == run.id, RunEvent.event_type == "heartbeat")
+            .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+        ).scalars().all()
+        starting_equity = _coerce_float(snapshot.get("starting_equity"))
+        for row in heartbeat_rows:
+            payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+            equity_usdt = _coerce_float(payload.get("equity_usdt"))
+            session_pnl_usdt = _coerce_float(payload.get("session_pnl_usdt"))
+            session_pnl_pct = _coerce_float(payload.get("session_pnl_pct"))
+            if equity_usdt is not None and starting_equity is not None:
+                session_pnl_usdt = equity_usdt - starting_equity
+                session_pnl_pct = (session_pnl_usdt / starting_equity * 100.0) if starting_equity > 0 else None
+            equity_curve.append(
+                {
+                    "timestamp": _coerce_timestamp(row.ts),
+                    "equity_usdt": equity_usdt,
+                    "session_pnl_usdt": session_pnl_usdt,
+                    "session_pnl_pct": session_pnl_pct,
+                    "pair": str(payload.get("current_pair") or payload.get("pair") or "").strip(),
+                    "regime": str(payload.get("regime") or "").strip(),
+                    "strategy": str(payload.get("strategy") or "").strip(),
+                    "in_position": bool(payload.get("in_position")),
+                    "entry_z": _coerce_float(payload.get("entry_z")),
+                    "current_z": _coerce_float(payload.get("current_z")),
+                    "hold_minutes": _coerce_float(payload.get("hold_minutes")),
+                    "unrealized_pnl_usdt": _coerce_float(payload.get("unrealized_pnl_usdt")),
+                    "source": "heartbeat_event",
+                }
+            )
 
     trade_close_events = db.execute(
         select(RunEvent)
@@ -669,6 +702,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
 
     data_sources = {
         "runtime": "events_db",
+        "equity_curve": "equity_snapshots" if equity_snapshot_rows else "heartbeat_events" if equity_curve else "none",
         "trades": trades_source,
         "config": config_source,
         "strategy_metrics": strategy_metrics_source,
@@ -751,6 +785,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
             "current_z",
             "hold_minutes",
             "unrealized_pnl_usdt",
+            "source",
         ],
     )
     _write_csv(

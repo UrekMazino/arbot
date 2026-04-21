@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import {
-  RunSummary,
+  PortfolioEquityBucket,
+  PortfolioEquityCurve,
+  PortfolioEquityRange,
   UserRecord,
-  WalkForwardPoint,
   getMe,
-  getRuns,
-  getRunWalkForward,
+  getPortfolioEquityCurve,
   isUnauthorizedError,
 } from "../../../../lib/api";
 import { DashboardShell } from "../../../../components/dashboard-shell";
@@ -20,18 +20,38 @@ import {
   getAdminNavItems,
   getFirstAccessibleAdminPath,
 } from "../../../../lib/admin-access";
+import { UI_CLASSES } from "../../../../lib/ui-classes";
 import { PortfolioChart } from "../../../../components/portfolio-chart";
 
-type ChartWindow = "30" | "80" | "all";
+const RANGE_OPTIONS: Array<{ value: PortfolioEquityRange; label: string; hint: string }> = [
+  { value: "24h", label: "24H", hint: "Intraday" },
+  { value: "7d", label: "7D", hint: "Last week" },
+  { value: "30d", label: "30D", hint: "Last month" },
+  { value: "90d", label: "90D", hint: "Quarter" },
+  { value: "all", label: "All", hint: "Full history" },
+];
+
+const BUCKET_OPTIONS: Array<{ value: PortfolioEquityBucket; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "raw", label: "Raw" },
+  { value: "hour", label: "Hourly" },
+  { value: "day", label: "Daily" },
+  { value: "week", label: "Weekly" },
+];
 
 function fmtNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return value.toFixed(digits);
+  return value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 function fmtSignedNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+  return `${value >= 0 ? "+" : ""}${fmtNumber(value, digits)}`;
+}
+
+function fmtPct(value: number | null | undefined, digits = 3): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -41,15 +61,34 @@ function fmtDate(iso: string | null | undefined): string {
   return dt.toLocaleString();
 }
 
+function bucketLabel(bucket: PortfolioEquityBucket | string | undefined): string {
+  const found = BUCKET_OPTIONS.find((option) => option.value === bucket);
+  return found?.label || String(bucket || "Auto");
+}
+
+function rangeLabel(range: PortfolioEquityRange): string {
+  return RANGE_OPTIONS.find((option) => option.value === range)?.label || range;
+}
+
+function rangeButtonClass(active: boolean): string {
+  return [
+    "rounded-xl px-3 py-2 text-sm font-semibold transition",
+    active
+      ? "bg-brand-500 text-white shadow-sm"
+      : "border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700",
+  ].join(" ");
+}
+
 export default function PortfolioPage() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<UserRecord | null>(null);
   const [loading, setLoading] = useState(true);
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [walkForward, setWalkForward] = useState<WalkForwardPoint[]>([]);
-  const [chartWindow, setChartWindow] = useState<ChartWindow>("80");
+  const [curveLoading, setCurveLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [range, setRange] = useState<PortfolioEquityRange>("7d");
+  const [bucket, setBucket] = useState<PortfolioEquityBucket>("auto");
+  const [curve, setCurve] = useState<PortfolioEquityCurve | null>(null);
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
 
@@ -70,18 +109,15 @@ export default function PortfolioPage() {
 
   useEffect(() => {
     if (loading || !user) return;
-    // Check if user still has permission to access this page
     const currentPath = pathname;
     const hasAccess = canAccessAdminPath(user, currentPath);
     const firstAccessible = getFirstAccessibleAdminPath(user);
 
     if (!hasAccess) {
-      // If there's no accessible page at all, go home
       if (!firstAccessible) {
         router.replace("/");
         return;
       }
-      // Only redirect if the accessible page is different from current
       if (firstAccessible !== currentPath) {
         router.replace(firstAccessible);
       }
@@ -89,137 +125,128 @@ export default function PortfolioPage() {
   }, [loading, user, pathname, router]);
 
   useEffect(() => {
-    getRuns()
-      .then(setRuns)
-      .catch(console.error);
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      await Promise.resolve();
+      if (cancelled) return;
+      setCurveLoading(true);
+      setError(null);
+      try {
+        const data = await getPortfolioEquityCurve(range, bucket);
+        if (!cancelled) setCurve(data);
+      } catch (err) {
+        if (cancelled) return;
+        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load portfolio equity curve");
+        setCurve(null);
+      } finally {
+        if (!cancelled) setCurveLoading(false);
+      }
+    })();
 
-  useEffect(() => {
-    if (!selectedRunId) {
-      const latest = (runs || [])[0];
-      if (latest) setSelectedRunId(latest.id);
-      return;
-    }
-  }, [selectedRunId, runs]);
-
-  useEffect(() => {
-    if (!selectedRunId) return;
-    getRunWalkForward(selectedRunId)
-      .then(setWalkForward)
-      .catch(console.error);
-  }, [selectedRunId]);
-
-  const selectedRun = useMemo(
-    () => (runs || []).find((r) => r.id === selectedRunId) || null,
-    [runs, selectedRunId],
-  );
-
-  const equitySeries = useMemo(() => {
-    if (!walkForward.length) return [] as { ts: string; equity: number }[];
-    let cumulative = 0;
-    return walkForward.map((point) => {
-      cumulative += point.pnl_usdt || 0;
-      return { ts: point.exit_ts, equity: cumulative };
-    });
-  }, [walkForward]);
-
-  const windowedEquitySeries = useMemo(() => {
-    if (chartWindow === "all") return equitySeries;
-    const count = Number.parseInt(chartWindow, 10);
-    if (!Number.isFinite(count) || count <= 0) return equitySeries;
-    return equitySeries.slice(-count);
-  }, [equitySeries, chartWindow]);
-
-  const drawdownSeries = useMemo(() => {
-    if (!windowedEquitySeries.length) return [] as { ts: string; drawdown: number }[];
-    let peak = Number.NEGATIVE_INFINITY;
-    return windowedEquitySeries.map((point) => {
-      peak = Math.max(peak, point.equity);
-      return {
-        ts: point.ts,
-        drawdown: point.equity - peak,
-      };
-    });
-  }, [windowedEquitySeries]);
-
-  const portfolioData = useMemo(() => {
-    return windowedEquitySeries.map((point, idx) => ({
-      ts: point.ts,
-      equity: point.equity,
-      drawdown: drawdownSeries[idx]?.drawdown || 0,
-    }));
-  }, [windowedEquitySeries, drawdownSeries]);
+    return () => {
+      cancelled = true;
+    };
+  }, [range, bucket]);
 
   if (loading) {
     return <div className="p-8 text-center text-gray-500">Loading...</div>;
   }
 
   const activeHref = "/admin/dashboard/portfolio";
+  const stats = curve?.stats;
+  const chartData = curve?.points || [];
+  const activeBucketLabel = curve ? bucketLabel(curve.bucket) : bucketLabel(bucket);
+  const caption = `${rangeLabel(range)} range | ${bucket === "auto" ? `Auto -> ${activeBucketLabel}` : activeBucketLabel} | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)}`;
 
   return (
     <DashboardShell
       title="Portfolio"
-      subtitle="Equity curve & drawdown analysis"
-      status="OK"
+      subtitle="Portfolio equity curve across all bot runs"
+      status={error ? "WARN" : "OK"}
       activeHref={activeHref}
       navItems={navItems}
       auth={auth}
     >
       <div className="space-y-6">
-        <div className="flex flex-wrap gap-4">
-          <select
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800"
-            value={selectedRunId || ""}
-            onChange={(e) => setSelectedRunId(e.target.value)}
-          >
-            {(runs || []).filter(r => r && r.id).map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.id.slice(0, 8)} ({fmtDate(run.start_ts)}) - {fmtSignedNumber(run.session_pnl)} USDT
-              </option>
+        <PanelCard
+          title="Portfolio Equity Curve"
+          subtitle="Built from heartbeat equity events across every run. Bucketed views use the last equity sample in each period."
+          titleRight={
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <select
+                className={UI_CLASSES.inputSmall}
+                value={bucket}
+                onChange={(event) => setBucket(event.target.value as PortfolioEquityBucket)}
+              >
+                {BUCKET_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+          }
+        >
+          <div className="mb-5 flex flex-wrap gap-2">
+            {RANGE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={rangeButtonClass(range === option.value)}
+                onClick={() => setRange(option.value)}
+                title={option.hint}
+              >
+                {option.label}
+              </button>
             ))}
-          </select>
-          <div className="flex rounded-lg border border-gray-300 dark:border-gray-600">
-            <button
-              className={`px-3 py-2 text-sm ${chartWindow === "30" ? "bg-brand-500 text-white" : "bg-white dark:bg-gray-800"}`}
-              onClick={() => setChartWindow("30")}
-            >
-              30 pts
-            </button>
-            <button
-              className={`px-3 py-2 text-sm ${chartWindow === "80" ? "bg-brand-500 text-white" : "bg-white dark:bg-gray-800"}`}
-              onClick={() => setChartWindow("80")}
-            >
-              80 pts
-            </button>
-            <button
-              className={`px-3 py-2 text-sm ${chartWindow === "all" ? "bg-brand-500 text-white" : "bg-white dark:bg-gray-800"}`}
-              onClick={() => setChartWindow("all")}
-            >
-              All
-            </button>
           </div>
-        </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <MetricCard label="End Equity" value={fmtNumber(selectedRun?.end_equity)} unit="USDT" />
-          <MetricCard label="Start Equity" value={fmtNumber(selectedRun?.start_equity)} unit="USDT" />
-          <MetricCard label="Session PnL" value={fmtSignedNumber(selectedRun?.session_pnl)} unit="USDT" />
-          <MetricCard label="Max Drawdown" value={fmtNumber(selectedRun?.max_drawdown)} unit="USDT" />
-        </div>
-
-        <PanelCard title="Equity Curve">
-          {portfolioData.length ? (
+          {curveLoading ? (
+            <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">Loading portfolio curve...</p>
+          ) : error ? (
+            <p className="py-12 text-center text-sm text-error-600 dark:text-error-400">{error}</p>
+          ) : chartData.length ? (
             <PortfolioChart
-              data={portfolioData}
-              height={350}
-              windowSize={chartWindow}
-              title="Portfolio Performance"
-              subtitle="Equity curve vs benchmark (realized PnL)"
+              data={chartData}
+              height={390}
+              caption={caption}
+              title="Account Equity"
+              subtitle="Absolute portfolio equity with drawdown for the selected range"
             />
           ) : (
-            <p className="text-sm text-gray-500 dark:text-gray-400">No portfolio data yet.</p>
+            <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
+              No equity samples found yet. Start a run and the dashboard will plot heartbeat equity here.
+            </p>
           )}
         </PanelCard>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            label="Current Equity"
+            value={fmtNumber(stats?.end_equity)}
+            unit="USDT"
+            hint={`Started ${fmtNumber(stats?.start_equity)} USDT`}
+            tone="sky"
+          />
+          <MetricCard
+            label="Range Change"
+            value={fmtSignedNumber(stats?.change_usdt)}
+            unit="USDT"
+            hint={fmtPct(stats?.change_pct)}
+            tone={(stats?.change_usdt ?? 0) >= 0 ? "teal" : "rose"}
+          />
+          <MetricCard
+            label="Max Drawdown"
+            value={fmtNumber(stats?.max_drawdown)}
+            unit="USDT"
+            hint={fmtPct(stats?.max_drawdown_pct)}
+            tone="amber"
+          />
+          <MetricCard
+            label="Coverage"
+            value={`${stats?.run_count ?? 0} runs`}
+            hint={`${stats?.point_count ?? 0} plotted / ${stats?.raw_point_count ?? 0} raw samples`}
+            tone="violet"
+          />
+        </div>
       </div>
     </DashboardShell>
   );

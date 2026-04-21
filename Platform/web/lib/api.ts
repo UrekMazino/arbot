@@ -79,6 +79,50 @@ export type WalkForwardPoint = {
   pnl_usdt: number;
 };
 
+export type PortfolioEquityRange = "24h" | "7d" | "30d" | "90d" | "all";
+
+export type PortfolioEquityBucket = "auto" | "raw" | "hour" | "day" | "week";
+
+export type PortfolioEquityPoint = {
+  ts: string;
+  equity: number;
+  pnl_usdt: number;
+  pnl_pct: number | null;
+  drawdown: number;
+  drawdown_pct: number | null;
+  run_id: string | null;
+  run_key: string | null;
+  source: string | null;
+  samples: number;
+};
+
+export type PortfolioEquityStats = {
+  start_ts: string | null;
+  end_ts: string | null;
+  start_equity: number | null;
+  end_equity: number | null;
+  change_usdt: number | null;
+  change_pct: number | null;
+  min_equity: number | null;
+  max_equity: number | null;
+  max_drawdown: number | null;
+  max_drawdown_pct: number | null;
+  point_count: number;
+  raw_point_count: number;
+  run_count: number;
+  latest_pnl_usdt: number | null;
+};
+
+export type PortfolioEquityCurve = {
+  range: PortfolioEquityRange;
+  bucket: Exclude<PortfolioEquityBucket, "auto">;
+  requested_bucket: PortfolioEquityBucket;
+  source: "equity_snapshots" | "event_fallback";
+  generated_at: string;
+  points: PortfolioEquityPoint[];
+  stats: PortfolioEquityStats;
+};
+
 export type ScorecardCell = {
   entry_strategy: string | null;
   entry_regime: string | null;
@@ -467,6 +511,14 @@ export async function getRunWalkForward(runId: string): Promise<WalkForwardPoint
   return apiRequest<WalkForwardPoint[]>(`/runs/${runId}/analytics/walk-forward`, { method: "GET" });
 }
 
+export async function getPortfolioEquityCurve(
+  range: PortfolioEquityRange = "7d",
+  bucket: PortfolioEquityBucket = "auto",
+): Promise<PortfolioEquityCurve> {
+  const params = new URLSearchParams({ range, bucket });
+  return apiRequest<PortfolioEquityCurve>(`/runs/portfolio/equity-curve?${params.toString()}`, { method: "GET" });
+}
+
 export async function getRunScorecard(runId: string): Promise<ScorecardCell[]> {
   return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" });
 }
@@ -587,6 +639,7 @@ export interface ClearLogsResult {
   deleted_regime_metrics?: number;
   deleted_bot_configs?: number;
   deleted_alerts?: number;
+  deleted_equity_snapshots?: number;
   deleted_position_snapshots?: number;
   deleted_report_rows: number;
   deleted_report_files: number;

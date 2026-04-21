@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -9,17 +9,103 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..deps import get_db_session, require_permissions
-from ..models import Alert, BotConfig, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
+from ..models import Alert, BotConfig, EquitySnapshot, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
 from ..schemas import RunEventOut, RunOut, RunPairSegmentOut, TradeOut
 from ..services.run_pair_segments import list_run_pair_history_rows
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+PORTFOLIO_RANGE_WINDOWS = {
+    "24h": timedelta(hours=24),
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+}
+PORTFOLIO_BUCKETS = {"auto", "raw", "hour", "day", "week"}
 
 
 def _coerce_float(value):
     if value is None:
         return None
     return float(value)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalize_portfolio_range(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in PORTFOLIO_RANGE_WINDOWS or normalized == "all":
+        return normalized
+    return "7d"
+
+
+def _normalize_portfolio_bucket(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in PORTFOLIO_BUCKETS:
+        return normalized
+    return "auto"
+
+
+def _auto_portfolio_bucket(range_key: str, points: list[dict]) -> str:
+    if range_key == "24h":
+        return "raw"
+    if range_key == "7d":
+        return "hour"
+    if range_key in {"30d", "90d"}:
+        return "day"
+    if len(points) < 2:
+        return "day"
+    first_ts = points[0]["ts"]
+    last_ts = points[-1]["ts"]
+    span_days = max((last_ts - first_ts).total_seconds() / 86400.0, 0.0)
+    return "week" if span_days > 120 else "day"
+
+
+def _bucket_start(value: datetime, bucket: str) -> datetime:
+    value = _as_utc(value) or datetime.now(timezone.utc)
+    if bucket == "hour":
+        return value.replace(minute=0, second=0, microsecond=0)
+    if bucket == "day":
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "week":
+        day_start = value.replace(hour=0, minute=0, second=0, microsecond=0)
+        return day_start - timedelta(days=day_start.weekday())
+    return value
+
+
+def _finish_portfolio_points(points: list[dict], *, baseline: float | None = None) -> list[dict]:
+    if not points:
+        return []
+    baseline_equity = points[0]["equity"] if baseline is None else baseline
+    peak = points[0]["equity"]
+    output = []
+    for point in points:
+        equity = point["equity"]
+        drawdown_peak = _coerce_float(point.get("_drawdown_peak"))
+        peak = max(peak, equity, drawdown_peak if drawdown_peak is not None else equity)
+        pnl_usdt = equity - baseline_equity
+        drawdown = equity - peak
+        output.append(
+            {
+                "ts": point["ts"].isoformat(),
+                "equity": equity,
+                "pnl_usdt": pnl_usdt,
+                "pnl_pct": (pnl_usdt / baseline_equity * 100.0) if baseline_equity else None,
+                "drawdown": drawdown,
+                "drawdown_pct": (drawdown / peak * 100.0) if peak else None,
+                "run_id": point.get("run_id"),
+                "run_key": point.get("run_key"),
+                "source": point.get("source"),
+                "samples": int(point.get("samples") or 1),
+            }
+        )
+    return output
 
 
 def _status_rank(status_text: str) -> int:
@@ -64,6 +150,227 @@ def list_runs(
 ):
     stmt = select(Run).order_by(Run.start_ts.desc()).limit(limit).offset(offset)
     return list(db.execute(stmt).scalars().all())
+
+
+@router.get("/portfolio/equity-curve")
+def portfolio_equity_curve(
+    range_key: str = Query(default="7d", alias="range"),
+    bucket_key: str = Query(default="auto", alias="bucket"),
+    max_points: int = Query(default=2000, ge=100, le=10000),
+    _: object = Depends(require_permissions("view_portfolio")),
+    db: Session = Depends(get_db_session),
+):
+    normalized_range = _normalize_portfolio_range(range_key)
+    requested_bucket = _normalize_portfolio_bucket(bucket_key)
+    now = datetime.now(timezone.utc)
+    since = None
+    if normalized_range != "all":
+        since = now - PORTFOLIO_RANGE_WINDOWS[normalized_range]
+
+    raw_points: list[dict] = []
+    runs_stmt = select(Run)
+    if since is not None:
+        runs_stmt = runs_stmt.where(
+            or_(
+                Run.start_ts >= since,
+                Run.end_ts >= since,
+                Run.status == "running",
+            )
+        )
+    runs_by_id = {row.id: row for row in db.execute(runs_stmt).scalars().all()}
+
+    snapshot_stmt = (
+        select(EquitySnapshot, Run.run_key)
+        .join(Run, EquitySnapshot.run_id == Run.id)
+        .order_by(EquitySnapshot.ts.asc(), EquitySnapshot.created_at.asc(), EquitySnapshot.id.asc())
+    )
+    if since is not None:
+        snapshot_stmt = snapshot_stmt.where(EquitySnapshot.ts >= since)
+    equity_snapshot_rows = db.execute(snapshot_stmt).all()
+    snapshot_run_ids: set[str] = set()
+    for snapshot_row, run_key in equity_snapshot_rows:
+        equity = _coerce_float(snapshot_row.equity_usdt)
+        ts_value = _as_utc(snapshot_row.ts)
+        if equity is None or ts_value is None:
+            continue
+        snapshot_run_ids.add(snapshot_row.run_id)
+        raw_points.append(
+            {
+                "ts": ts_value,
+                "equity": equity,
+                "run_id": snapshot_row.run_id,
+                "run_key": run_key,
+                "source": snapshot_row.source,
+                "samples": 1,
+            }
+        )
+
+    if equity_snapshot_rows:
+        for run in runs_by_id.values():
+            if run.id in snapshot_run_ids:
+                continue
+            start_ts = _as_utc(run.start_ts)
+            start_equity = _coerce_float(run.start_equity)
+            if start_ts is not None and start_equity is not None and (since is None or start_ts >= since):
+                raw_points.append(
+                    {
+                        "ts": start_ts,
+                        "equity": start_equity,
+                        "run_id": run.id,
+                        "run_key": run.run_key,
+                        "source": "run_start_fallback",
+                        "samples": 1,
+                    }
+                )
+
+            end_ts = _as_utc(run.end_ts)
+            end_equity = _coerce_float(run.end_equity)
+            if end_ts is not None and end_equity is not None and (since is None or end_ts >= since):
+                raw_points.append(
+                    {
+                        "ts": end_ts,
+                        "equity": end_equity,
+                        "run_id": run.id,
+                        "run_key": run.run_key,
+                        "source": "run_end_fallback",
+                        "samples": 1,
+                    }
+                )
+
+    if not equity_snapshot_rows:
+        for run in runs_by_id.values():
+            start_ts = _as_utc(run.start_ts)
+            start_equity = _coerce_float(run.start_equity)
+            if start_ts is not None and start_equity is not None and (since is None or start_ts >= since):
+                raw_points.append(
+                    {
+                        "ts": start_ts,
+                        "equity": start_equity,
+                        "run_id": run.id,
+                        "run_key": run.run_key,
+                        "source": "run_start_fallback",
+                        "samples": 1,
+                    }
+                )
+
+            end_ts = _as_utc(run.end_ts)
+            end_equity = _coerce_float(run.end_equity)
+            if end_ts is not None and end_equity is not None and (since is None or end_ts >= since):
+                raw_points.append(
+                    {
+                        "ts": end_ts,
+                        "equity": end_equity,
+                        "run_id": run.id,
+                        "run_key": run.run_key,
+                        "source": "run_end_fallback",
+                        "samples": 1,
+                    }
+                )
+
+        heartbeat_stmt = (
+            select(RunEvent, Run.run_key)
+            .join(Run, RunEvent.run_id == Run.id)
+            .where(RunEvent.event_type == "heartbeat")
+            .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+        )
+        if since is not None:
+            heartbeat_stmt = heartbeat_stmt.where(RunEvent.ts >= since)
+        heartbeat_rows = db.execute(heartbeat_stmt).all()
+        for event_row, run_key in heartbeat_rows:
+            payload = event_row.payload_json if isinstance(event_row.payload_json, dict) else {}
+            equity = _coerce_float(payload.get("equity_usdt"))
+            ts_value = _as_utc(event_row.ts)
+            if equity is None or ts_value is None:
+                continue
+            raw_points.append(
+                {
+                    "ts": ts_value,
+                    "equity": equity,
+                    "run_id": event_row.run_id,
+                    "run_key": run_key,
+                    "source": "heartbeat_fallback",
+                    "samples": 1,
+                }
+            )
+
+    raw_points.sort(key=lambda point: (point["ts"], str(point.get("run_key") or ""), str(point.get("source") or "")))
+    raw_run_keys = {
+        str(point.get("run_key") or "").strip()
+        for point in raw_points
+        if str(point.get("run_key") or "").strip()
+    }
+    actual_bucket = _auto_portfolio_bucket(normalized_range, raw_points) if requested_bucket == "auto" else requested_bucket
+
+    if actual_bucket == "raw":
+        chart_points = raw_points[-max_points:] if len(raw_points) > max_points else raw_points
+    else:
+        buckets: dict[datetime, dict] = {}
+        for point in raw_points:
+            bucket_ts = _bucket_start(point["ts"], actual_bucket)
+            existing = buckets.get(bucket_ts)
+            if existing is None:
+                buckets[bucket_ts] = {**point, "ts": bucket_ts, "samples": int(point.get("samples") or 1)}
+                continue
+            existing["samples"] = int(existing.get("samples") or 0) + int(point.get("samples") or 1)
+            if point["ts"] >= existing.get("_last_sample_ts", existing["ts"]):
+                existing.update({**point, "ts": bucket_ts, "samples": existing["samples"], "_last_sample_ts": point["ts"]})
+        chart_points = sorted(buckets.values(), key=lambda point: point["ts"])
+        if len(chart_points) > max_points:
+            chart_points = chart_points[-max_points:]
+        for point in chart_points:
+            point.pop("_last_sample_ts", None)
+        running_peak = None
+        peak_by_bucket: dict[datetime, float] = {}
+        for point in raw_points:
+            equity = point["equity"]
+            running_peak = equity if running_peak is None else max(running_peak, equity)
+            peak_by_bucket[_bucket_start(point["ts"], actual_bucket)] = running_peak
+        for point in chart_points:
+            bucket_peak = peak_by_bucket.get(point["ts"])
+            if bucket_peak is not None:
+                point["_drawdown_peak"] = bucket_peak
+
+    raw_finished_points = _finish_portfolio_points(raw_points)
+    raw_start_equity = raw_points[0]["equity"] if raw_points else None
+    points = _finish_portfolio_points(chart_points, baseline=raw_start_equity)
+    raw_equities = [point["equity"] for point in raw_finished_points]
+    raw_pnl_values = [point["pnl_usdt"] for point in raw_finished_points]
+    raw_drawdowns = [point["drawdown"] for point in raw_finished_points]
+    raw_drawdown_pcts = [
+        point["drawdown_pct"]
+        for point in raw_finished_points
+        if point["drawdown_pct"] is not None
+    ]
+    start_equity = raw_equities[0] if raw_equities else None
+    end_equity = raw_equities[-1] if raw_equities else None
+    change_usdt = (end_equity - start_equity) if start_equity is not None and end_equity is not None else None
+    start_ts = raw_finished_points[0]["ts"] if raw_finished_points else None
+    end_ts = raw_finished_points[-1]["ts"] if raw_finished_points else None
+
+    return {
+        "range": normalized_range,
+        "bucket": actual_bucket,
+        "requested_bucket": requested_bucket,
+        "source": "equity_snapshots" if equity_snapshot_rows else "event_fallback",
+        "generated_at": now.isoformat(),
+        "points": points,
+        "stats": {
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "start_equity": start_equity,
+            "end_equity": end_equity,
+            "change_usdt": change_usdt,
+            "change_pct": (change_usdt / start_equity * 100.0) if change_usdt is not None and start_equity else None,
+            "min_equity": min(raw_equities) if raw_equities else None,
+            "max_equity": max(raw_equities) if raw_equities else None,
+            "max_drawdown": min(raw_drawdowns) if raw_drawdowns else None,
+            "max_drawdown_pct": min(raw_drawdown_pcts) if raw_drawdown_pcts else None,
+            "point_count": len(points),
+            "raw_point_count": len(raw_points),
+            "run_count": len(raw_run_keys),
+            "latest_pnl_usdt": raw_pnl_values[-1] if raw_pnl_values else None,
+        },
+    }
 
 
 @router.get("/{run_id}", response_model=RunOut)

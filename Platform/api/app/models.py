@@ -138,6 +138,12 @@ class Run(Base):
         order_by="RunPairSegment.sequence_no.asc()",
     )
     trades: Mapped[list[Trade]] = relationship("Trade", back_populates="run", cascade="all, delete-orphan")
+    equity_snapshots: Mapped[list[EquitySnapshot]] = relationship(
+        "EquitySnapshot",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="EquitySnapshot.ts.asc()",
+    )
 
 
 class RunEvent(Base):
@@ -174,6 +180,31 @@ class RunPairSegment(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
     run: Mapped[Run] = relationship("Run", back_populates="pair_segments")
+
+
+class EquitySnapshot(Base):
+    __tablename__ = "equity_snapshots"
+    __table_args__ = (UniqueConstraint("source_event_id", name="uq_equity_snapshots_source_event_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    equity_usdt: Mapped[float] = mapped_column(Numeric(20, 8), nullable=False)
+    session_pnl_usdt: Mapped[float | None] = mapped_column(Numeric(20, 8), nullable=True)
+    session_pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_pair: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    regime: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    strategy: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    in_position: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    entry_z: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_z: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hold_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unrealized_pnl_usdt: Mapped[float | None] = mapped_column(Numeric(20, 8), nullable=True)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="heartbeat", index=True)
+    source_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    run: Mapped[Run] = relationship("Run", back_populates="equity_snapshots")
 
 
 class Trade(Base):

@@ -109,6 +109,8 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   STRATEGY_TIMEFRAME: { description: "Strategy candle timeframe used for discovery scans", default: "1m" },
   STRATEGY_Z_SCORE_WINDOW: { description: "Rolling window used for Strategy-side Z-score analytics", default: "60" },
   STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "2880" },
+  STRATEGY_INTERNAL_KLINE_WORKERS: { description: "Parallel worker count for Strategy kline fetches; lower values reduce CPU and request bursts", default: "2" },
+  STRATEGY_INTERNAL_MIN_PAIRS: { description: "Minimum usable pairs Strategy tries to find before accepting a fallback scan result", default: "3" },
   STRATEGY_STARTUP_RETRY_SECONDS: { description: "Sleep seconds between startup Strategy discovery retries when no pairs are found", default: "5" },
   STRATEGY_STARTUP_MAX_ATTEMPTS: { description: "Maximum startup Strategy discovery attempts before execution gives up; 0 retries forever", default: "0" },
   PAIR_SUPPLY_INTERVAL_SECONDS: { description: "Seconds between independent continuous Strategy pair-supply scans; 0 starts the next scan immediately", default: "300" },
@@ -300,6 +302,8 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_STRATEGY_TIMEFRAME",
       "STATBOT_STRATEGY_Z_SCORE_WINDOW",
       "STATBOT_STRATEGY_KLINE_LIMIT",
+      "STATBOT_STRATEGY_INTERNAL_KLINE_WORKERS",
+      "STATBOT_STRATEGY_INTERNAL_MIN_PAIRS",
       "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",
       "STATBOT_STRATEGY_STARTUP_MAX_ATTEMPTS",
       "STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS",
@@ -367,6 +371,10 @@ function denormalizeSettingKey(key: string): string {
 }
 
 const KNOWN_API_ENV_KEYS = ["OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"] as const;
+const VISIBLE_INTERNAL_BOT_ENV_KEYS = new Set<string>([
+  "STATBOT_STRATEGY_INTERNAL_KLINE_WORKERS",
+  "STATBOT_STRATEGY_INTERNAL_MIN_PAIRS",
+]);
 const KNOWN_BOT_ENV_KEYS = Array.from(
   new Set([
     ...BOT_SETTING_GROUPS.flatMap((group) => group.keys ?? []),
@@ -695,7 +703,12 @@ export default function SettingsPage() {
   );
 
   const botEnvKeys = useMemo(
-    () => sortedEnvKeys.filter((key) => !apiKeys.has(key) && !key.startsWith("STATBOT_STRATEGY_INTERNAL_")),
+    () => sortedEnvKeys.filter((key) => {
+      if (apiKeys.has(key)) {
+        return false;
+      }
+      return !key.startsWith("STATBOT_STRATEGY_INTERNAL_") || VISIBLE_INTERNAL_BOT_ENV_KEYS.has(key);
+    }),
     [sortedEnvKeys, apiKeys],
   );
 

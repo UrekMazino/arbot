@@ -138,6 +138,43 @@ def test_cointegrated_pair_catalog_filters_hospital_and_graveyard(monkeypatch, t
     assert catalog["pairs"][0]["pair"] == "EEE-USDT-SWAP/FFF-USDT-SWAP"
 
 
+def test_cointegrated_pair_catalog_filters_missing_liquidity_rows(monkeypatch, tmp_path):
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    pair_state = tmp_path / "pair_strategy_state.json"
+    pd.DataFrame(
+        [
+            {
+                "sym_1": "AAA-USDT-SWAP",
+                "sym_2": "BBB-USDT-SWAP",
+                "zero_crossing": 99,
+                "avg_quote_volume_1": 1000,
+                "avg_quote_volume_2": None,
+                "pair_liquidity_min": None,
+            },
+            {
+                "sym_1": "CCC-USDT-SWAP",
+                "sym_2": "DDD-USDT-SWAP",
+                "zero_crossing": 8,
+                "avg_quote_volume_1": 1000,
+                "avg_quote_volume_2": 900,
+                "pair_liquidity_min": 900,
+            },
+        ]
+    ).to_csv(coint_csv, index=False)
+    status_json.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", pair_state)
+
+    catalog = cp.list_cointegrated_pairs()
+
+    assert catalog["unusable_liquidity_pair_count"] == 1
+    assert catalog["pair_count"] == 1
+    assert catalog["pairs"][0]["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
+
+
 def test_remove_cointegrated_pair_moves_pair_to_manual_graveyard(monkeypatch, tmp_path):
     coint_csv = tmp_path / "2_cointegrated_pairs.csv"
     status_json = tmp_path / "2_cointegrated_pairs_status.json"

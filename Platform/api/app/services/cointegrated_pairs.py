@@ -196,6 +196,19 @@ def _filter_excluded_pairs_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return working.drop(columns=["_pair_key"], errors="ignore"), int(before - len(working))
 
 
+def _filter_unusable_liquidity_pairs_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    required_columns = ("avg_quote_volume_1", "avg_quote_volume_2", "pair_liquidity_min")
+    if df.empty or not all(column in df.columns for column in required_columns):
+        return df.copy(), 0
+    working = df.copy()
+    vol_1 = pd.to_numeric(working["avg_quote_volume_1"], errors="coerce")
+    vol_2 = pd.to_numeric(working["avg_quote_volume_2"], errors="coerce")
+    pair_liq = pd.to_numeric(working["pair_liquidity_min"], errors="coerce")
+    usable = (vol_1 > 0) & (vol_2 > 0) & (pair_liq > 0)
+    before = len(working)
+    return working[usable].copy(), int(before - int(usable.sum()))
+
+
 def _parse_iso_timestamp(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -547,6 +560,7 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
         raise RuntimeError("Cointegrated pairs CSV is missing sym_1/sym_2 columns.")
 
     df, excluded_count = _filter_excluded_pairs_frame(df)
+    df, unusable_liquidity_count = _filter_unusable_liquidity_pairs_frame(df)
     if "zero_crossing" in df.columns:
         df = df.sort_values(by=["zero_crossing"], ascending=[False], kind="stable")
     df = df.head(max(1, min(int(limit), 1000))).copy()
@@ -560,6 +574,7 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
         "status": status,
         "pair_count": len(pairs),
         "excluded_pair_count": excluded_count,
+        "unusable_liquidity_pair_count": unusable_liquidity_count,
         "pairs": pairs,
     }
 

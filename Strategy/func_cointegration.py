@@ -398,6 +398,19 @@ def _filter_excluded_pair_rows(df):
     return output.drop(columns=["_pair_key"], errors="ignore"), int(before - len(output))
 
 
+def _filter_unusable_liquidity_pair_rows(df):
+    required_columns = ("avg_quote_volume_1", "avg_quote_volume_2", "pair_liquidity_min")
+    if df.empty or not all(column in df.columns for column in required_columns):
+        return df.copy(), 0
+    output = df.copy()
+    vol_1 = pd.to_numeric(output["avg_quote_volume_1"], errors="coerce")
+    vol_2 = pd.to_numeric(output["avg_quote_volume_2"], errors="coerce")
+    pair_liq = pd.to_numeric(output["pair_liquidity_min"], errors="coerce")
+    usable = (vol_1 > 0) & (vol_2 > 0) & (pair_liq > 0)
+    before = len(output)
+    return output[usable].copy(), int(before - int(usable.sum()))
+
+
 def _sort_cointegrated_pair_frame(df):
     if df.empty:
         return df.copy()
@@ -488,23 +501,35 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=N
         "accumulated_pairs_retained": 0,
         "accumulation_cap_filtered": 0,
         "excluded_pairs_filtered": int(latest_excluded_rows),
+        "unusable_liquidity_pairs_filtered": 0,
     }
+
+    df_canonical_attempt, latest_unusable_liquidity_rows = _filter_unusable_liquidity_pair_rows(
+        df_canonical_attempt
+    )
+    accumulation_status["latest_attempt_valid_rows"] = int(len(df_canonical_attempt))
+    accumulation_status["unusable_liquidity_pairs_filtered"] = int(latest_unusable_liquidity_rows)
 
     if len(df_canonical_attempt) > 0:
         previous_df = pd.DataFrame()
         previous_excluded_rows = 0
+        previous_unusable_liquidity_rows = 0
         if output_path.exists() and output_path.stat().st_size > 0:
             try:
                 previous_df = pd.read_csv(output_path)
             except Exception:
                 previous_df = pd.DataFrame()
             previous_df, previous_excluded_rows = _filter_excluded_pair_rows(previous_df)
+            previous_df, previous_unusable_liquidity_rows = _filter_unusable_liquidity_pair_rows(previous_df)
         canonical_df, accumulation_status = _accumulate_cointegrated_pair_supply(
             previous_df,
             df_canonical_attempt,
             max_rows=max_rows,
         )
         accumulation_status["excluded_pairs_filtered"] = int(latest_excluded_rows + previous_excluded_rows)
+        accumulation_status["unusable_liquidity_pairs_filtered"] = int(
+            latest_unusable_liquidity_rows + previous_unusable_liquidity_rows
+        )
         canonical_df.to_csv(temp_path, index=False)
         temp_path.replace(output_path)
         canonical_updated = True
@@ -515,15 +540,20 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=N
         except Exception:
             previous_df = pd.DataFrame()
         canonical_df, previous_excluded_rows = _filter_excluded_pair_rows(previous_df)
+        canonical_df, previous_unusable_liquidity_rows = _filter_unusable_liquidity_pair_rows(canonical_df)
         accumulation_status["excluded_pairs_filtered"] = int(latest_excluded_rows + previous_excluded_rows)
-        if previous_excluded_rows:
+        accumulation_status["unusable_liquidity_pairs_filtered"] = int(
+            latest_unusable_liquidity_rows + previous_unusable_liquidity_rows
+        )
+        if previous_excluded_rows or previous_unusable_liquidity_rows:
             canonical_df.to_csv(temp_path, index=False)
             temp_path.replace(output_path)
             canonical_updated = True
             if logger:
                 logger.info(
-                    "Removed %d hospital/graveyard pairs from canonical pair CSV at %s.",
+                    "Removed %d hospital/graveyard and %d unusable-liquidity pairs from canonical pair CSV at %s.",
                     previous_excluded_rows,
+                    previous_unusable_liquidity_rows,
                     output_path,
                 )
         else:
@@ -587,6 +617,8 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "accumulated_pairs_refreshed",
         "accumulated_pairs_retained",
         "accumulation_cap_filtered",
+        "excluded_pairs_filtered",
+        "unusable_liquidity_pairs_filtered",
         "zero_crossing_min",
         "filtered_breakdown",
         "zero_crossing",

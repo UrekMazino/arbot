@@ -399,3 +399,60 @@ def test_cointegrated_pairs_writer_drops_hospital_and_graveyard_from_accumulatio
     assert status["latest_attempt_rows"] == 2
     assert status["latest_attempt_valid_rows"] == 1
     assert status["excluded_pairs_filtered"] == 2
+
+
+def test_cointegrated_pairs_writer_drops_missing_liquidity_from_accumulation(tmp_path):
+    output_path = tmp_path / "2_cointegrated_pairs.csv"
+    previous = pd.DataFrame(
+        [
+            {
+                "sym_1": "AAA-USDT-SWAP",
+                "sym_2": "BBB-USDT-SWAP",
+                "p_value": 0.01,
+                "zero_crossing": 20,
+                "avg_quote_volume_1": 1000,
+                "avg_quote_volume_2": None,
+                "pair_liquidity_min": None,
+            },
+            {
+                "sym_1": "CCC-USDT-SWAP",
+                "sym_2": "DDD-USDT-SWAP",
+                "p_value": 0.02,
+                "zero_crossing": 7,
+                "avg_quote_volume_1": 1000,
+                "avg_quote_volume_2": 900,
+                "pair_liquidity_min": 900,
+            },
+        ]
+    )
+    previous.to_csv(output_path, index=False)
+    latest = pd.DataFrame(
+        [
+            {
+                "sym_1": "EEE-USDT-SWAP",
+                "sym_2": "FFF-USDT-SWAP",
+                "p_value": 0.003,
+                "zero_crossing": 30,
+                "avg_quote_volume_1": 1000,
+                "avg_quote_volume_2": "",
+                "pair_liquidity_min": "",
+            },
+            {
+                "sym_1": "GGG-USDT-SWAP",
+                "sym_2": "HHH-USDT-SWAP",
+                "p_value": 0.004,
+                "zero_crossing": 8,
+                "avg_quote_volume_1": 1100,
+                "avg_quote_volume_2": 1000,
+                "pair_liquidity_min": 1000,
+            },
+        ]
+    )
+
+    status = fc._write_cointegrated_pairs_csv(latest, output_path, max_rows=10)
+    canonical = pd.read_csv(output_path)
+
+    assert set(canonical["sym_1"]) == {"CCC-USDT-SWAP", "GGG-USDT-SWAP"}
+    assert status["latest_attempt_rows"] == 2
+    assert status["latest_attempt_valid_rows"] == 1
+    assert status["unusable_liquidity_pairs_filtered"] == 2

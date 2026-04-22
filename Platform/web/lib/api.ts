@@ -391,6 +391,7 @@ export type CointegratedPairsResponse = {
   status: Record<string, unknown>;
   pair_count: number;
   excluded_pair_count?: number;
+  unusable_liquidity_pair_count?: number;
   pairs: CointegratedPair[];
 };
 

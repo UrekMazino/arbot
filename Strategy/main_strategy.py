@@ -522,11 +522,20 @@ def main():
 
     if len(df_coint) > 0:
         if coint_summary:
+            usable_crossings = coint_summary.get(
+                "usable_pairs_with_crossings",
+                coint_summary.get("pairs_kept", len(df_coint)),
+            )
+            pre_filter_crossings = coint_summary.get(
+                "pre_filter_pairs_with_crossings",
+                coint_summary.get("pairs_with_crossings", usable_crossings),
+            )
             print(
-                "Cointegration: pairs_kept={0} total_pairs={1} crossings={2} liquidity_pct={3:.2f}".format(
+                "Cointegration: pairs_kept={0} usable_crossings={1} pre_filter_crossings={2} total_pairs={3} liquidity_pct={4:.2f}".format(
                     len(df_coint),
+                    usable_crossings,
+                    pre_filter_crossings,
                     coint_summary.get("total_pairs", 0),
-                    coint_summary.get("pairs_with_crossings", 0),
                     coint_summary.get("liquidity_pct", base_liquidity_pct),
                 )
             )

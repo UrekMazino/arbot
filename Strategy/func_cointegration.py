@@ -380,6 +380,42 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None):
     return status
 
 
+def _write_cointegration_status_summary(output_path, summary, logger=None):
+    status_path = output_path.with_name(f"{output_path.stem}_status.json")
+    status = {}
+    if status_path.exists():
+        try:
+            loaded = json.loads(status_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                status = loaded
+        except Exception:
+            status = {}
+
+    summary_keys = [
+        "total_pairs",
+        "cointegrated_pairs",
+        "pre_filter_pairs_with_crossings",
+        "pre_filter_pairs_without_crossings",
+        "usable_pairs_with_crossings",
+        "usable_pairs_without_crossings",
+        "crossing_candidates_filtered_later",
+        "raw_pairs_with_crossings",
+        "crossing_rejected_by_orderbook",
+        "pairs_kept",
+        "zero_crossing_min",
+        "filtered_breakdown",
+        "zero_crossing",
+    ]
+    scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
+    status.update(scan_summary)
+    status["scan_summary"] = scan_summary
+    try:
+        status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to merge cointegrated pair scan summary into status metadata: %s", exc)
+
+
 def _calculate_orderbook_depth_usdt(levels, instrument_info=None, inst_id="", fallback_price=None):
     total = 0.0
     for level in levels or []:
@@ -552,7 +588,8 @@ def get_cointegrated_pairs(
         message = (
             f"Cointegration progress: [{bar}] "
             f"{total_comparisons}/{total_expected_comparisons} pairs "
-            f"{pct_done:.0f}% | candidates={len(coint_pair_list)} crossings={pairs_with_crossings}"
+            f"{pct_done:.0f}% | pre_filter_candidates={len(coint_pair_list)} "
+            f"pre_filter_crossings={pairs_with_crossings}"
         )
         logger.info(message)
 
@@ -1005,6 +1042,13 @@ def get_cointegrated_pairs(
         df_coint = df_coint.head(active_max_supply_pairs).copy()
         filtered_breakdown["supply_cap"] = before - len(df_coint)
 
+    usable_pairs_with_crossings = 0
+    if not df_coint.empty and "zero_crossing" in df_coint.columns:
+        usable_zero_crossings = pd.to_numeric(df_coint["zero_crossing"], errors="coerce").fillna(0)
+        usable_pairs_with_crossings = int((usable_zero_crossings > 0).sum())
+    usable_pairs_without_crossings = int(len(df_coint) - usable_pairs_with_crossings)
+    crossing_candidates_filtered_later = max(int(pairs_with_crossings) - usable_pairs_with_crossings, 0)
+
     output_dir = Path(__file__).resolve().parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
@@ -1014,6 +1058,11 @@ def get_cointegrated_pairs(
         "cointegrated_pairs": len(coint_pair_list),
         "pairs_with_crossings": pairs_with_crossings,
         "pairs_without_crossings": len(coint_pair_list) - pairs_with_crossings,
+        "pre_filter_pairs_with_crossings": pairs_with_crossings,
+        "pre_filter_pairs_without_crossings": len(coint_pair_list) - pairs_with_crossings,
+        "usable_pairs_with_crossings": usable_pairs_with_crossings,
+        "usable_pairs_without_crossings": usable_pairs_without_crossings,
+        "crossing_candidates_filtered_later": crossing_candidates_filtered_later,
         "raw_pairs_with_crossings": raw_pairs_with_crossings,
         "crossing_rejected_by_orderbook": max(raw_pairs_with_crossings - pairs_with_crossings, 0),
         "crossing_reject_examples": crossing_reject_examples,
@@ -1060,6 +1109,7 @@ def get_cointegrated_pairs(
                 "recommended_equity": float(max_per_leg * 2),
             }
 
+    _write_cointegration_status_summary(output_path, summary, logger=logger)
     logger.info("Cointegration summary: %s", summary)
 
     return df_coint, summary

@@ -258,6 +258,14 @@ export default function CointegratedPairPage() {
   const preservedExisting = statusBool(status, "preserved_existing");
   const latestAttemptRows = statusNumber(status, "latest_attempt_rows");
   const canonicalRows = statusNumber(status, "canonical_rows");
+  const usableCrossingPairs = statusNumber(status, "usable_pairs_with_crossings");
+  const preFilterCrossingPairs = statusNumber(status, "pre_filter_pairs_with_crossings");
+  const latestAttemptHint =
+    usableCrossingPairs !== null && preFilterCrossingPairs !== null
+      ? `${usableCrossingPairs} usable crossing pairs from ${preFilterCrossingPairs} pre-filter candidates`
+      : preservedExisting
+        ? "Empty scan preserved last-good CSV"
+        : "Latest scan became canonical";
   const chartData = detail?.points || [];
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
@@ -391,7 +399,7 @@ export default function CointegratedPairPage() {
           <MetricCard
             label="Latest Attempt"
             value={latestAttemptRows === null ? "n/a" : String(latestAttemptRows)}
-            hint={preservedExisting ? "Empty scan preserved last-good CSV" : "Latest scan became canonical"}
+            hint={latestAttemptHint}
             tone={preservedExisting ? "amber" : "teal"}
           />
           <MetricCard

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -150,6 +151,15 @@ def test_pair_supply_caps_canonical_pairs_at_configured_max(monkeypatch, tmp_pat
     assert summary["pairs_kept"] == 10
     assert summary["max_supply_pairs"] == 10
     assert summary["filtered_breakdown"]["supply_cap"] == 5
+    assert summary["pre_filter_pairs_with_crossings"] == 15
+    assert summary["usable_pairs_with_crossings"] == 10
+    assert summary["crossing_candidates_filtered_later"] == 5
+
+    status_path = Path(fc.__file__).resolve().parent / "output" / "2_cointegrated_pairs_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["pre_filter_pairs_with_crossings"] == 15
+    assert status["usable_pairs_with_crossings"] == 10
+    assert status["scan_summary"]["usable_pairs_with_crossings"] == 10
 
 
 def test_orderbook_soft_pass_accepts_slightly_low_balanced_depth(monkeypatch):

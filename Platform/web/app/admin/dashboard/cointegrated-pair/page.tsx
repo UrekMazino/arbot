@@ -187,8 +187,86 @@ function RemoveIcon({ spinning = false }: { spinning?: boolean }) {
   );
 }
 
+function FullscreenIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M7.5 3.5h-4v4" />
+      <path d="M3.5 3.5 8 8" />
+      <path d="M12.5 3.5h4v4" />
+      <path d="M16.5 3.5 12 8" />
+      <path d="M7.5 16.5h-4v-4" />
+      <path d="M3.5 16.5 8 12" />
+      <path d="M12.5 16.5h4v-4" />
+      <path d="M16.5 16.5 12 12" />
+    </svg>
+  );
+}
+
 function ChartEmpty({ message }: { message: string }) {
   return <p className="py-20 text-center text-sm text-gray-500 dark:text-gray-400">{message}</p>;
+}
+
+function PairUniverseCharts({
+  chartData,
+  fullscreen = false,
+  selectedPair,
+}: {
+  chartData: CointegratedPairDetail["points"];
+  fullscreen?: boolean;
+  selectedPair: CointegratedPair;
+}) {
+  const priceHeight = fullscreen ? 360 : 280;
+  const spreadHeight = fullscreen ? 420 : 300;
+  const headingClass = fullscreen
+    ? "mb-3 text-sm font-semibold text-white/90"
+    : "mb-2 text-sm font-semibold text-gray-800 dark:text-white/90";
+
+  return (
+    <div className={fullscreen ? "space-y-10" : "space-y-8"}>
+      <div>
+        <h4 className={headingClass}>Normalized Price Path</h4>
+        <ResponsiveContainer width="100%" height={priceHeight}>
+          <LineChart data={chartData}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#263244" />
+            <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
+            <YAxis tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
+            <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
+            <Legend />
+            <Line type="monotone" dataKey="price_1_norm" name={selectedPair.sym_1} stroke="#2563eb" strokeWidth={2.5} dot={false} />
+            <Line type="monotone" dataKey="price_2_norm" name={selectedPair.sym_2} stroke="#14b8a6" strokeWidth={2.5} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div>
+        <h4 className={headingClass}>Spread Z-Score</h4>
+        <ResponsiveContainer width="100%" height={spreadHeight}>
+          <LineChart data={chartData}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#263244" />
+            <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
+            <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
+            <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
+            <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
+            <Legend />
+            <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} />
+            <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} />
+            <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} />
+            <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} />
+            <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
 }
 
 export default function CointegratedPairPage() {
@@ -208,6 +286,7 @@ export default function CointegratedPairPage() {
   const [switchModal, setSwitchModal] = useState<{ title: string; message: string } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
+  const [graphFullscreen, setGraphFullscreen] = useState(false);
   const [query, setQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
@@ -264,6 +343,7 @@ export default function CointegratedPairPage() {
   useEffect(() => {
     if (!selectedPair) {
       setDetail(null);
+      setGraphFullscreen(false);
       return;
     }
     let cancelled = false;
@@ -288,6 +368,20 @@ export default function CointegratedPairPage() {
       cancelled = true;
     };
   }, [selectedPair]);
+
+  useEffect(() => {
+    if (!graphFullscreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setGraphFullscreen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [graphFullscreen]);
 
   const filteredPairs = useMemo(
     () => (catalog?.pairs || []).filter((pair) => pairMatches(pair, query)),
@@ -451,6 +545,30 @@ export default function CointegratedPairPage() {
               >
                 OK
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {graphFullscreen && selectedPair && chartData.length ? (
+        <div className="fixed inset-0 z-[60] bg-gray-950/90 p-3 backdrop-blur-sm sm:p-5">
+          <div className="flex h-full flex-col overflow-hidden rounded-3xl border border-white/10 bg-gray-950/95 shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5">
+              <div className="min-w-0">
+                <p className="font-mono text-sm font-semibold text-white sm:text-base">{selectedPair.pair}</p>
+                <p className="mt-1 text-xs text-gray-400">Pair Universe fullscreen chart</p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white hover:bg-white/15"
+                onClick={() => setGraphFullscreen(false)}
+                aria-label="Close fullscreen pair graph"
+                title="Close fullscreen"
+              >
+                <RemoveIcon />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-4 custom-scrollbar sm:p-6">
+              <PairUniverseCharts chartData={chartData} selectedPair={selectedPair} fullscreen />
             </div>
           </div>
         </div>
@@ -725,7 +843,27 @@ export default function CointegratedPairPage() {
             <PanelCard
               title={selectedPair ? selectedPair.pair : "Pair Detail"}
               subtitle="Normalized prices, spread, and z-score computed from Strategy price history."
-              titleRight={detailLoading ? <StatusPill label="Loading" tone="neutral" /> : <StatusPill label="Chart" tone="success" />}
+              titleRight={
+                detailLoading ? (
+                  <StatusPill label="Loading" tone="neutral" />
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {selectedPair && chartData.length ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:border-brand-300 hover:text-brand-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300 dark:hover:border-brand-700 dark:hover:text-brand-300"
+                        onClick={() => setGraphFullscreen(true)}
+                        aria-label="Open pair graph fullscreen"
+                        title="Open graph fullscreen"
+                      >
+                        <FullscreenIcon />
+                        <span className="hidden sm:inline">Full screen</span>
+                      </button>
+                    ) : null}
+                    <StatusPill label="Chart" tone="success" />
+                  </div>
+                )
+              }
             >
               {detailLoading ? (
                 <ChartEmpty message="Loading pair graph..." />
@@ -734,41 +872,7 @@ export default function CointegratedPairPage() {
               ) : !chartData.length ? (
                 <ChartEmpty message="No chart data available for this pair." />
               ) : (
-                <div className="space-y-8">
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">Normalized Price Path</h4>
-                    <ResponsiveContainer width="100%" height={280}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#263244" />
-                        <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
-                        <YAxis tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-                        <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
-                        <Legend />
-                        <Line type="monotone" dataKey="price_1_norm" name={selectedPair.sym_1} stroke="#2563eb" strokeWidth={2.5} dot={false} />
-                        <Line type="monotone" dataKey="price_2_norm" name={selectedPair.sym_2} stroke="#14b8a6" strokeWidth={2.5} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  <div>
-                    <h4 className="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">Spread Z-Score</h4>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={chartData}>
-                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#263244" />
-                        <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
-                        <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-                        <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-                        <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
-                        <Legend />
-                        <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} />
-                        <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} />
-                        <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} />
-                        <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} />
-                        <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
+                <PairUniverseCharts chartData={chartData} selectedPair={selectedPair} />
               )}
             </PanelCard>
 

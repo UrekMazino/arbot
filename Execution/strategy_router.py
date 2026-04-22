@@ -365,33 +365,49 @@ class StrategyRouter:
 
         # Performance-driven strategy cooldown (entry block only; no forced switch/close).
         if active_strategy in ("STATARB_MR", "TREND_SPREAD"):
+            configured_cooldown_seconds = int(self.config["cooldown_seconds"])
+            cooldown_qualifies = False
+            cooldown_qualifying_reason = ""
+            if rolling_count >= int(self.config["score_min_trades"]):
+                low_win = (
+                    rolling_win_rate is not None
+                    and rolling_win_rate < float(self.config["score_min_win_rate"])
+                )
+                rolling_loss = rolling_pnl < -abs(float(self.config["score_max_rolling_loss_usdt"]))
+                cooldown_qualifies = bool(low_win or rolling_loss)
+                if low_win and rolling_loss:
+                    cooldown_qualifying_reason = "low_win_rate_and_rolling_loss"
+                elif low_win:
+                    cooldown_qualifying_reason = "low_win_rate"
+                elif rolling_loss:
+                    cooldown_qualifying_reason = "rolling_loss"
+
             current_cd = cooldowns.get(active_strategy)
             if current_cd and float(current_cd.get("until_ts", 0.0) or 0.0) <= ts:
                 cooldowns.pop(active_strategy, None)
                 current_cd = None
                 cooldown_cleared = True
+            elif current_cd and (configured_cooldown_seconds <= 0 or not cooldown_qualifies):
+                cooldowns.pop(active_strategy, None)
+                current_cd = None
+                cooldown_cleared = True
+            elif current_cd and configured_cooldown_seconds > 0:
+                cooldown_until_ts = float(current_cd.get("until_ts", 0.0) or 0.0)
+                max_allowed_until = float(ts + configured_cooldown_seconds)
+                if cooldown_until_ts > max_allowed_until:
+                    current_cd = dict(current_cd)
+                    current_cd["until_ts"] = max_allowed_until
+                    cooldowns[active_strategy] = current_cd
 
-            if current_cd is None and int(self.config["cooldown_seconds"]) > 0:
-                if rolling_count >= int(self.config["score_min_trades"]):
-                    low_win = (
-                        rolling_win_rate is not None
-                        and rolling_win_rate < float(self.config["score_min_win_rate"])
-                    )
-                    rolling_loss = rolling_pnl < -abs(float(self.config["score_max_rolling_loss_usdt"]))
-                    if low_win or rolling_loss:
-                        if low_win and rolling_loss:
-                            cooldown_reason = "low_win_rate_and_rolling_loss"
-                        elif low_win:
-                            cooldown_reason = "low_win_rate"
-                        else:
-                            cooldown_reason = "rolling_loss"
-                        cooldown_until_ts = float(ts + int(self.config["cooldown_seconds"]))
-                        cooldowns[active_strategy] = {
-                            "until_ts": cooldown_until_ts,
-                            "reason": cooldown_reason,
-                        }
-                        current_cd = cooldowns.get(active_strategy)
-                        cooldown_triggered = True
+            if current_cd is None and configured_cooldown_seconds > 0 and cooldown_qualifies:
+                cooldown_reason = cooldown_qualifying_reason
+                cooldown_until_ts = float(ts + configured_cooldown_seconds)
+                cooldowns[active_strategy] = {
+                    "until_ts": cooldown_until_ts,
+                    "reason": cooldown_reason,
+                }
+                current_cd = cooldowns.get(active_strategy)
+                cooldown_triggered = True
 
             if current_cd is not None:
                 cooldown_until_ts = float(current_cd.get("until_ts", 0.0) or 0.0)

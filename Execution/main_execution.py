@@ -5,12 +5,13 @@ import json
 import warnings
 import logging
 import math
+import re
 import time
 import sys
 import signal
 import subprocess
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from func_log_setup import get_logger
 
@@ -244,6 +245,8 @@ PAIR_SUPPLY_WAIT_SECONDS = _env_int(
     STRATEGY_REFRESH_SLEEP_SECONDS,
     minimum=1,
 )
+PAIR_SUPPLY_REQUEST_GRACE_SECONDS = _env_int("STATBOT_PAIR_SUPPLY_REQUEST_GRACE_SECONDS", 60, minimum=5)
+RUNNER_HEARTBEAT_STALE_SECONDS = _env_int("STATBOT_RUNNER_HEARTBEAT_STALE_SECONDS", 20, minimum=5)
 STRATEGY_STARTUP_RETRY_SECONDS = _env_int(
     "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",
     STRATEGY_REFRESH_SLEEP_SECONDS,
@@ -276,6 +279,7 @@ FORCED_SWITCH_EXIT_REASONS = {
     "exit_tier_4_divergence",
 }
 PAIR_SUPPLY_STATE_FILE = Path(__file__).resolve().parent / "state" / "pair_supply_control.json"
+PAIR_SUPPLY_LOG_FILE = Path(__file__).resolve().parent.parent / "Logs" / "v1" / "pair_supply_scheduler.log"
 MANUAL_PAIR_SWITCH_FILE = Path(__file__).resolve().parent / "state" / "manual_pair_switch.json"
 
 
@@ -1110,6 +1114,148 @@ def _sleep_with_progress(seconds, label="Sleeping"):
     sys.stdout.flush()
 
 
+def _resolve_pair_supply_log_path(status=None):
+    candidates = []
+    raw_path = ""
+    if isinstance(status, dict):
+        raw_path = str(status.get("log_file") or "").strip()
+    if raw_path:
+        path = Path(raw_path)
+        candidates.append(path)
+        normalized = raw_path.replace("\\", "/")
+        if normalized.startswith("/workspace/"):
+            rel = normalized[len("/workspace/") :]
+            candidates.append(Path(__file__).resolve().parent.parent / rel)
+    candidates.append(PAIR_SUPPLY_LOG_FILE)
+
+    for path in candidates:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            continue
+    return candidates[-1]
+
+
+def _read_pair_supply_log_tail(status=None, max_bytes=5_000_000):
+    path = _resolve_pair_supply_log_path(status)
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            read_size = min(size, max(1, int(max_bytes)))
+            handle.seek(-read_size, os.SEEK_END)
+            return handle.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _read_pair_supply_scan_progress(status=None, watch_started_at=None):
+    text = _read_pair_supply_log_tail(status)
+    progress = {
+        "known": False,
+        "active": False,
+        "current": 0,
+        "total": 0,
+        "phase": "waiting",
+        "latest_start_at": "",
+        "latest_end_at": "",
+        "watched_completed": False,
+    }
+    if not text:
+        return progress
+
+    starts = list(re.finditer(r"(?P<ts>\S+)\s+pair_supply scan_start", text))
+    ends = list(re.finditer(r"(?P<ts>\S+)\s+pair_supply scan_end", text))
+    if not starts:
+        return progress
+
+    latest_start = starts[-1]
+    latest_end = ends[-1] if ends else None
+    segment = text[latest_start.start() :]
+    progress["known"] = True
+    progress["latest_start_at"] = latest_start.group("ts")
+    if latest_end:
+        progress["latest_end_at"] = latest_end.group("ts")
+    progress["active"] = latest_end is None or latest_start.start() > latest_end.start()
+
+    if watch_started_at:
+        watched_pos = text.find(f"{watch_started_at} pair_supply scan_start")
+        if watched_pos >= 0:
+            for end in ends:
+                if end.start() > watched_pos:
+                    progress["watched_completed"] = True
+                    break
+
+    progress_matches = list(
+        re.finditer(
+            r"\]\s+(\d{1,4})\s*/\s*(\d{1,4})\s+\S+.*?stored\s+\1\s*/\s*\2(?!\d)",
+            segment,
+        )
+    )
+    if not progress_matches:
+        progress_matches = [
+            match
+            for match in re.finditer(r"\]\s+(\d{1,4})\s*/\s*(\d{1,4})\s+\S+", segment)
+            if int(match.group(2)) <= 1000
+        ]
+    if progress_matches:
+        current, total = progress_matches[-1].groups()
+        progress["current"] = int(current)
+        progress["total"] = int(total)
+        progress["phase"] = "fetching price history"
+    elif "Price history saved:" in segment:
+        progress["phase"] = "analyzing cointegration"
+    else:
+        progress["phase"] = "starting scan"
+
+    if "Price history saved:" in segment and progress["current"] >= progress["total"] > 0:
+        progress["phase"] = "analyzing cointegration"
+    if not progress["active"]:
+        progress["phase"] = "scan complete"
+    return progress
+
+
+def _render_pair_supply_progress(progress):
+    bar_len = 24
+    current = int(progress.get("current") or 0)
+    total = int(progress.get("total") or 0)
+    phase = str(progress.get("phase") or "waiting")
+    if total > 0:
+        filled = int((max(0, min(current, total)) / total) * bar_len)
+        bar = "#" * filled + "-" * (bar_len - filled)
+        percent = int((max(0, min(current, total)) / total) * 100)
+        return f"Waiting for Pair Universe: [{bar}] {current}/{total} symbols {percent}% | {phase}"
+    return f"Waiting for Pair Universe: scan active | {phase}"
+
+
+def _wait_for_pair_supply_scan(status, context):
+    progress = _read_pair_supply_scan_progress(status)
+    if not progress.get("known") or not progress.get("active"):
+        _sleep_with_progress(PAIR_SUPPLY_WAIT_SECONDS, label="Waiting for pair supply")
+        return
+
+    watched_start = progress.get("latest_start_at") or ""
+    logger.info(
+        "Waiting for Pair Universe scan to finish before rechecking supplied pairs (%s).",
+        context,
+    )
+    last_line = ""
+    while _should_defer_to_pair_supply():
+        status = _get_pair_supply_runtime_status()
+        progress = _read_pair_supply_scan_progress(status, watch_started_at=watched_start)
+        line = _render_pair_supply_progress(progress)
+        if line != last_line:
+            logger.info(line)
+            last_line = line
+        if progress.get("watched_completed") or (progress.get("known") and not progress.get("active")):
+            complete_line = _render_pair_supply_progress({**progress, "active": False, "phase": "scan complete"})
+            if complete_line != last_line:
+                logger.info(complete_line)
+            return
+        time.sleep(PAIR_SUPPLY_WAIT_SECONDS)
+
+
 def _read_pair_supply_state():
     try:
         if not PAIR_SUPPLY_STATE_FILE.exists():
@@ -1151,7 +1297,10 @@ def _current_process_owner():
 def _is_remote_pair_supply_runner_state(state):
     process_owner = str(state.get("process_owner") or "").strip()
     process_mode = str(state.get("process_mode") or "").strip().lower()
-    return process_mode == "runner" and bool(process_owner) and process_owner != _current_process_owner()
+    owner_is_runner = process_owner.endswith("-runner") or process_owner.endswith("_runner")
+    return bool(process_owner) and process_owner != _current_process_owner() and (
+        process_mode == "runner" or owner_is_runner
+    )
 
 
 def _safe_pid(value):
@@ -1161,15 +1310,62 @@ def _safe_pid(value):
         return 0
 
 
+def _parse_pair_supply_timestamp(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _pair_supply_timestamp_age_seconds(value):
+    parsed = _parse_pair_supply_timestamp(value)
+    if parsed is None:
+        return None
+    return (datetime.now(timezone.utc) - parsed).total_seconds()
+
+
+def _pair_supply_runner_alive(state):
+    age_seconds = _pair_supply_timestamp_age_seconds(state.get("runner_heartbeat_at"))
+    return age_seconds is not None and age_seconds <= RUNNER_HEARTBEAT_STALE_SECONDS
+
+
+def _pair_supply_request_fresh(state):
+    age_seconds = _pair_supply_timestamp_age_seconds(state.get("request_updated_at"))
+    return age_seconds is not None and age_seconds <= PAIR_SUPPLY_REQUEST_GRACE_SECONDS
+
+
+def _pair_supply_state_fresh(state):
+    age_seconds = _pair_supply_timestamp_age_seconds(state.get("updated_at"))
+    return age_seconds is not None and age_seconds <= PAIR_SUPPLY_REQUEST_GRACE_SECONDS
+
+
 def _get_pair_supply_runtime_status():
     state = _read_pair_supply_state()
     pid = _safe_pid(state.get("pid"))
+    desired_running = bool(state.get("desired_running"))
+    runner_alive = _pair_supply_runner_alive(state)
+    request_fresh = _pair_supply_request_fresh(state)
+    state_fresh = _pair_supply_state_fresh(state)
     if _is_remote_pair_supply_runner_state(state):
-        running = bool(state.get("running"))
+        running = bool(state.get("running")) and (runner_alive or state_fresh)
     else:
         running = bool(state.get("running")) and _pid_matches_pair_supply(pid)
+    defer_to_supply = bool(running or (desired_running and (runner_alive or request_fresh or state_fresh)))
     return {
         "running": running,
+        "desired_running": desired_running,
+        "defer_to_supply": defer_to_supply,
+        "runner_alive": runner_alive,
+        "request_fresh": request_fresh,
+        "state_fresh": state_fresh,
         "pid": pid,
         "detail": state.get("detail") or "",
         "started_at": state.get("started_at") or "",
@@ -1322,20 +1518,24 @@ def _is_pair_supply_active():
     return bool(_get_pair_supply_runtime_status().get("running"))
 
 
+def _should_defer_to_pair_supply():
+    return bool(_get_pair_supply_runtime_status().get("defer_to_supply"))
+
+
 def _wait_for_pair_supply(context):
     status = _get_pair_supply_runtime_status()
-    if not status.get("running"):
+    if not status.get("defer_to_supply"):
         return False
+    state_text = "running" if status.get("running") else "requested"
     logger.warning(
-        "Pair supply is active (pid=%s); waiting for supplied Pair Universe instead of running Strategy refresh (%s).",
+        "Pair supply is %s (pid=%s desired=%s detail=%s); waiting for supplied Pair Universe instead of running Strategy refresh (%s).",
+        state_text,
         status.get("pid") or "unknown",
+        int(bool(status.get("desired_running"))),
+        status.get("detail") or "n/a",
         context,
     )
-    logger.info(
-        "Sleeping for %s before rechecking supplied pair universe.",
-        _format_uptime(PAIR_SUPPLY_WAIT_SECONDS),
-    )
-    _sleep_with_progress(PAIR_SUPPLY_WAIT_SECONDS, label="Waiting for pair supply")
+    _wait_for_pair_supply_scan(status, context)
     return True
 
 
@@ -1347,7 +1547,7 @@ def _csv_has_pair_rows(csv_path):
 
 
 def _wait_for_pair_supply_csv(csv_path):
-    if not _is_pair_supply_active():
+    if not _should_defer_to_pair_supply():
         return False
 
     logger.warning(
@@ -1359,7 +1559,7 @@ def _wait_for_pair_supply_csv(csv_path):
         if _csv_has_pair_rows(csv_path):
             logger.info("Pair supply provided Pair Universe CSV. Continuing startup.")
             return True
-        if not _is_pair_supply_active():
+        if not _should_defer_to_pair_supply():
             logger.warning("Pair supply stopped before providing pairs; falling back to startup Strategy discovery.")
             return False
         _wait_for_pair_supply("startup_waiting_for_pairs")
@@ -1392,11 +1592,13 @@ def _active_pair_in_pair_universe(csv_path):
 
 
 def _run_strategy_refresh():
-    if _is_pair_supply_active():
+    if _should_defer_to_pair_supply():
         status = _get_pair_supply_runtime_status()
         logger.warning(
-            "Pair supply is active (pid=%s); skipping local Strategy refresh and waiting for supplied pairs.",
+            "Pair supply is active/requested (pid=%s desired=%s detail=%s); skipping local Strategy refresh and waiting for supplied pairs.",
             status.get("pid") or "unknown",
+            int(bool(status.get("desired_running"))),
+            status.get("detail") or "n/a",
         )
         return False
 
@@ -1670,7 +1872,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     precheck_limit = _get_switch_precheck_limit()
     precheck_window = _get_switch_precheck_window()
     precheck_cache = {}
-    trust_pair_supply = _is_pair_supply_active()
+    trust_pair_supply = _should_defer_to_pair_supply()
     if precheck_coint_enabled:
         if trust_pair_supply:
             logger.info(
@@ -2264,7 +2466,7 @@ if __name__ == "__main__":
         logger.warning("Failed to cleanup hospital entries: %s", exc)
 
     if not csv_path.exists() or csv_path.stat().st_size <= 200:  # Empty or header-only
-        if _is_pair_supply_active():
+        if _should_defer_to_pair_supply():
             logger.info("Cointegrated pairs CSV is empty or missing. Waiting for active pair supply.")
             print("Waiting for Pair Universe supply to provide cointegrated pairs...")
         else:
@@ -2324,7 +2526,7 @@ if __name__ == "__main__":
         logger.critical("No suitable replacement pair found for startup-invalid active pair.")
         sys.exit(1)
 
-    if _is_pair_supply_active() and not _active_pair_in_pair_universe(csv_path):
+    if _should_defer_to_pair_supply() and not _active_pair_in_pair_universe(csv_path):
         if lock_on_pair:
             logger.warning(
                 "Active pair %s/%s is not in the supplied Pair Universe, but lock_on_pair is enabled.",

@@ -20,6 +20,40 @@ from pathlib import Path
 STOP_REQUESTED = False
 
 
+def _strip_env_quotes(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _load_execution_env() -> None:
+    env_path = Path(__file__).resolve().parents[1] / "Execution" / ".env"
+    if not env_path.exists():
+        return
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if text.startswith("export "):
+            text = text[len("export ") :].strip()
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key or key.startswith("#"):
+            continue
+        parsed_value = _strip_env_quotes(value)
+        if key == "STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS":
+            os.environ[key] = parsed_value
+        else:
+            os.environ.setdefault(key, parsed_value)
+
+
 def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     raw = os.getenv(name)
     try:
@@ -38,6 +72,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _pair_supply_interval_seconds() -> int:
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=0)
+
+
 def _handle_stop(signum, _frame):
     global STOP_REQUESTED
     STOP_REQUESTED = True
@@ -53,10 +91,11 @@ def _sleep_interruptibly(seconds: int) -> None:
 def main() -> int:
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
+    _load_execution_env()
 
     strategy_dir = Path(__file__).resolve().parent
     strategy_script = strategy_dir / "main_strategy.py"
-    interval_seconds = _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=60)
+    interval_seconds = _pair_supply_interval_seconds()
     run_immediately = _env_bool("STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY", True)
 
     print(
@@ -85,6 +124,9 @@ def main() -> int:
         first_run = False
         if STOP_REQUESTED:
             break
+        if interval_seconds <= 0:
+            print(f"{datetime.now(timezone.utc).isoformat()} pair_supply no_interval continuing", flush=True)
+            continue
         print(f"{datetime.now(timezone.utc).isoformat()} pair_supply sleeping seconds={interval_seconds}", flush=True)
         _sleep_interruptibly(interval_seconds)
 

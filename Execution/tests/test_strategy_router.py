@@ -252,6 +252,41 @@ class TestStrategyRouter(unittest.TestCase):
         self.assertFalse(bool(decision.diagnostics.get("cooldown_active")))
         self.assertNotIn("strategy_cooldown", decision.reason_codes)
 
+    def test_strategy_cooldown_clears_when_current_settings_no_longer_qualify(self):
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_TRADES"] = "20"
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_WIN_RATE"] = "0.30"
+        os.environ["STATBOT_STRATEGY_COOLDOWN_SECONDS"] = "10"
+
+        store = _MemoryStateStore()
+        store.state["active_strategy"] = "STATARB_MR"
+        store.state["since_ts"] = 1000.0
+        store.state["strategy_cooldowns"] = {
+            "STATARB_MR": {
+                "until_ts": 2000.0,
+                "reason": "low_win_rate",
+            }
+        }
+        store.state["strategy_performance"] = {
+            "window_trades": 20,
+            "stats": {
+                "STATARB_MR": {
+                    "rolling_count": 9,
+                    "rolling_win_rate_pct": 33.33,
+                    "rolling_pnl_usdt": -0.85,
+                }
+            },
+        }
+        router = StrategyRouter(
+            state_store=store,
+            config={"min_hold_seconds": 0, "confirm_count": 1},
+        )
+
+        decision = router.evaluate(_input(ts=1500.0, regime="RANGE", coint_flag=1))
+        self.assertTrue(bool(decision.diagnostics.get("cooldown_cleared")))
+        self.assertFalse(bool(decision.diagnostics.get("cooldown_active")))
+        self.assertNotIn("strategy_cooldown", decision.reason_codes)
+        self.assertNotIn("STATARB_MR", store.state.get("strategy_cooldowns", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

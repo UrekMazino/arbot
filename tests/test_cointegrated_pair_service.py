@@ -8,6 +8,32 @@ import pandas as pd
 from Platform.api.app.services import cointegrated_pairs as cp
 
 
+def test_pair_supply_interval_allows_zero(monkeypatch):
+    monkeypatch.setenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", "0")
+
+    assert cp._pair_supply_interval_seconds() == 0
+
+
+def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=0\n", encoding="utf-8")
+
+    monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", env_file)
+    monkeypatch.delenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", raising=False)
+
+    assert cp._pair_supply_interval_seconds() == 0
+
+
+def test_pair_supply_child_env_includes_execution_env(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=0\n", encoding="utf-8")
+
+    monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", env_file)
+    monkeypatch.delenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", raising=False)
+
+    assert cp._merged_child_env()["STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS"] == "0"
+
+
 def _write_price_json(path: Path) -> None:
     rows_a = []
     rows_b = []

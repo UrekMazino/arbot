@@ -153,6 +153,17 @@ def _merge_klines(existing, new):
     return sorted(merged.values(), key=_ts_key)
 
 
+def _target_kline_limit():
+    try:
+        return max(1, int(kline_limit))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _cache_needs_backfill(cached_klines, target_limit):
+    return bool(cached_klines) and len(cached_klines) < target_limit
+
+
 def store_price_history(symbols):
     """
     Fetch and store price history for all symbols
@@ -182,6 +193,7 @@ def store_price_history(symbols):
     retry_count = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRIES", 2)
     retry_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRY_SLEEP", 0.25)
     max_stale_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_MAX_STALE_BARS", 2)
+    target_limit = _target_kline_limit()
     if max_stale_bars < 0:
         max_stale_bars = 0
     if max_workers < 1:
@@ -230,6 +242,7 @@ def store_price_history(symbols):
     cache_refreshed = 0
     cache_stale_used = 0
     cache_stale_skipped = 0
+    cache_backfill_skipped = 0
     stale_symbols = 0
     stale_gap_total = 0
 
@@ -242,14 +255,18 @@ def store_price_history(symbols):
         cache_refreshed_local = False
         stale_used = False
         stale_skipped = False
+        needs_backfill = False
         gap_bars = None
 
         try:
             cached_entry = cached_data.get(symbol_name) if cache_enabled else None
             cached_klines = cached_entry.get("klines") if isinstance(cached_entry, dict) else None
             use_cache = bool(cache_enabled and cached_klines)
+            needs_backfill = _cache_needs_backfill(cached_klines, target_limit)
 
-            if use_cache and bar_ms > 0:
+            if needs_backfill:
+                status = f"BACKFILL {len(cached_klines)}/{target_limit} candles"
+            elif use_cache and bar_ms > 0:
                 try:
                     last_ts = int(cached_klines[-1].get("timestamp"))
                 except (TypeError, ValueError, AttributeError):
@@ -287,8 +304,8 @@ def store_price_history(symbols):
                     stale_skipped = True
 
                 if klines:
-                    if len(klines) > kline_limit:
-                        klines = klines[-int(kline_limit):]
+                    if len(klines) > target_limit:
+                        klines = klines[-target_limit:]
                     status = f"CACHE {len(klines)} candles"
 
             if not klines:
@@ -332,11 +349,13 @@ def store_price_history(symbols):
             "cache_refreshed": cache_refreshed_local,
             "stale_used": stale_used,
             "stale_skipped": stale_skipped,
+            "cache_backfill": needs_backfill,
             "gap_bars": gap_bars,
         }
 
     def _handle_result(idx, result):
         nonlocal count, no_data_changed, cache_hits, cache_refreshed, cache_stale_used, cache_stale_skipped
+        nonlocal cache_backfill_skipped
         nonlocal stale_symbols, stale_gap_total
 
         symbol_name = result.get("symbol_name")
@@ -356,6 +375,8 @@ def store_price_history(symbols):
                 cache_stale_used += 1
         if result.get("stale_skipped"):
             cache_stale_skipped += 1
+        if result.get("cache_backfill"):
+            cache_backfill_skipped += 1
 
         symbol = result.get("symbol") or {}
         symbol["total_klines"] = len(klines)
@@ -394,11 +415,12 @@ def store_price_history(symbols):
         stale_rate = 0.0
     avg_gap_bars = round((stale_gap_total / stale_symbols), 2) if stale_symbols else 0.0
     logger.info(
-        "Price history cache: hits=%d refreshed=%d stale_used=%d stale_skipped=%d",
+        "Price history cache: hits=%d refreshed=%d stale_used=%d stale_skipped=%d backfill=%d",
         cache_hits,
         cache_refreshed,
         cache_stale_used,
         cache_stale_skipped,
+        cache_backfill_skipped,
     )
     logger.info(
         "Price history staleness: symbols=%d rate=%.2f%% avg_gap_bars=%.2f",

@@ -55,12 +55,16 @@ def count_spread_zero_crossings(spread, threshold=None, threshold_ratio=0.1):
         except (TypeError, ValueError):
             threshold = 0.0
 
-    prev = spread_series.shift(1)
-    crossings = (
-        ((prev > threshold) & (spread_series < -threshold))
-        | ((prev < -threshold) & (spread_series > threshold))
-    )
-    return int(crossings.sum())
+    values = spread_series.to_numpy(dtype=float)
+    signs = np.where(values > threshold, 1, np.where(values < -threshold, -1, 0))
+    directional_signs = signs[signs != 0]
+    if len(directional_signs) < 2:
+        return 0
+
+    # Ignore neutral/deadband samples between regimes. A normal crossing often
+    # moves +spread -> neutral -> -spread over several bars; requiring an
+    # immediate +threshold to -threshold jump undercounts mean reversion.
+    return int(np.count_nonzero(directional_signs[1:] != directional_signs[:-1]))
 
 
 def evaluate_cointegration(

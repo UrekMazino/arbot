@@ -25,6 +25,7 @@ from config_strategy_api import (
     market_session,
 )
 import time
+import os
 from pathlib import Path
 import json
 import sys
@@ -45,6 +46,34 @@ from shared_cointegration_validator import (
     count_spread_zero_crossings,
     evaluate_cointegration,
 )
+
+
+def _env_int(name, default, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if minimum is not None and value < minimum:
+        return minimum
+    return value
+
+
+def _env_float(name, default, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(default)
+    if minimum is not None and value < minimum:
+        return minimum
+    return value
 
 
 def _read_json_object(path):
@@ -421,6 +450,8 @@ def get_cointegrated_pairs(
     coint_pair_list = []
     total_comparisons = 0
     pairs_with_crossings = 0
+    raw_pairs_with_crossings = 0
+    crossing_reject_examples = []
     restricted_tickers = _load_restricted_tickers()
     restricted_removed = 0
 
@@ -493,6 +524,37 @@ def get_cointegrated_pairs(
         before = len(symbols)
         symbols = [sym for sym in symbols if sym not in restricted_tickers]
         restricted_removed = before - len(symbols)
+    total_expected_comparisons = len(symbols) * (len(symbols) - 1) // 2
+    progress_interval = _env_int("STATBOT_STRATEGY_INTERNAL_COINT_PROGRESS_INTERVAL", 250, minimum=0)
+    progress_percent_step = _env_float("STATBOT_STRATEGY_INTERNAL_COINT_PROGRESS_PERCENT_STEP", 5.0)
+    if progress_percent_step <= 0:
+        progress_percent_step = 5.0
+    next_progress_percent = progress_percent_step
+
+    def _emit_coint_progress(force=False):
+        nonlocal next_progress_percent
+        if total_expected_comparisons <= 0:
+            return
+        if progress_interval <= 0 and not force:
+            return
+        pct_done = (total_comparisons / total_expected_comparisons) * 100.0
+        should_emit = bool(force)
+        if not should_emit and progress_interval > 0 and total_comparisons % progress_interval == 0:
+            should_emit = True
+        if not should_emit and pct_done >= next_progress_percent:
+            should_emit = True
+        if not should_emit:
+            return
+        while next_progress_percent <= pct_done:
+            next_progress_percent += progress_percent_step
+        filled = int((min(100.0, pct_done) / 100.0) * 24)
+        bar = "#" * filled + "-" * (24 - filled)
+        message = (
+            f"Cointegration progress: [{bar}] "
+            f"{total_comparisons}/{total_expected_comparisons} pairs "
+            f"{pct_done:.0f}% | candidates={len(coint_pair_list)} crossings={pairs_with_crossings}"
+        )
+        logger.info(message)
 
     if corr_min_override is not None:
         try:
@@ -707,6 +769,7 @@ def get_cointegrated_pairs(
         series_2_log = log_series_by_symbol[sym_2]
 
         total_comparisons += 1
+        _emit_coint_progress()
 
         # Skip graveyard pairs
         pair_key = f"{sym_1}/{sym_2}"
@@ -738,20 +801,31 @@ def get_cointegrated_pairs(
 
         if coint_flag == 1:
             if zero_crossings > 0:
-                pairs_with_crossings += 1
+                raw_pairs_with_crossings += 1
 
             # Orderbook depth check - ensure sufficient USDT liquidity
             orderbook_check_passed = True
+            orderbook_reject_reason = None
 
             for ticker in [sym_1, sym_2]:
                 orderbook_status = _get_orderbook_liquidity_status(ticker)
                 if not orderbook_status.get("ok"):
                     reason = orderbook_status.get("reason") or "orderbook_fetch_error"
                     filtered_breakdown[reason] = filtered_breakdown.get(reason, 0) + 1
+                    orderbook_reject_reason = reason
                     orderbook_check_passed = False
                     break
 
             if not orderbook_check_passed:
+                if zero_crossings > 0 and len(crossing_reject_examples) < 5:
+                    crossing_reject_examples.append(
+                        {
+                            "pair": pair_key,
+                            "reason": orderbook_reject_reason or "orderbook",
+                            "zero_crossing": int(zero_crossings),
+                            "p_value": float(p_value),
+                        }
+                    )
                 continue  # Skip this pair
 
             min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
@@ -772,6 +846,9 @@ def get_cointegrated_pairs(
             pair_order_capacity = None
             if order_capacity_1 is not None and order_capacity_2 is not None:
                 pair_order_capacity = min(order_capacity_1, order_capacity_2)
+
+            if zero_crossings > 0:
+                pairs_with_crossings += 1
 
             coint_pair_list.append({
                 "sym_1": sym_1,
@@ -796,6 +873,8 @@ def get_cointegrated_pairs(
                 "order_capacity_usdt_2": order_capacity_2,
                 "pair_order_capacity_usdt": pair_order_capacity,
             })
+
+    _emit_coint_progress(force=True)
 
     # Output results
     df_coint = pd.DataFrame(coint_pair_list)
@@ -935,6 +1014,9 @@ def get_cointegrated_pairs(
         "cointegrated_pairs": len(coint_pair_list),
         "pairs_with_crossings": pairs_with_crossings,
         "pairs_without_crossings": len(coint_pair_list) - pairs_with_crossings,
+        "raw_pairs_with_crossings": raw_pairs_with_crossings,
+        "crossing_rejected_by_orderbook": max(raw_pairs_with_crossings - pairs_with_crossings, 0),
+        "crossing_reject_examples": crossing_reject_examples,
         "filtered_breakdown": filtered_breakdown,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,

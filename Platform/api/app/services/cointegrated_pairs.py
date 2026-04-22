@@ -28,6 +28,7 @@ def _workspace_root() -> Path:
 WORKSPACE_ROOT = _workspace_root()
 STRATEGY_OUTPUT_ROOT = WORKSPACE_ROOT / "Strategy" / "output"
 EXECUTION_STATE_ROOT = WORKSPACE_ROOT / "Execution" / "state"
+EXECUTION_ENV_FILE = WORKSPACE_ROOT / "Execution" / ".env"
 LOGS_ROOT = WORKSPACE_ROOT / "Logs" / "v1"
 COINT_CSV = STRATEGY_OUTPUT_ROOT / "2_cointegrated_pairs.csv"
 PRICE_JSON = STRATEGY_OUTPUT_ROOT / "1_price_list.json"
@@ -51,6 +52,44 @@ def _safe_int(value: Any) -> int | None:
     if number is None:
         return None
     return int(number)
+
+
+def _strip_env_quotes(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _read_execution_env_settings() -> dict[str, str]:
+    if not EXECUTION_ENV_FILE.exists():
+        return {}
+    try:
+        lines = EXECUTION_ENV_FILE.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return {}
+    values: dict[str, str] = {}
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if text.startswith("export "):
+            text = text[len("export ") :].strip()
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key or key.startswith("#"):
+            continue
+        values[key] = _strip_env_quotes(value)
+    return values
+
+
+def _merged_child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key, value in _read_execution_env_settings().items():
+        env.setdefault(key, value)
+    return env
 
 
 def _mtime_iso(path: Path) -> str | None:
@@ -194,6 +233,8 @@ def _write_supply_state(data: dict[str, Any]) -> None:
 
 def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     raw = os.getenv(name)
+    if raw in (None, ""):
+        raw = _read_execution_env_settings().get(name)
     try:
         value = int(float(raw)) if raw not in (None, "") else int(default)
     except (TypeError, ValueError):
@@ -201,6 +242,10 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     if minimum is not None and value < minimum:
         value = minimum
     return value
+
+
+def _pair_supply_interval_seconds() -> int:
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=0)
 
 
 def get_pair_supply_status() -> dict[str, Any]:
@@ -263,10 +308,10 @@ def _start_pair_supply_local(requested_by: str | None = None) -> dict[str, Any]:
     if not entrypoint.exists():
         return {"running": False, "detail": "entrypoint_missing", "entrypoint": str(entrypoint)}
 
-    interval_seconds = _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=60)
+    interval_seconds = _pair_supply_interval_seconds()
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
     log_handle = PAIR_SUPPLY_LOG.open("a", encoding="utf-8", errors="ignore")
-    env = os.environ.copy()
+    env = _merged_child_env()
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", str(interval_seconds))
     env.setdefault("STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY", "1")

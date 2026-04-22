@@ -1132,6 +1132,23 @@ def _resolve_entry_signal(strategy_name, zscores, coint_flag, entry_z, entry_z_m
     return signal, reason, strategy_name
 
 
+def _resolve_coint_health_state(metrics):
+    metrics = metrics or {}
+    state = str(metrics.get("coint_health") or "").strip().lower()
+    if state:
+        return state
+    try:
+        return str(
+            classify_cointegration_health(
+                metrics,
+                strict_pvalue=P_VALUE_CRITICAL,
+            ).get("state")
+            or "broken"
+        ).strip().lower()
+    except Exception:
+        return "broken"
+
+
 def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=False, trade_pnl_pct=0.0):
     """
     Evaluate pair health based on statistical metrics.
@@ -1406,6 +1423,7 @@ def manage_new_trades(
         (zscore, signal_sign_positive, metrics),
     )
     coint_flag = int((metrics or {}).get("coint_flag", 0) or 0)
+    coint_health_state = _resolve_coint_health_state(metrics)
 
     # Filter out NaN values and get the latest valid z-score
     valid_zscores = [z for z in zscore if not math.isnan(z)]

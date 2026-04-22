@@ -6,10 +6,11 @@ from pathlib import Path
 import json
 import os
 import sys
+import pandas as pd
 
 from func_get_symbols import get_symbols_by_maker_fees
 from func_prices_json import store_price_history
-from func_cointegration import get_cointegrated_pairs
+from func_cointegration import get_cointegrated_pairs, save_cointegrated_pairs_result
 from func_plot_trends import plot_trends
 from func_summary_report import generate_summary_report
 from func_strategy_log import get_strategy_logger
@@ -20,6 +21,7 @@ from config_strategy_api import (
     min_equity_filter_usdt,
     settle_ccy_filter,
     max_pairs_per_ticker,
+    max_supply_pairs,
     min_p_value_filter,
     max_p_value_filter,
     min_zero_crossings,
@@ -306,7 +308,7 @@ def main():
     else:
         min_capital_tiers = [0.0]
 
-    def _attempt_filters(pct, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital, label):
+    def _scan_candidates(pct, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital, label):
         df, summary = get_cointegrated_pairs(
             price_data,
             liquidity_pct_override=pct,
@@ -315,17 +317,92 @@ def main():
             min_zero_crossings_override=zero_cross_min,
             min_equity_filter_override=min_equity,
             min_capital_per_leg_override=min_capital,
+            max_supply_pairs_override=0,
+            write_output=False,
         )
-        count = len(df)
         logger.info(
-            "Strategy fallback %s: pairs=%d corr_min=%.3f pval_max=%.4f zc_min=%s min_eq=%.2f min_cap=%.4f",
+            "Strategy scan %s: candidates=%d corr_min=%.3f pval_max=%.4f zc_min=%s min_eq=%.2f min_cap=%.4f",
             label,
-            count,
+            len(df),
             corr_min,
             pvalue_max,
             int(zero_cross_min),
             min_equity,
             min_capital,
+        )
+        return df, summary
+
+    def _apply_candidate_filters(candidate_df, candidate_summary, settings, label):
+        df = candidate_df.copy() if candidate_df is not None else pd.DataFrame()
+        breakdown = dict((candidate_summary or {}).get("filtered_breakdown") or {})
+
+        if not df.empty and settings["corr_min"] and settings["corr_min"] > 0:
+            if "correlation" in df.columns:
+                before = len(df)
+                correlations = pd.to_numeric(df["correlation"], errors="coerce").abs()
+                df = df[correlations >= settings["corr_min"]].copy()
+                breakdown["tier_corr"] = before - len(df)
+
+        if not df.empty and "p_value" in df.columns:
+            before = len(df)
+            p_values = pd.to_numeric(df["p_value"], errors="coerce")
+            df = df[(p_values >= min_p_value_filter) & (p_values <= settings["pvalue_max"])].copy()
+            breakdown["tier_p_value"] = before - len(df)
+
+        if not df.empty and settings["zero_cross_min"] and settings["zero_cross_min"] > 0:
+            before = len(df)
+            zc = pd.to_numeric(df["zero_crossing"], errors="coerce").fillna(0)
+            df = df[zc >= settings["zero_cross_min"]].copy()
+            breakdown["tier_zero_crossing"] = before - len(df)
+
+        if not df.empty and settings["min_capital"] and settings["min_capital"] > 0:
+            if "min_capital_per_leg" in df.columns:
+                before = len(df)
+                cap = pd.to_numeric(df["min_capital_per_leg"], errors="coerce")
+                df = df[cap >= settings["min_capital"]].copy()
+                breakdown["tier_min_capital"] = before - len(df)
+
+        if not df.empty and settings["min_equity"] and settings["min_equity"] > 0:
+            if "min_equity_recommended" in df.columns:
+                before = len(df)
+                min_equity_values = pd.to_numeric(df["min_equity_recommended"], errors="coerce")
+                df = df[min_equity_values.isna() | (min_equity_values <= settings["min_equity"])].copy()
+                breakdown["tier_min_equity"] = before - len(df)
+
+        if not df.empty and len(df) > max_supply_pairs:
+            before = len(df)
+            sort_columns = [col for col in ("zero_crossing", "p_value") if col in df.columns]
+            if sort_columns:
+                ascending = [False if col == "zero_crossing" else True for col in sort_columns]
+                df = df.sort_values(by=sort_columns, ascending=ascending)
+            df = df.head(max_supply_pairs).copy()
+            breakdown["tier_supply_cap"] = before - len(df)
+
+        summary = dict(candidate_summary or {})
+        summary.update(
+            {
+                "filtered_breakdown": breakdown,
+                "fallback_label": label,
+                "single_pass_fallback": label != "base",
+                "corr_min": settings["corr_min"],
+                "p_value_min": min_p_value_filter,
+                "p_value_max": settings["pvalue_max"],
+                "zero_crossing_min": settings["zero_cross_min"],
+                "min_equity_filter_usdt": settings["min_equity"],
+                "min_capital_per_leg": settings["min_capital"],
+                "max_supply_pairs": max_supply_pairs,
+                "pairs_kept": len(df),
+            }
+        )
+        logger.info(
+            "Strategy fallback %s: pairs=%d corr_min=%.3f pval_max=%.4f zc_min=%s min_eq=%.2f min_cap=%.4f",
+            label,
+            len(df),
+            settings["corr_min"],
+            settings["pvalue_max"],
+            int(settings["zero_cross_min"]),
+            settings["min_equity"],
+            settings["min_capital"],
         )
         return df, summary
 
@@ -344,16 +421,66 @@ def main():
                 best_settings = settings
                 best_count = count
 
-        def _attempt(label, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital):
-            df, summary = _attempt_filters(
+        def _settings(corr_min, pvalue_max, zero_cross_min, min_equity, min_capital):
+            return {
+                "corr_min": corr_min,
+                "pvalue_max": pvalue_max,
+                "zero_cross_min": zero_cross_min,
+                "min_equity": min_equity,
+                "min_capital": min_capital,
+            }
+
+        base_settings = _settings(
+            base_corr,
+            base_pvalue_max,
+            base_zero_cross,
+            base_min_equity,
+            base_min_capital,
+        )
+        base_candidates, base_summary = _scan_candidates(
+            pct,
+            base_corr,
+            base_pvalue_max,
+            base_zero_cross,
+            base_min_equity,
+            base_min_capital,
+            "base",
+        )
+        df, summary = _apply_candidate_filters(base_candidates, base_summary, base_settings, "base")
+        _record_best(df, summary, base_settings)
+        if len(df) >= min_pairs_needed:
+            return df, summary, base_settings, True
+        if not fallback_enabled:
+            return best_df, best_summary, best_settings, False
+
+        relaxed_equity = equity_tiers[-1]
+        relaxed_min_capital = min_capital_tiers[-1]
+        relaxed_zero_cross = zero_cross_tiers[-1]
+        relaxed_pvalue = pvalue_tiers[-1]
+        relaxed_corr = corr_tiers[-1]
+
+        broad_settings = _settings(
+            relaxed_corr,
+            relaxed_pvalue,
+            relaxed_zero_cross,
+            relaxed_equity,
+            relaxed_min_capital,
+        )
+        if broad_settings == base_settings:
+            broad_candidates = base_candidates
+            broad_summary = base_summary
+        else:
+            broad_candidates, broad_summary = _scan_candidates(
                 pct,
-                corr_min,
-                pvalue_max,
-                zero_cross_min,
-                min_equity,
-                min_capital,
-                label,
+                relaxed_corr,
+                relaxed_pvalue,
+                relaxed_zero_cross,
+                relaxed_equity,
+                relaxed_min_capital,
+                "single_pass_fallback",
             )
+
+        def _attempt_from_candidates(label, corr_min, pvalue_max, zero_cross_min, min_equity, min_capital):
             settings = {
                 "corr_min": corr_min,
                 "pvalue_max": pvalue_max,
@@ -361,29 +488,17 @@ def main():
                 "min_equity": min_equity,
                 "min_capital": min_capital,
             }
+            df, summary = _apply_candidate_filters(broad_candidates, broad_summary, settings, label)
             _record_best(df, summary, settings)
             if len(df) >= min_pairs_needed:
                 return df, summary, settings, True
             return None, None, None, False
 
-        df, summary, settings, ok = _attempt(
-            "base",
-            base_corr,
-            base_pvalue_max,
-            base_zero_cross,
-            base_min_equity,
-            base_min_capital,
-        )
-        if ok:
-            return df, summary, settings, True
-        if not fallback_enabled:
-            return best_df, best_summary, best_settings, False
-
         for min_equity in equity_tiers:
             for min_capital in min_capital_tiers:
                 if min_equity == base_min_equity and min_capital == base_min_capital:
                     continue
-                df, summary, settings, ok = _attempt(
+                df, summary, settings, ok = _attempt_from_candidates(
                     "equity_cap",
                     base_corr,
                     base_pvalue_max,
@@ -394,13 +509,10 @@ def main():
                 if ok:
                     return df, summary, settings, True
 
-        relaxed_equity = equity_tiers[-1]
-        relaxed_min_capital = min_capital_tiers[-1]
-
         for zero_cross_min in zero_cross_tiers:
             if zero_cross_min == base_zero_cross:
                 continue
-            df, summary, settings, ok = _attempt(
+            df, summary, settings, ok = _attempt_from_candidates(
                 "zero_cross",
                 base_corr,
                 base_pvalue_max,
@@ -411,11 +523,10 @@ def main():
             if ok:
                 return df, summary, settings, True
 
-        relaxed_zero_cross = zero_cross_tiers[-1]
         for pvalue_max in pvalue_tiers:
             if pvalue_max == base_pvalue_max:
                 continue
-            df, summary, settings, ok = _attempt(
+            df, summary, settings, ok = _attempt_from_candidates(
                 "p_value",
                 base_corr,
                 pvalue_max,
@@ -426,11 +537,10 @@ def main():
             if ok:
                 return df, summary, settings, True
 
-        relaxed_pvalue = pvalue_tiers[-1]
         for corr_min in corr_tiers:
             if corr_min == base_corr:
                 continue
-            df, summary, settings, ok = _attempt(
+            df, summary, settings, ok = _attempt_from_candidates(
                 "corr",
                 corr_min,
                 relaxed_pvalue,
@@ -519,6 +629,13 @@ def main():
             "Strategy reset STATBOT_STRATEGY_LIQUIDITY_PCT to %.2f.",
             base_liquidity_pct,
         )
+
+    _output_status, coint_summary = save_cointegrated_pairs_result(
+        df_coint,
+        coint_summary,
+        logger=logger,
+        max_rows=max_supply_pairs,
+    )
 
     if len(df_coint) > 0:
         if coint_summary:

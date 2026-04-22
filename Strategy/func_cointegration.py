@@ -695,6 +695,8 @@ def get_cointegrated_pairs(
     min_zero_crossings_override=None,
     min_capital_per_leg_override=None,
     min_equity_filter_override=None,
+    max_supply_pairs_override=None,
+    write_output=True,
 ):
     """
     Find all cointegrated pairs from symbol data
@@ -1023,12 +1025,13 @@ def get_cointegrated_pairs(
             filtered_breakdown["order_capacity"] = filtered_breakdown.get("order_capacity", 0) + 1
             continue
 
-        if corr_min and corr_min > 0:
-            ret_1 = returns_by_symbol.get(sym_1)
-            ret_2 = returns_by_symbol.get(sym_2)
-            if ret_1 is None or ret_2 is None:
-                continue
+        ret_1 = returns_by_symbol.get(sym_1)
+        ret_2 = returns_by_symbol.get(sym_2)
+        corr_value = None
+        if ret_1 is not None and ret_2 is not None:
             corr_value = _corrcoef_fast(ret_1, ret_2)
+
+        if corr_min and corr_min > 0:
             if corr_value is None or not np.isfinite(corr_value):
                 filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
                 continue
@@ -1099,6 +1102,7 @@ def get_cointegrated_pairs(
                 "adf_stat": adf_statistic,
                 "c_value": critical_values,
                 "hedge_ratio": hedge_ratio,
+                "correlation": corr_value,
                 "zero_crossing": zero_crossings,
                 "min_capital_1": min_cap_1 if min_cap_1 > 0 else None,
                 "min_capital_2": min_cap_2 if min_cap_2 > 0 else None,
@@ -1237,8 +1241,16 @@ def get_cointegrated_pairs(
         filtered_count = before - len(df_coint)
         filtered_breakdown["min_equity"] = filtered_count
 
-    active_max_supply_pairs = max(int(max_supply_pairs or 10), 1)
-    if not df_coint.empty and len(df_coint) > active_max_supply_pairs:
+    if max_supply_pairs_override is None:
+        active_max_supply_pairs = max(int(max_supply_pairs or 10), 1)
+    else:
+        try:
+            active_max_supply_pairs = int(max_supply_pairs_override)
+        except (TypeError, ValueError):
+            active_max_supply_pairs = max(int(max_supply_pairs or 10), 1)
+        if active_max_supply_pairs <= 0:
+            active_max_supply_pairs = None
+    if active_max_supply_pairs and not df_coint.empty and len(df_coint) > active_max_supply_pairs:
         before = len(df_coint)
         sort_columns = [col for col in ("zero_crossing", "p_value") if col in df_coint.columns]
         if sort_columns:
@@ -1257,12 +1269,27 @@ def get_cointegrated_pairs(
     output_dir = Path(__file__).resolve().parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
-    output_status = _write_cointegrated_pairs_csv(
-        df_coint,
-        output_path,
-        logger=logger,
-        max_rows=active_max_supply_pairs,
-    )
+    if write_output:
+        output_status = _write_cointegrated_pairs_csv(
+            df_coint,
+            output_path,
+            logger=logger,
+            max_rows=active_max_supply_pairs,
+        )
+    else:
+        output_status = {
+            "canonical_rows": None,
+            "canonical_updated": False,
+            "latest_attempt_rows": len(df_coint),
+            "latest_attempt_valid_rows": len(df_coint),
+            "preserved_existing": False,
+            "accumulated_supply": False,
+            "previous_canonical_rows": _count_csv_rows(output_path),
+            "accumulated_pairs_added": 0,
+            "accumulated_pairs_refreshed": 0,
+            "accumulated_pairs_retained": 0,
+            "accumulation_cap_filtered": 0,
+        }
     accumulation_cap_filtered = int(output_status.get("accumulation_cap_filtered") or 0)
     if accumulation_cap_filtered:
         filtered_breakdown["accumulation_cap"] = accumulation_cap_filtered
@@ -1329,7 +1356,67 @@ def get_cointegrated_pairs(
                 "recommended_equity": float(max_per_leg * 2),
             }
 
-    _write_cointegration_status_summary(output_path, summary, logger=logger)
+    if write_output:
+        _write_cointegration_status_summary(output_path, summary, logger=logger)
     logger.info("Cointegration summary: %s", summary)
 
     return df_coint, summary
+
+
+def save_cointegrated_pairs_result(df_coint, summary=None, logger=None, max_rows=None):
+    """Persist a selected in-memory fallback result as the canonical pair universe."""
+    logger = logger or get_strategy_logger()
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "2_cointegrated_pairs.csv"
+    summary = dict(summary or {})
+    output_status = _write_cointegrated_pairs_csv(
+        df_coint,
+        output_path,
+        logger=logger,
+        max_rows=max_rows,
+    )
+    accumulation_cap_filtered = int(output_status.get("accumulation_cap_filtered") or 0)
+    filtered_breakdown = summary.get("filtered_breakdown")
+    if not isinstance(filtered_breakdown, dict):
+        filtered_breakdown = {}
+    if accumulation_cap_filtered:
+        filtered_breakdown["accumulation_cap"] = accumulation_cap_filtered
+    summary.update(
+        {
+            "filtered_breakdown": filtered_breakdown,
+            "max_supply_pairs": max_rows,
+            "canonical_pairs_rows": output_status.get("canonical_rows"),
+            "canonical_pairs_updated": output_status.get("canonical_updated"),
+            "latest_attempt_rows": output_status.get("latest_attempt_rows"),
+            "latest_attempt_valid_rows": output_status.get("latest_attempt_valid_rows"),
+            "preserved_existing_pairs_csv": output_status.get("preserved_existing"),
+            "accumulated_supply": output_status.get("accumulated_supply"),
+            "previous_canonical_rows": output_status.get("previous_canonical_rows"),
+            "accumulated_pairs_added": output_status.get("accumulated_pairs_added"),
+            "accumulated_pairs_refreshed": output_status.get("accumulated_pairs_refreshed"),
+            "accumulated_pairs_retained": output_status.get("accumulated_pairs_retained"),
+            "accumulation_cap_filtered": accumulation_cap_filtered,
+            "pairs_kept": int(len(df_coint)),
+        }
+    )
+    if len(df_coint) > 0 and "zero_crossing" in df_coint.columns:
+        zc = pd.to_numeric(df_coint["zero_crossing"], errors="coerce").dropna()
+        if not zc.empty:
+            summary["zero_crossing"] = {
+                "min": float(zc.min()),
+                "max": float(zc.max()),
+                "mean": float(zc.mean()),
+                "median": float(zc.median()),
+            }
+    if "min_capital_per_leg" in df_coint.columns:
+        min_caps = pd.to_numeric(df_coint["min_capital_per_leg"], errors="coerce").dropna().tolist()
+        if min_caps:
+            max_per_leg = max(min_caps)
+            summary["min_capital"] = {
+                "max_per_leg": float(max_per_leg),
+                "recommended_equity": float(max_per_leg * 2),
+            }
+    _write_cointegration_status_summary(output_path, summary, logger=logger)
+    logger.info("Cointegration summary: %s", summary)
+    return output_status, summary

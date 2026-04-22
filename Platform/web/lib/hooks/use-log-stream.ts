@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiBaseUrl } from "../../lib/api";
 
 type LogStreamMessage = {
@@ -20,6 +20,7 @@ export function useLogStream(defaultKey: string = "latest") {
   const reconnectTimerRef = useRef<number | null>(null);
   const latestKeyRef = useRef<string>(defaultKey);
   const stoppedRef = useRef(false);
+  const startStreamRef = useRef<(key?: string) => void>(() => undefined);
 
   const startStream = useCallback((key?: string) => {
     if (typeof window === "undefined") return;
@@ -78,7 +79,7 @@ export function useLogStream(defaultKey: string = "latest") {
       if (!stoppedRef.current && typeof window !== "undefined") {
         reconnectTimerRef.current = window.setTimeout(() => {
           reconnectTimerRef.current = null;
-          startStream(latestKeyRef.current);
+          startStreamRef.current(latestKeyRef.current);
         }, 3000);
       }
     };
@@ -89,6 +90,10 @@ export function useLogStream(defaultKey: string = "latest") {
 
     eventSourceRef.current = eventSource;
   }, [defaultKey]);
+
+  useEffect(() => {
+    startStreamRef.current = startStream;
+  }, [startStream]);
 
   const stopStream = useCallback(() => {
     stoppedRef.current = true;

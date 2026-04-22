@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -141,6 +142,112 @@ def _get_run_or_404(db: Session, run_id: str) -> Run:
     return run
 
 
+def _normalize_metric_label(value: object, default: str = "UNKNOWN") -> str:
+    text = str(value or "").strip().upper()
+    return text or default
+
+
+def _new_performance_bucket() -> dict:
+    return {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "breakeven": 0,
+        "missing_pnl": 0,
+        "pnl_sum": 0.0,
+        "winning_pnl_sum": 0.0,
+        "losing_pnl_sum": 0.0,
+        "hold_sum": 0.0,
+        "hold_count": 0,
+        "size_sum": 0.0,
+        "size_count": 0,
+        "run_ids": set(),
+        "first_exit_ts": None,
+        "last_exit_ts": None,
+        "best_pnl_usdt": None,
+        "worst_pnl_usdt": None,
+    }
+
+
+def _add_trade_to_performance_bucket(bucket: dict, trade: Trade, run: Run) -> None:
+    bucket["trades"] += 1
+    bucket["run_ids"].add(run.id)
+
+    exit_ts = _as_utc(trade.exit_ts)
+    if exit_ts is not None:
+        if bucket["first_exit_ts"] is None or exit_ts < bucket["first_exit_ts"]:
+            bucket["first_exit_ts"] = exit_ts
+        if bucket["last_exit_ts"] is None or exit_ts > bucket["last_exit_ts"]:
+            bucket["last_exit_ts"] = exit_ts
+
+    pnl_usdt = _coerce_float(trade.pnl_usdt)
+    if pnl_usdt is None:
+        bucket["missing_pnl"] += 1
+    else:
+        bucket["pnl_sum"] += pnl_usdt
+        if pnl_usdt > 0:
+            bucket["wins"] += 1
+            bucket["winning_pnl_sum"] += pnl_usdt
+        elif pnl_usdt < 0:
+            bucket["losses"] += 1
+            bucket["losing_pnl_sum"] += pnl_usdt
+        else:
+            bucket["breakeven"] += 1
+
+        best_pnl = bucket["best_pnl_usdt"]
+        worst_pnl = bucket["worst_pnl_usdt"]
+        bucket["best_pnl_usdt"] = pnl_usdt if best_pnl is None else max(best_pnl, pnl_usdt)
+        bucket["worst_pnl_usdt"] = pnl_usdt if worst_pnl is None else min(worst_pnl, pnl_usdt)
+
+    hold_minutes = _coerce_float(trade.hold_minutes)
+    if hold_minutes is not None:
+        bucket["hold_sum"] += hold_minutes
+        bucket["hold_count"] += 1
+
+    size_multiplier = _coerce_float(trade.size_multiplier_used)
+    if size_multiplier is not None:
+        bucket["size_sum"] += size_multiplier
+        bucket["size_count"] += 1
+
+
+def _finalize_performance_bucket(label_values: dict, bucket: dict) -> dict:
+    trades = int(bucket["trades"] or 0)
+    pnl_count = max(trades - int(bucket["missing_pnl"] or 0), 0)
+    wins = int(bucket["wins"] or 0)
+    losses = int(bucket["losses"] or 0)
+    win_rate_pct = (wins / trades * 100.0) if trades else None
+    avg_pnl = (bucket["pnl_sum"] / pnl_count) if pnl_count else None
+    avg_hold = (bucket["hold_sum"] / bucket["hold_count"]) if bucket["hold_count"] else None
+    avg_size = (bucket["size_sum"] / bucket["size_count"]) if bucket["size_count"] else None
+    losing_pnl_sum = float(bucket["losing_pnl_sum"] or 0.0)
+    winning_pnl_sum = float(bucket["winning_pnl_sum"] or 0.0)
+    profit_factor = None
+    if losing_pnl_sum < 0:
+        profit_factor = winning_pnl_sum / abs(losing_pnl_sum)
+
+    first_exit = bucket["first_exit_ts"]
+    last_exit = bucket["last_exit_ts"]
+    return {
+        **label_values,
+        "trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "breakeven": int(bucket["breakeven"] or 0),
+        "missing_pnl": int(bucket["missing_pnl"] or 0),
+        "win_rate_pct": round(win_rate_pct, 2) if win_rate_pct is not None else None,
+        "pnl_usdt": round(float(bucket["pnl_sum"] or 0.0), 8),
+        "avg_pnl_usdt": round(float(avg_pnl), 8) if avg_pnl is not None else None,
+        "avg_hold_minutes": round(float(avg_hold), 2) if avg_hold is not None else None,
+        "avg_size_multiplier": round(float(avg_size), 4) if avg_size is not None else None,
+        "profit_factor": round(float(profit_factor), 4) if profit_factor is not None else None,
+        "run_count": len(bucket["run_ids"]),
+        "best_pnl_usdt": bucket["best_pnl_usdt"],
+        "worst_pnl_usdt": bucket["worst_pnl_usdt"],
+        "first_exit_ts": first_exit.isoformat() if first_exit is not None else None,
+        "last_exit_ts": last_exit.isoformat() if last_exit is not None else None,
+    }
+
+
 @router.get("", response_model=list[RunOut])
 def list_runs(
     limit: int = Query(default=50, ge=1, le=500),
@@ -150,6 +257,100 @@ def list_runs(
 ):
     stmt = select(Run).order_by(Run.start_ts.desc()).limit(limit).offset(offset)
     return list(db.execute(stmt).scalars().all())
+
+
+@router.get("/analytics/performance-history")
+def performance_history(
+    range_key: str = Query(default="30d", alias="range"),
+    limit: int = Query(default=5000, ge=1, le=10000),
+    _: object = Depends(require_permissions("view_dashboard")),
+    db: Session = Depends(get_db_session),
+):
+    normalized_range = _normalize_portfolio_range(range_key)
+    now = datetime.now(timezone.utc)
+    since = None
+    if normalized_range != "all":
+        since = now - PORTFOLIO_RANGE_WINDOWS[normalized_range]
+
+    stmt = (
+        select(Trade, Run)
+        .join(Run, Trade.run_id == Run.id)
+        .where(Trade.exit_ts.is_not(None))
+        .order_by(Trade.exit_ts.desc(), Trade.id.desc())
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(Trade.exit_ts >= since)
+
+    rows_desc = db.execute(stmt).all()
+    rows = list(reversed(rows_desc))
+
+    by_strategy: dict[str, dict] = defaultdict(_new_performance_bucket)
+    by_strategy_regime: dict[tuple[str, str], dict] = defaultdict(_new_performance_bucket)
+    trade_history = []
+    cumulative_pnl = 0.0
+    closed_with_pnl = 0
+    total_pnl = 0.0
+    run_ids: set[str] = set()
+
+    for trade, run in rows:
+        strategy = _normalize_metric_label(trade.entry_strategy or trade.strategy)
+        regime = _normalize_metric_label(trade.entry_regime or trade.regime)
+        run_ids.add(run.id)
+
+        _add_trade_to_performance_bucket(by_strategy[strategy], trade, run)
+        _add_trade_to_performance_bucket(by_strategy_regime[(strategy, regime)], trade, run)
+
+        pnl_usdt = _coerce_float(trade.pnl_usdt)
+        if pnl_usdt is not None:
+            cumulative_pnl += pnl_usdt
+            total_pnl += pnl_usdt
+            closed_with_pnl += 1
+
+        exit_ts = _as_utc(trade.exit_ts)
+        trade_history.append(
+            {
+                "id": trade.id,
+                "run_id": run.id,
+                "run_key": run.run_key,
+                "pair_key": trade.pair_key,
+                "strategy": strategy,
+                "regime": regime,
+                "side": trade.side,
+                "entry_ts": _as_utc(trade.entry_ts).isoformat() if _as_utc(trade.entry_ts) else None,
+                "exit_ts": exit_ts.isoformat() if exit_ts is not None else None,
+                "pnl_usdt": pnl_usdt,
+                "hold_minutes": _coerce_float(trade.hold_minutes),
+                "entry_z": _coerce_float(trade.entry_z),
+                "exit_z": _coerce_float(trade.exit_z),
+                "exit_reason": trade.exit_reason,
+                "size_multiplier_used": _coerce_float(trade.size_multiplier_used),
+                "cumulative_pnl_usdt": round(cumulative_pnl, 8),
+            }
+        )
+
+    strategy_summary = [
+        _finalize_performance_bucket({"strategy": strategy}, bucket)
+        for strategy, bucket in by_strategy.items()
+    ]
+    strategy_regime_summary = [
+        _finalize_performance_bucket({"strategy": strategy, "regime": regime}, bucket)
+        for (strategy, regime), bucket in by_strategy_regime.items()
+    ]
+    strategy_summary.sort(key=lambda item: (item["strategy"] != "STATARB_MR", item["strategy"]))
+    strategy_regime_summary.sort(key=lambda item: (item["strategy"], item["regime"]))
+
+    return {
+        "range": normalized_range,
+        "generated_at": now.isoformat(),
+        "closed_trades": len(rows),
+        "closed_trades_with_pnl": closed_with_pnl,
+        "run_count": len(run_ids),
+        "total_pnl_usdt": round(total_pnl, 8),
+        "strategy_summary": strategy_summary,
+        "strategy_regime_summary": strategy_regime_summary,
+        "recent_trades": list(reversed(trade_history[-100:])),
+    }
 
 
 @router.get("/portfolio/equity-curve")

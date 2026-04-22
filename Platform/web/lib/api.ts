@@ -133,6 +133,58 @@ export type ScorecardCell = {
   sum_pnl_usdt: number | null;
 };
 
+export type PerformanceSummaryRow = {
+  strategy: string;
+  regime?: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  missing_pnl: number;
+  win_rate_pct: number | null;
+  pnl_usdt: number;
+  avg_pnl_usdt: number | null;
+  avg_hold_minutes: number | null;
+  avg_size_multiplier: number | null;
+  profit_factor: number | null;
+  run_count: number;
+  best_pnl_usdt: number | null;
+  worst_pnl_usdt: number | null;
+  first_exit_ts: string | null;
+  last_exit_ts: string | null;
+};
+
+export type PerformanceTradeRow = {
+  id: string;
+  run_id: string;
+  run_key: string;
+  pair_key: string;
+  strategy: string;
+  regime: string;
+  side: string | null;
+  entry_ts: string | null;
+  exit_ts: string | null;
+  pnl_usdt: number | null;
+  hold_minutes: number | null;
+  entry_z: number | null;
+  exit_z: number | null;
+  exit_reason: string | null;
+  size_multiplier_used: number | null;
+  cumulative_pnl_usdt: number;
+};
+
+export type PerformanceHistory = {
+  range: string;
+  generated_at: string;
+  closed_trades: number;
+  closed_trades_with_pnl: number;
+  run_count: number;
+  total_pnl_usdt: number;
+  strategy_summary: PerformanceSummaryRow[];
+  strategy_regime_summary: PerformanceSummaryRow[];
+  recent_trades: PerformanceTradeRow[];
+};
+
 export type DataQualityIssue = {
   event_id: string;
   ts: string;
@@ -651,6 +703,11 @@ export async function getPortfolioEquityCurve(
 
 export async function getRunScorecard(runId: string): Promise<ScorecardCell[]> {
   return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" });
+}
+
+export async function getPerformanceHistory(range = "30d", limit = 5000): Promise<PerformanceHistory> {
+  const params = new URLSearchParams({ range, limit: String(limit) });
+  return apiRequest<PerformanceHistory>(`/runs/analytics/performance-history?${params.toString()}`, { method: "GET" });
 }
 
 export async function getRunDataQuality(runId: string): Promise<DataQualitySummary> {

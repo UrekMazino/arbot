@@ -5,13 +5,18 @@ import { useRouter, usePathname } from "next/navigation";
 
 import {
   DataQualitySummary,
+  PerformanceHistory,
+  PerformanceSummaryRow,
   RunEvent,
   RunSummary,
+  ScorecardCell,
   Trade,
   UserRecord,
+  getPerformanceHistory,
   getMe,
   getRunDataQuality,
   getRunEvents,
+  getRunScorecard,
   getRunTrades,
   getRuns,
   isUnauthorizedError,
@@ -40,6 +45,7 @@ type TimelineSource = "history" | "live";
 type TimelineFilterCategory = "all" | "core" | TimelineCategory;
 type TimelineSeverity = "all" | "info" | "warn" | "error" | "critical";
 type RunPnlFilter = "all" | "positive" | "negative";
+type PerformanceRange = "7d" | "30d" | "90d" | "all";
 
 type TimelineEvent = {
   id: string;
@@ -59,6 +65,11 @@ function fmtNumber(value: number | null | undefined, digits = 2): string {
 function fmtSignedNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+}
+
+function fmtPercent(value: number | null | undefined, digits = 1): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `${value.toFixed(digits)}%`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -172,6 +183,10 @@ function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
   };
 }
 
+function findStrategy(summary: PerformanceSummaryRow[], strategy: string): PerformanceSummaryRow | null {
+  return summary.find((row) => row.strategy === strategy) || null;
+}
+
 export default function AnalyticsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -187,6 +202,9 @@ export default function AnalyticsPage() {
   const [selectedRun, setSelectedRun] = useState<RunSummary | null>(null);
   const [runQuality, setRunQuality] = useState<DataQualitySummary | null>(null);
   const [runTrades, setRunTrades] = useState<Trade[]>([]);
+  const [runScorecard, setRunScorecard] = useState<ScorecardCell[]>([]);
+  const [performanceHistory, setPerformanceHistory] = useState<PerformanceHistory | null>(null);
+  const [performanceRange, setPerformanceRange] = useState<PerformanceRange>("30d");
   const [pnlFilter, setPnlFilter] = useState<RunPnlFilter>("all");
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
@@ -251,6 +269,15 @@ export default function AnalyticsPage() {
       .catch((e) => setError(isUnauthorizedError(e) ? "Unauthorized" : "Failed to load runs"));
   }, []);
 
+  useEffect(() => {
+    getPerformanceHistory(performanceRange)
+      .then(setPerformanceHistory)
+      .catch((e) => {
+        console.error("Failed to load performance history", e);
+        setPerformanceHistory(null);
+      });
+  }, [performanceRange]);
+
   // Use the selected run or default to the first run
   const effectiveSelectedRun = selectedRun || runs[0] || null;
 
@@ -259,16 +286,19 @@ export default function AnalyticsPage() {
     if (!effectiveSelectedRun) return;
     (async () => {
       try {
-        const [qual, trades, evts] = await Promise.all([
+        const [qual, trades, evts, scorecard] = await Promise.all([
           getRunDataQuality(effectiveSelectedRun.id),
           getRunTrades(effectiveSelectedRun.id),
           getRunEvents(effectiveSelectedRun.id),
+          getRunScorecard(effectiveSelectedRun.id),
         ]);
         setRunQuality(qual);
         setRunTrades(trades);
         setTimelineEvents(evts.map(normalizeHistoryEvent));
+        setRunScorecard(scorecard);
       } catch (e) {
         console.error("Failed to load run data", e);
+        setRunScorecard([]);
       }
     })();
   }, [effectiveSelectedRun]);
@@ -292,6 +322,15 @@ export default function AnalyticsPage() {
       return true;
     });
   }, [runs, pnlFilter]);
+
+  const mrPerformance = useMemo(
+    () => findStrategy(performanceHistory?.strategy_summary || [], "STATARB_MR"),
+    [performanceHistory],
+  );
+  const trendPerformance = useMemo(
+    () => findStrategy(performanceHistory?.strategy_summary || [], "TREND_SPREAD"),
+    [performanceHistory],
+  );
 
   if (loading) {
     return <div className="p-8 text-center text-gray-500">Loading...</div>;
@@ -347,6 +386,178 @@ export default function AnalyticsPage() {
           <MetricCard label="Start Equity" value={fmtNumber(effectiveSelectedRun?.start_equity)} unit="USDT" />
           <MetricCard label="End Equity" value={fmtNumber(effectiveSelectedRun?.end_equity)} unit="USDT" />
         </div>
+
+        <PanelCard
+          title="Strategy Performance"
+          subtitle="Closed-trade scorecard by strategy; this is where we validate TREND_SPREAD before trusting it."
+          titleRight={
+            <select className={UI_CLASSES.inputSmall} value={performanceRange} onChange={(e) => setPerformanceRange(e.target.value as PerformanceRange)}>
+              <option value="7d">7 days</option>
+              <option value="30d">30 days</option>
+              <option value="90d">90 days</option>
+              <option value="all">All history</option>
+            </select>
+          }
+        >
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <MetricCard
+              label="Total PnL"
+              value={fmtSignedNumber(performanceHistory?.total_pnl_usdt)}
+              unit="USDT"
+              hint={`${performanceHistory?.closed_trades ?? 0} closed trades across ${performanceHistory?.run_count ?? 0} runs`}
+              tone={(performanceHistory?.total_pnl_usdt ?? 0) >= 0 ? "teal" : "rose"}
+            />
+            <MetricCard
+              label="STATARB_MR"
+              value={fmtSignedNumber(mrPerformance?.pnl_usdt)}
+              unit="USDT"
+              hint={`${mrPerformance?.trades ?? 0} trades | ${fmtPercent(mrPerformance?.win_rate_pct)}`}
+              tone={(mrPerformance?.pnl_usdt ?? 0) >= 0 ? "sky" : "rose"}
+            />
+            <MetricCard
+              label="TREND_SPREAD"
+              value={fmtSignedNumber(trendPerformance?.pnl_usdt)}
+              unit="USDT"
+              hint={`${trendPerformance?.trades ?? 0} trades | ${fmtPercent(trendPerformance?.win_rate_pct)}`}
+              tone={(trendPerformance?.pnl_usdt ?? 0) >= 0 ? "amber" : "rose"}
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <TableFrame compact>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
+                    <th className="pb-2 font-medium text-gray-500">Trades</th>
+                    <th className="pb-2 font-medium text-gray-500">Win</th>
+                    <th className="pb-2 font-medium text-gray-500">PnL</th>
+                    <th className="pb-2 font-medium text-gray-500">Avg</th>
+                    <th className="pb-2 font-medium text-gray-500">Size</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(performanceHistory?.strategy_summary || []).map((row) => (
+                    <tr key={row.strategy} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="py-2 font-mono">{row.strategy}</td>
+                      <td className="py-2">{row.trades}</td>
+                      <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
+                      <td className={`py-2 font-mono ${row.pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.pnl_usdt)}</td>
+                      <td className="py-2 font-mono">{fmtSignedNumber(row.avg_pnl_usdt)}</td>
+                      <td className="py-2">{fmtNumber(row.avg_size_multiplier, 2)}</td>
+                    </tr>
+                  ))}
+                  {(performanceHistory?.strategy_summary || []).length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-gray-400">No closed trades in this range</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </TableFrame>
+
+            <TableFrame compact>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
+                    <th className="pb-2 font-medium text-gray-500">Regime</th>
+                    <th className="pb-2 font-medium text-gray-500">Trades</th>
+                    <th className="pb-2 font-medium text-gray-500">Win</th>
+                    <th className="pb-2 font-medium text-gray-500">PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(performanceHistory?.strategy_regime_summary || []).map((row) => (
+                    <tr key={`${row.strategy}-${row.regime || "UNKNOWN"}`} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="py-2 font-mono">{row.strategy}</td>
+                      <td className="py-2 font-mono">{row.regime || "UNKNOWN"}</td>
+                      <td className="py-2">{row.trades}</td>
+                      <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
+                      <td className={`py-2 font-mono ${row.pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.pnl_usdt)}</td>
+                    </tr>
+                  ))}
+                  {(performanceHistory?.strategy_regime_summary || []).length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-gray-400">No strategy/regime performance yet</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </TableFrame>
+          </div>
+
+          <div className="mt-4">
+            <h4 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">Recent Attributed Trades</h4>
+            <TableFrame compact maxHeightClass="max-h-72">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 dark:border-gray-700">
+                    <th className="pb-2 font-medium text-gray-500">Exit</th>
+                    <th className="pb-2 font-medium text-gray-500">Pair</th>
+                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
+                    <th className="pb-2 font-medium text-gray-500">Regime</th>
+                    <th className="pb-2 font-medium text-gray-500">PnL</th>
+                    <th className="pb-2 font-medium text-gray-500">Cum</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(performanceHistory?.recent_trades || []).slice(0, 20).map((trade) => (
+                    <tr key={trade.id} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="py-2 text-xs">{fmtDate(trade.exit_ts)}</td>
+                      <td className="py-2 max-w-[18rem] truncate font-mono" title={trade.pair_key}>{trade.pair_key}</td>
+                      <td className="py-2 font-mono">{trade.strategy}</td>
+                      <td className="py-2 font-mono">{trade.regime}</td>
+                      <td className={`py-2 font-mono ${(trade.pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(trade.pnl_usdt)}</td>
+                      <td className={`py-2 font-mono ${trade.cumulative_pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(trade.cumulative_pnl_usdt)}</td>
+                    </tr>
+                  ))}
+                  {(performanceHistory?.recent_trades || []).length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-gray-400">No attributed trade history yet</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </TableFrame>
+          </div>
+        </PanelCard>
+
+        <PanelCard title="Selected Run Scorecard" subtitle="Per-run strategy/regime attribution for the selected run.">
+          <TableFrame compact>
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700">
+                  <th className="pb-2 font-medium text-gray-500">Strategy</th>
+                  <th className="pb-2 font-medium text-gray-500">Regime</th>
+                  <th className="pb-2 font-medium text-gray-500">Trades</th>
+                  <th className="pb-2 font-medium text-gray-500">Wins</th>
+                  <th className="pb-2 font-medium text-gray-500">Win</th>
+                  <th className="pb-2 font-medium text-gray-500">Avg PnL</th>
+                  <th className="pb-2 font-medium text-gray-500">Sum PnL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runScorecard.map((row) => (
+                  <tr key={`${row.entry_strategy || "UNKNOWN"}-${row.entry_regime || "UNKNOWN"}`} className="border-b border-gray-100 dark:border-gray-800">
+                    <td className="py-2 font-mono">{row.entry_strategy || "UNKNOWN"}</td>
+                    <td className="py-2 font-mono">{row.entry_regime || "UNKNOWN"}</td>
+                    <td className="py-2">{row.trades}</td>
+                    <td className="py-2">{row.wins}</td>
+                    <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
+                    <td className={`py-2 font-mono ${(row.avg_pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.avg_pnl_usdt)}</td>
+                    <td className={`py-2 font-mono ${(row.sum_pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.sum_pnl_usdt)}</td>
+                  </tr>
+                ))}
+                {runScorecard.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-gray-400">No closed trades attributed to strategy/regime yet</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </TableFrame>
+        </PanelCard>
 
         <PanelCard title="Timeline" titleRight={
           <div className="flex gap-2">

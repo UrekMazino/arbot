@@ -203,7 +203,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
         },
         "strategy": {
             "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
-            "strategy_kline_limit": _env_text("STATBOT_STRATEGY_KLINE_LIMIT", "10080"),
+            "strategy_kline_limit": _env_text("STATBOT_STRATEGY_KLINE_LIMIT", "2880"),
             "strategy_z_score_window": _env_text("STATBOT_STRATEGY_Z_SCORE_WINDOW", "21"),
             "strategy_startup_retry_seconds": _env_text(
                 "STATBOT_STRATEGY_STARTUP_RETRY_SECONDS",

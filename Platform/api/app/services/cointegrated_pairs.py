@@ -341,7 +341,7 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
 
 
 def _pair_supply_interval_seconds() -> int:
-    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=0)
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=0)
 
 
 def get_pair_supply_status() -> dict[str, Any]:

@@ -183,7 +183,7 @@ def main():
         "off",
     )
     try:
-        min_pairs_needed = int(float(os.getenv("STATBOT_STRATEGY_INTERNAL_MIN_PAIRS", "10")))
+        min_pairs_needed = int(float(os.getenv("STATBOT_STRATEGY_INTERNAL_MIN_PAIRS", "3")))
     except (TypeError, ValueError):
         min_pairs_needed = 3
     if min_pairs_needed < 1:

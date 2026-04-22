@@ -79,7 +79,7 @@ cointegration_zero_cross_threshold_ratio = _env_float("STATBOT_COINT_ZERO_CROSS_
 if cointegration_zero_cross_threshold_ratio < 0:
     cointegration_zero_cross_threshold_ratio = 0.0
 
-kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 1440)  # 1 day @ 1m bars; avoid short-window zero-crossing starvation
+kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 2880)  # 2 days @ 1m bars; balanced quality/cost default
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)
@@ -116,8 +116,8 @@ min_order_capacity_usdt = _env_float("STATBOT_STRATEGY_MIN_ORDER_CAPACITY", 50.0
 if min_order_capacity_usdt < 0:
     min_order_capacity_usdt = 0.0
 fast_path_enabled = _env_bool("STATBOT_STRATEGY_FAST_PATH", True)
-corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.60 if fast_path_enabled else 0.0)  # Increased from 0.2 - need strong correlation
-corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 0)
+corr_min_filter = _env_float("STATBOT_STRATEGY_CORR_MIN", 0.20 if fast_path_enabled else 0.0)
+corr_lookback = _env_int("STATBOT_STRATEGY_CORR_LOOKBACK", 1440)
 
 # API CREDENTIALS from .env
 api_key = os.getenv("OKX_API_KEY", "")

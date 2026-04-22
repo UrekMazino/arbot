@@ -189,7 +189,7 @@ def store_price_history(symbols):
     refresh_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_REFRESH_BARS", 100)
     cache_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_CACHE_SLEEP", 0.05)
     request_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_KLINE_SLEEP", 0.0)
-    max_workers = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_WORKERS", 3)
+    max_workers = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_WORKERS", 2)
     retry_count = _int_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRIES", 2)
     retry_sleep = _float_env("STATBOT_STRATEGY_INTERNAL_KLINE_RETRY_SLEEP", 0.25)
     max_stale_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_MAX_STALE_BARS", 2)

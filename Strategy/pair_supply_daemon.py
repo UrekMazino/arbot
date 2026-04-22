@@ -73,7 +73,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _pair_supply_interval_seconds() -> int:
-    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 900, minimum=0)
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=0)
 
 
 def _handle_stop(signum, _frame):

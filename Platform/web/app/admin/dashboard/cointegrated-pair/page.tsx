@@ -570,56 +570,58 @@ export default function CointegratedPairPage() {
             ) : !filteredPairs.length ? (
               <ChartEmpty message="No pairs match the current search." />
             ) : viewMode === "grid" ? (
-              <div className="grid max-h-[38rem] grid-cols-1 gap-3 overflow-auto pr-1 custom-scrollbar 2xl:grid-cols-2">
+              <div className="grid max-h-[38rem] grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-3 overflow-auto pr-1 custom-scrollbar">
                 {filteredPairs.map((pair) => {
                   const isActive = activeKey === pair.pair;
                   const isSwitching = switchBusyPairId === pair.id;
                   const isRemoving = removeBusyPairId === pair.id;
                   return (
                     <div key={pair.id} className={pairButtonClass(selectedPair?.id === pair.id)}>
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-3">
                         <button
                           type="button"
-                          className="min-w-0 flex-1 text-left"
+                          className="block w-full min-w-0 text-left"
                           onClick={() => setSelectedPair(pair)}
                         >
-                          <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{pair.pair}</p>
+                          <p className="break-words font-mono text-sm font-semibold leading-5 text-gray-900 dark:text-white">{pair.pair}</p>
                           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Rank #{pair.rank}</p>
                         </button>
-                        <div className="flex shrink-0 items-center gap-2">
+                        <div className="flex items-center justify-between gap-2">
                           {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
-                          <button
-                            type="button"
-                            className={pairActionButtonClass("switch")}
-                            onClick={() => handleManualSwitch(pair)}
-                            disabled={!canSwitchPair || isActive || Boolean(switchBusyPairId)}
-                            aria-label={`Switch active pair to ${pair.pair}`}
-                            title={
-                              !canSwitchPair
-                                ? "Switch active pair permission required"
-                                : isActive
-                                  ? "This pair is already active"
-                                  : `Switch active pair to ${pair.pair}`
-                            }
-                          >
-                            <SwitchIcon spinning={isSwitching} />
-                          </button>
-                          <button
-                            type="button"
-                            className={pairActionButtonClass("remove")}
-                            onClick={() => handleRemovePair(pair)}
-                            disabled={!canManageSupply || isActive || Boolean(removeBusyPairId) || Boolean(switchBusyPairId)}
-                            aria-label={`Remove ${pair.pair} from Pair Universe`}
-                            title={
-                              !canManageSupply
-                                ? "Pair supply permission required"
-                                : isActive
-                                  ? "Switch away from the active pair before removing it"
-                                  : `Remove ${pair.pair} from Pair Universe`
-                            }
-                          >
-                            <RemoveIcon spinning={isRemoving} />
-                          </button>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              type="button"
+                              className={pairActionButtonClass("switch")}
+                              onClick={() => handleManualSwitch(pair)}
+                              disabled={!canSwitchPair || isActive || Boolean(switchBusyPairId)}
+                              aria-label={`Switch active pair to ${pair.pair}`}
+                              title={
+                                !canSwitchPair
+                                  ? "Switch active pair permission required"
+                                  : isActive
+                                    ? "This pair is already active"
+                                    : `Switch active pair to ${pair.pair}`
+                              }
+                            >
+                              <SwitchIcon spinning={isSwitching} />
+                            </button>
+                            <button
+                              type="button"
+                              className={pairActionButtonClass("remove")}
+                              onClick={() => handleRemovePair(pair)}
+                              disabled={!canManageSupply || isActive || Boolean(removeBusyPairId) || Boolean(switchBusyPairId)}
+                              aria-label={`Remove ${pair.pair} from Pair Universe`}
+                              title={
+                                !canManageSupply
+                                  ? "Pair supply permission required"
+                                  : isActive
+                                    ? "Switch away from the active pair before removing it"
+                                    : `Remove ${pair.pair} from Pair Universe`
+                              }
+                            >
+                              <RemoveIcon spinning={isRemoving} />
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <button

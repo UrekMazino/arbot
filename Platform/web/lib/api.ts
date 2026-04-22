@@ -468,7 +468,7 @@ export type CointegratedPairPoint = {
   price_2_norm: number;
   spread: number;
   spread_mean: number;
-  zscore: number;
+  zscore: number | null;
   z_upper: number;
   z_lower: number;
   z_mid: number;
@@ -484,6 +484,7 @@ export type CointegratedPairDetail = {
     spread_mean: number | null;
     spread_std: number | null;
     zscore_current: number | null;
+    zscore_window?: number | null;
     zero_crossing_window?: number | null;
     price_1_current: number | null;
     price_2_current: number | null;

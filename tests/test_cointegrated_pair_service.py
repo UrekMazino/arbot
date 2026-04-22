@@ -80,6 +80,7 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     monkeypatch.setattr(cp, "PRICE_JSON", price_json)
     monkeypatch.setattr(cp, "STATUS_JSON", status_json)
     monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", tmp_path / "pair_strategy_state.json")
+    monkeypatch.setenv("STATBOT_STRATEGY_Z_SCORE_WINDOW", "3")
 
     catalog = cp.list_cointegrated_pairs()
     detail = cp.get_cointegrated_pair_detail("AAA-USDT-SWAP", "BBB-USDT-SWAP", limit=50)
@@ -89,6 +90,9 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     assert catalog["pairs"][0]["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
     assert detail["pair"]["zero_crossing"] == 7
     assert len(detail["points"]) == 4
+    assert detail["points"][0]["zscore"] is None
+    assert detail["points"][-1]["zscore"] is not None
+    assert detail["stats"]["zscore_window"] == 3
     assert detail["stats"]["zscore_current"] is not None
 
 

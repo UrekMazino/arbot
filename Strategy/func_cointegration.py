@@ -330,13 +330,84 @@ def _count_csv_rows(path):
         return 0
 
 
-def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None):
+def _canonical_pair_key(row):
+    sym_1 = str(row.get("sym_1") or "").strip().upper()
+    sym_2 = str(row.get("sym_2") or "").strip().upper()
+    if not sym_1 or not sym_2:
+        return ""
+    return "/".join(sorted((sym_1, sym_2)))
+
+
+def _sort_cointegrated_pair_frame(df):
+    if df.empty:
+        return df.copy()
+
+    output = df.copy()
+    sort_columns = []
+    ascending = []
+    if "zero_crossing" in output.columns:
+        output["_sort_zero_crossing"] = pd.to_numeric(output["zero_crossing"], errors="coerce").fillna(-1)
+        sort_columns.append("_sort_zero_crossing")
+        ascending.append(False)
+    if "p_value" in output.columns:
+        output["_sort_p_value"] = pd.to_numeric(output["p_value"], errors="coerce").fillna(float("inf"))
+        sort_columns.append("_sort_p_value")
+        ascending.append(True)
+    if sort_columns:
+        output = output.sort_values(by=sort_columns, ascending=ascending, kind="stable")
+    return output.drop(columns=[col for col in ("_sort_zero_crossing", "_sort_p_value") if col in output.columns])
+
+
+def _accumulate_cointegrated_pair_supply(previous_df, latest_df, max_rows=None):
+    previous = previous_df.copy() if previous_df is not None else pd.DataFrame()
+    latest = latest_df.copy() if latest_df is not None else pd.DataFrame()
+    previous["_pair_key"] = previous.apply(_canonical_pair_key, axis=1) if not previous.empty else []
+    latest["_pair_key"] = latest.apply(_canonical_pair_key, axis=1) if not latest.empty else []
+    previous = previous[previous["_pair_key"] != ""].copy() if "_pair_key" in previous.columns else previous
+    latest = latest[latest["_pair_key"] != ""].copy() if "_pair_key" in latest.columns else latest
+
+    previous_keys = set(previous["_pair_key"].tolist()) if "_pair_key" in previous.columns else set()
+    latest_keys = set(latest["_pair_key"].tolist()) if "_pair_key" in latest.columns else set()
+
+    if previous.empty:
+        combined = latest.copy()
+    elif latest.empty:
+        combined = previous.copy()
+    else:
+        # Latest rows go first so a pair found again gets fresh metrics.
+        combined = pd.concat([latest, previous], ignore_index=True, sort=False)
+        combined = combined.drop_duplicates(subset=["_pair_key"], keep="first")
+
+    combined = _sort_cointegrated_pair_frame(combined)
+    before_cap = len(combined)
+    if max_rows is not None:
+        try:
+            max_rows_int = max(int(max_rows), 1)
+        except (TypeError, ValueError):
+            max_rows_int = 1
+        combined = combined.head(max_rows_int).copy()
+
+    final_keys = set(combined["_pair_key"].tolist()) if "_pair_key" in combined.columns else set()
+    output = combined.drop(columns=["_pair_key"], errors="ignore")
+    return output, {
+        "previous_canonical_rows": int(len(previous)),
+        "latest_attempt_valid_rows": int(len(latest)),
+        "accumulated_from_previous": bool(previous_keys and latest_keys),
+        "accumulated_pairs_added": int(len(latest_keys - previous_keys)),
+        "accumulated_pairs_refreshed": int(len(latest_keys & previous_keys)),
+        "accumulated_pairs_retained": int(len((previous_keys - latest_keys) & final_keys)),
+        "accumulation_cap_filtered": int(max(before_cap - len(output), 0)),
+    }
+
+
+def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=None):
     """
-    Keep 2_cointegrated_pairs.csv as the last-good pair supply.
+    Keep 2_cointegrated_pairs.csv as the accumulated last-good pair supply.
 
     Strategy fallback attempts can legitimately produce zero rows. Those empty
     attempts should be visible for diagnostics, but they should not erase the
-    canonical CSV that execution uses for pair switching.
+    canonical CSV that execution uses for pair switching. Non-empty attempts
+    are merged into the previous canonical supply and capped after sorting.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     latest_attempt_path = output_path.with_name(f"{output_path.stem}_latest_attempt{output_path.suffix}")
@@ -347,9 +418,29 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None):
     attempt_rows = int(len(df_coint))
     canonical_updated = False
     preserved_existing = False
+    accumulation_status = {
+        "previous_canonical_rows": _count_csv_rows(output_path),
+        "latest_attempt_valid_rows": attempt_rows,
+        "accumulated_from_previous": False,
+        "accumulated_pairs_added": 0,
+        "accumulated_pairs_refreshed": 0,
+        "accumulated_pairs_retained": 0,
+        "accumulation_cap_filtered": 0,
+    }
 
     if attempt_rows > 0:
-        df_coint.to_csv(temp_path, index=False)
+        previous_df = pd.DataFrame()
+        if output_path.exists() and output_path.stat().st_size > 0:
+            try:
+                previous_df = pd.read_csv(output_path)
+            except Exception:
+                previous_df = pd.DataFrame()
+        canonical_df, accumulation_status = _accumulate_cointegrated_pair_supply(
+            previous_df,
+            df_coint,
+            max_rows=max_rows,
+        )
+        canonical_df.to_csv(temp_path, index=False)
         temp_path.replace(output_path)
         canonical_updated = True
     elif output_path.exists() and output_path.stat().st_size > 0:
@@ -371,6 +462,8 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None):
         "canonical_rows": _count_csv_rows(output_path),
         "canonical_updated": canonical_updated,
         "preserved_existing": preserved_existing,
+        "accumulated_supply": True,
+        **accumulation_status,
     }
     try:
         status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
@@ -402,6 +495,15 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "raw_pairs_with_crossings",
         "crossing_rejected_by_orderbook",
         "pairs_kept",
+        "latest_attempt_rows",
+        "latest_attempt_valid_rows",
+        "canonical_pairs_rows",
+        "accumulated_supply",
+        "previous_canonical_rows",
+        "accumulated_pairs_added",
+        "accumulated_pairs_refreshed",
+        "accumulated_pairs_retained",
+        "accumulation_cap_filtered",
         "zero_crossing_min",
         "filtered_breakdown",
         "zero_crossing",
@@ -1052,7 +1154,15 @@ def get_cointegrated_pairs(
     output_dir = Path(__file__).resolve().parent / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
-    output_status = _write_cointegrated_pairs_csv(df_coint, output_path, logger=logger)
+    output_status = _write_cointegrated_pairs_csv(
+        df_coint,
+        output_path,
+        logger=logger,
+        max_rows=active_max_supply_pairs,
+    )
+    accumulation_cap_filtered = int(output_status.get("accumulation_cap_filtered") or 0)
+    if accumulation_cap_filtered:
+        filtered_breakdown["accumulation_cap"] = accumulation_cap_filtered
     summary = {
         "total_pairs": total_comparisons,
         "cointegrated_pairs": len(coint_pair_list),
@@ -1087,7 +1197,14 @@ def get_cointegrated_pairs(
         "canonical_pairs_rows": output_status.get("canonical_rows"),
         "canonical_pairs_updated": output_status.get("canonical_updated"),
         "latest_attempt_rows": output_status.get("latest_attempt_rows"),
+        "latest_attempt_valid_rows": output_status.get("latest_attempt_valid_rows"),
         "preserved_existing_pairs_csv": output_status.get("preserved_existing"),
+        "accumulated_supply": output_status.get("accumulated_supply"),
+        "previous_canonical_rows": output_status.get("previous_canonical_rows"),
+        "accumulated_pairs_added": output_status.get("accumulated_pairs_added"),
+        "accumulated_pairs_refreshed": output_status.get("accumulated_pairs_refreshed"),
+        "accumulated_pairs_retained": output_status.get("accumulated_pairs_retained"),
+        "accumulation_cap_filtered": accumulation_cap_filtered,
         "min_equity_filtered": filtered_count,
         "restricted_removed": restricted_removed,
         "pairs_kept": len(df_coint),

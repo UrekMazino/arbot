@@ -290,3 +290,61 @@ def test_cointegrated_pairs_writer_preserves_last_good_csv_on_empty_scan(tmp_pat
     assert len(preserved) == 1
     assert preserved.iloc[0]["sym_1"] == "AAA-USDT-SWAP"
     assert latest_attempt.empty
+
+
+def test_cointegrated_pairs_writer_accumulates_non_empty_scans(tmp_path):
+    output_path = tmp_path / "2_cointegrated_pairs.csv"
+    previous = pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "p_value": 0.01, "zero_crossing": 9},
+            {"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP", "p_value": 0.02, "zero_crossing": 3},
+        ]
+    )
+    previous.to_csv(output_path, index=False)
+    latest = pd.DataFrame(
+        [
+            {"sym_1": "DDD-USDT-SWAP", "sym_2": "CCC-USDT-SWAP", "p_value": 0.003, "zero_crossing": 10},
+            {"sym_1": "EEE-USDT-SWAP", "sym_2": "FFF-USDT-SWAP", "p_value": 0.004, "zero_crossing": 8},
+        ]
+    )
+
+    status = fc._write_cointegrated_pairs_csv(latest, output_path, max_rows=3)
+    canonical = pd.read_csv(output_path)
+    latest_attempt = pd.read_csv(tmp_path / "2_cointegrated_pairs_latest_attempt.csv")
+
+    assert len(latest_attempt) == 2
+    assert len(canonical) == 3
+    assert canonical.iloc[0]["sym_1"] == "DDD-USDT-SWAP"
+    assert canonical.iloc[0]["sym_2"] == "CCC-USDT-SWAP"
+    assert canonical.iloc[0]["zero_crossing"] == 10
+    assert set(canonical["sym_1"]) == {"AAA-USDT-SWAP", "DDD-USDT-SWAP", "EEE-USDT-SWAP"}
+    assert status["canonical_updated"] is True
+    assert status["accumulated_supply"] is True
+    assert status["previous_canonical_rows"] == 2
+    assert status["latest_attempt_rows"] == 2
+    assert status["latest_attempt_valid_rows"] == 2
+    assert status["accumulated_pairs_added"] == 1
+    assert status["accumulated_pairs_refreshed"] == 1
+    assert status["accumulated_pairs_retained"] == 1
+    assert status["accumulation_cap_filtered"] == 0
+
+
+def test_cointegrated_pairs_writer_caps_accumulated_supply(tmp_path):
+    output_path = tmp_path / "2_cointegrated_pairs.csv"
+    previous = pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "p_value": 0.01, "zero_crossing": 9},
+            {"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP", "p_value": 0.02, "zero_crossing": 3},
+        ]
+    )
+    previous.to_csv(output_path, index=False)
+    latest = pd.DataFrame(
+        [{"sym_1": "EEE-USDT-SWAP", "sym_2": "FFF-USDT-SWAP", "p_value": 0.004, "zero_crossing": 8}]
+    )
+
+    status = fc._write_cointegrated_pairs_csv(latest, output_path, max_rows=2)
+    canonical = pd.read_csv(output_path)
+
+    assert len(canonical) == 2
+    assert list(canonical["sym_1"]) == ["AAA-USDT-SWAP", "EEE-USDT-SWAP"]
+    assert status["accumulation_cap_filtered"] == 1

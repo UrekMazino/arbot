@@ -5,9 +5,9 @@ import { useMemo } from "react";
 import {
   Area,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -16,6 +16,7 @@ import {
 
 interface ExtendedChartPoint {
   ts: string;
+  ts_ms?: number;
   equity: number;
   drawdown: number;
   drawdown_pct?: number | null;
@@ -52,9 +53,9 @@ function formatPct(value: number | null | undefined): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(3)}%`;
 }
 
-function formatDate(value: string, pattern: string): string {
+function formatDate(value: string | number, pattern: string): string {
   const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return value;
+  if (Number.isNaN(dt.getTime())) return String(value);
   return format(dt, pattern);
 }
 
@@ -65,12 +66,21 @@ export function PortfolioChart({
   title = "Portfolio Performance",
   subtitle = "Account equity and drawdown from run heartbeat data",
 }: PortfolioChartProps) {
-  const chartData = useMemo(() => data.map((point) => ({ ...point })), [data]);
+  const chartData = useMemo(
+    () =>
+      data
+        .map((point) => {
+          const tsMs = new Date(point.ts).getTime();
+          return { ...point, ts_ms: Number.isFinite(tsMs) ? tsMs : undefined };
+        })
+        .filter((point) => point.ts_ms !== undefined),
+    [data],
+  );
 
   const tickFormat = useMemo(() => {
     if (chartData.length < 2) return "MMM dd HH:mm";
-    const first = new Date(chartData[0].ts).getTime();
-    const last = new Date(chartData[chartData.length - 1].ts).getTime();
+    const first = chartData[0].ts_ms ?? 0;
+    const last = chartData[chartData.length - 1].ts_ms ?? 0;
     const spanHours = Number.isFinite(first) && Number.isFinite(last) ? Math.abs(last - first) / 3_600_000 : 0;
     if (spanHours <= 48) return "HH:mm";
     if (spanHours <= 24 * 45) return "MMM dd";
@@ -106,7 +116,7 @@ export function PortfolioChart({
         </div>
       </div>
       <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={chartData}>
+        <ComposedChart data={chartData}>
           <defs>
             <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#465fff" stopOpacity={0.4} />
@@ -115,7 +125,10 @@ export function PortfolioChart({
           </defs>
           <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
-            dataKey="ts"
+            dataKey="ts_ms"
+            type="number"
+            scale="time"
+            domain={["dataMin", "dataMax"]}
             tickLine={false}
             axisLine={false}
             tickFormatter={(value) => formatDate(String(value), tickFormat)}
@@ -168,7 +181,7 @@ export function PortfolioChart({
             strokeWidth={2}
             dot={false}
           />
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

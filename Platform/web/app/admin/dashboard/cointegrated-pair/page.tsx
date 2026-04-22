@@ -108,7 +108,7 @@ function pairMatches(pair: CointegratedPair, query: string): boolean {
 
 function pairButtonClass(active: boolean): string {
   return [
-    "w-full rounded-2xl border p-4 text-left transition",
+    "w-full rounded-2xl border p-3 text-left transition",
     active
       ? "border-brand-500 bg-brand-50 shadow-sm dark:border-brand-400 dark:bg-brand-950/30"
       : "border-gray-200 bg-white hover:border-brand-300 hover:bg-gray-50 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-brand-700 dark:hover:bg-gray-800/60",
@@ -572,25 +572,25 @@ export default function CointegratedPairPage() {
             ) : !filteredPairs.length ? (
               <ChartEmpty message="No pairs match the current search." />
             ) : viewMode === "grid" ? (
-              <div className="grid max-h-[38rem] grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-3 overflow-auto pr-1 custom-scrollbar">
+              <div className="grid max-h-[38rem] grid-cols-1 gap-2.5 overflow-auto pr-1 custom-scrollbar sm:grid-cols-2">
                 {filteredPairs.map((pair) => {
                   const isActive = activeKey === pair.pair;
                   const isSwitching = switchBusyPairId === pair.id;
                   const isRemoving = removeBusyPairId === pair.id;
                   return (
                     <div key={pair.id} className={pairButtonClass(selectedPair?.id === pair.id)}>
-                      <div className="space-y-3">
+                      <div className="space-y-2.5">
                         <button
                           type="button"
                           className="block w-full min-w-0 text-left"
                           onClick={() => setSelectedPair(pair)}
                         >
-                          <p className="break-words font-mono text-sm font-semibold leading-5 text-gray-900 dark:text-white">{pair.pair}</p>
-                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Rank #{pair.rank}</p>
+                          <p className="break-words font-mono text-[0.78rem] font-semibold leading-4 text-gray-900 dark:text-white">{pair.pair}</p>
+                          <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Rank #{pair.rank}</p>
                         </button>
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center justify-between gap-1.5">
                           {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
-                          <div className="flex shrink-0 items-center gap-2">
+                          <div className="flex shrink-0 items-center gap-1.5">
                             <button
                               type="button"
                               className={pairActionButtonClass("switch")}
@@ -628,7 +628,7 @@ export default function CointegratedPairPage() {
                       </div>
                       <button
                         type="button"
-                        className="mt-4 grid w-full grid-cols-2 gap-3 text-left text-xs"
+                        className="mt-3 grid w-full grid-cols-2 gap-x-3 gap-y-2 text-left text-[11px] leading-4"
                         onClick={() => setSelectedPair(pair)}
                       >
                         <span className="text-gray-500">p-value <b className="font-mono text-gray-900 dark:text-white">{fmtNumber(pair.p_value, 5)}</b></span>

@@ -28,6 +28,11 @@ def _workspace_root() -> Path:
 
 
 WORKSPACE_ROOT = _workspace_root()
+if str(WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(WORKSPACE_ROOT))
+
+from shared_cointegration_validator import count_mean_reversion_crossings  # noqa: E402
+
 STRATEGY_OUTPUT_ROOT = WORKSPACE_ROOT / "Strategy" / "output"
 EXECUTION_STATE_ROOT = WORKSPACE_ROOT / "Execution" / "state"
 EXECUTION_ENV_FILE = WORKSPACE_ROOT / "Execution" / ".env"
@@ -337,6 +342,19 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
         value = int(float(raw)) if raw not in (None, "") else int(default)
     except (TypeError, ValueError):
         value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
+def _env_float(name: str, default: float, minimum: float | None = None) -> float:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        raw = _read_execution_env_settings().get(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
     if minimum is not None and value < minimum:
         value = minimum
     return value
@@ -744,6 +762,10 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
     spread_mean = float(np.mean(spread))
     spread_std = float(np.std(spread))
     zscores = np.zeros_like(spread) if spread_std <= 0 else (spread - spread_mean) / spread_std
+    zero_crossing_window = count_mean_reversion_crossings(
+        spread,
+        threshold_ratio=_env_float("STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO", 0.1, minimum=0.0),
+    )
 
     base_1 = prices_1[0] if prices_1[0] else 1.0
     base_2 = prices_2[0] if prices_2[0] else 1.0
@@ -777,6 +799,7 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
             "spread_mean": spread_mean,
             "spread_std": spread_std,
             "zscore_current": float(zscores[-1]) if len(zscores) else None,
+            "zero_crossing_window": int(zero_crossing_window),
             "price_1_current": float(prices_1[-1]) if len(prices_1) else None,
             "price_2_current": float(prices_2[-1]) if len(prices_2) else None,
         },

@@ -774,7 +774,12 @@ export default function CointegratedPairPage() {
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <MetricCard label="p-value" value={fmtNumber(detail?.pair.p_value, 5)} hint="Lower is stronger" tone="teal" />
-              <MetricCard label="Zero Crossings" value={String(detail?.pair.zero_crossing ?? "n/a")} hint="Mean-reversion frequency" tone="sky" />
+              <MetricCard
+                label="Chart Crossings"
+                value={String(detail?.stats.zero_crossing_window ?? detail?.pair.zero_crossing ?? "n/a")}
+                hint="Displayed window, noise-filtered"
+                tone="sky"
+              />
               <MetricCard label="Spread Std" value={fmtNumber(detail?.stats.spread_std, 5)} hint="Latest chart window" tone="violet" />
             </div>
           </div>

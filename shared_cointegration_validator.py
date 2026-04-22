@@ -67,6 +67,19 @@ def count_spread_zero_crossings(spread, threshold=None, threshold_ratio=0.1):
     return int(np.count_nonzero(directional_signs[1:] != directional_signs[:-1]))
 
 
+def count_mean_reversion_crossings(spread, threshold=None, threshold_ratio=0.1):
+    spread_series = pd.Series(spread, dtype=float).dropna()
+    if len(spread_series) < 2:
+        return 0
+
+    centered_spread = spread_series - float(spread_series.mean())
+    return count_spread_zero_crossings(
+        centered_spread,
+        threshold=threshold,
+        threshold_ratio=threshold_ratio,
+    )
+
+
 def evaluate_cointegration(
     series_1,
     series_2,
@@ -132,7 +145,7 @@ def evaluate_cointegration(
     hedge_ratio = float(model.params[1] if len(model.params) > 1 else model.params[0])
     spread = series_1_log - (hedge_ratio * series_2_log)
     zscore_values = calculate_zscore_series(spread, window=window)
-    zero_crossings = count_spread_zero_crossings(spread, threshold_ratio=zero_cross_threshold_ratio)
+    zero_crossings = count_mean_reversion_crossings(spread, threshold_ratio=zero_cross_threshold_ratio)
     critical_value = float(critical_values[1]) if len(critical_values) > 1 else float(critical_values[0])
     coint_flag = int(
         bool(

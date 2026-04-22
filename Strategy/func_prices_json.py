@@ -114,7 +114,9 @@ def _save_no_data_blacklist(path, symbols_map):
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "symbols": symbols_map,
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_path.replace(path)
 
 
 def _normalize_klines(price_history):
@@ -435,8 +437,10 @@ def store_price_history(symbols):
         except ValueError:
             rel_path = output_path
         print(f"Price history saved: {rel_path} (symbols {len(price_history_dict)})")
-        with output_path.open("w") as fp:
+        temp_path = output_path.with_name(f".{output_path.name}.tmp")
+        with temp_path.open("w", encoding="utf-8") as fp:
             json.dump(price_history_dict, fp, indent=4)
+        temp_path.replace(output_path)
         logger.info("Price history saved: %s symbols=%d", rel_path, len(price_history_dict))
     else:
         print("Price history: no data to save.")

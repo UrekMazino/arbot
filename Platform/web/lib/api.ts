@@ -484,6 +484,7 @@ export type CointegratedPairDetail = {
     spread_mean: number | null;
     spread_std: number | null;
     zscore_current: number | null;
+    zero_crossing_window?: number | null;
     price_1_current: number | null;
     price_2_current: number | null;
   };

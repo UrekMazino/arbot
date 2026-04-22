@@ -44,7 +44,7 @@ PAIR_STATE_PATH = ROOT_DIR / "Execution" / "state" / "pair_strategy_state.json"
 
 from shared_cointegration_validator import (
     calculate_zscore_series,
-    count_spread_zero_crossings,
+    count_mean_reversion_crossings,
     evaluate_cointegration,
 )
 
@@ -119,7 +119,7 @@ def calculate_zscore(spread):
 
 # Count zero crossings
 def count_zero_crossings(spread, threshold=None):
-    return count_spread_zero_crossings(
+    return count_mean_reversion_crossings(
         spread,
         threshold=threshold,
         threshold_ratio=cointegration_zero_cross_threshold_ratio,

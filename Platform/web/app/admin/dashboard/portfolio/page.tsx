@@ -209,7 +209,7 @@ export default function PortfolioPage() {
               height={390}
               caption={caption}
               title="Account Equity"
-              subtitle="Absolute portfolio equity with drawdown for the selected range"
+              subtitle="Absolute portfolio equity for the selected range"
             />
           ) : (
             <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">

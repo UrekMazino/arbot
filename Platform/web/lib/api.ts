@@ -390,7 +390,20 @@ export type CointegratedPairsResponse = {
   price_updated_at: string | null;
   status: Record<string, unknown>;
   pair_count: number;
+  excluded_pair_count?: number;
   pairs: CointegratedPair[];
+};
+
+export type RemoveCointegratedPairResult = {
+  ok: boolean;
+  removed: boolean;
+  removed_rows: number;
+  pair_key: string;
+  status: string;
+  reason: string;
+  ttl_days: number | null;
+  pair_count: number;
+  requested_by: string;
 };
 
 export type CointegratedPairPoint = {
@@ -721,6 +734,13 @@ export async function getCointegratedPairDetail(
 ): Promise<CointegratedPairDetail> {
   const params = new URLSearchParams({ sym_1: sym1, sym_2: sym2, limit: String(limit) });
   return apiRequest<CointegratedPairDetail>(`/admin/cointegrated-pairs/detail?${params.toString()}`, { method: "GET" });
+}
+
+export async function removeCointegratedPair(sym1: string, sym2: string): Promise<RemoveCointegratedPairResult> {
+  return apiRequest<RemoveCointegratedPairResult>("/admin/cointegrated-pairs", {
+    method: "DELETE",
+    body: JSON.stringify({ sym_1: sym1, sym_2: sym2 }),
+  });
 }
 
 export async function getPairSupplyStatus(): Promise<PairSupplyStatus> {

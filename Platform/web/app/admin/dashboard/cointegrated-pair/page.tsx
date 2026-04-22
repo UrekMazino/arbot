@@ -26,6 +26,7 @@ import {
   getMe,
   getPairSupplyStatus,
   isUnauthorizedError,
+  removeCointegratedPair,
   switchAdminActivePair,
   startPairSupply,
   stopPairSupply,
@@ -116,10 +117,21 @@ function pairButtonClass(active: boolean): string {
 
 function listButtonClass(active: boolean): string {
   return [
-    "grid w-full grid-cols-[minmax(13rem,1.2fr)_repeat(5,minmax(6rem,0.7fr))_minmax(3rem,0.25fr)] items-center gap-3 border-b border-gray-200 px-4 py-3 text-sm transition last:border-b-0 dark:border-gray-800",
+    "grid w-full grid-cols-[minmax(13rem,1.2fr)_repeat(5,minmax(6rem,0.7fr))_minmax(5rem,0.4fr)] items-center gap-3 border-b border-gray-200 px-4 py-3 text-sm transition last:border-b-0 dark:border-gray-800",
     active
       ? "bg-brand-50 text-brand-700 dark:bg-brand-950/30 dark:text-brand-300"
       : "bg-white hover:bg-gray-50 dark:bg-gray-900 dark:hover:bg-gray-800/70",
+  ].join(" ");
+}
+
+function pairActionButtonClass(tone: "switch" | "remove"): string {
+  const palette =
+    tone === "remove"
+      ? "hover:border-error-300 hover:text-error-700 dark:hover:border-error-800 dark:hover:text-error-300"
+      : "hover:border-brand-300 hover:text-brand-700 dark:hover:border-brand-700 dark:hover:text-brand-300";
+  return [
+    "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300",
+    palette,
   ].join(" ");
 }
 
@@ -143,6 +155,38 @@ function SwitchIcon({ spinning = false }: { spinning?: boolean }) {
   );
 }
 
+function RemoveIcon({ spinning = false }: { spinning?: boolean }) {
+  if (spinning) {
+    return (
+      <svg
+        aria-hidden="true"
+        className="h-4 w-4 animate-spin"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      >
+        <path d="M10 3.5a6.5 6.5 0 1 1-6.1 4.3" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+    >
+      <path d="M5 5l10 10" />
+      <path d="M15 5 5 15" />
+    </svg>
+  );
+}
+
 function ChartEmpty({ message }: { message: string }) {
   return <p className="py-20 text-center text-sm text-gray-500 dark:text-gray-400">{message}</p>;
 }
@@ -160,6 +204,7 @@ export default function CointegratedPairPage() {
   const [supplyStatus, setSupplyStatus] = useState<PairSupplyStatus | null>(null);
   const [supplyBusy, setSupplyBusy] = useState(false);
   const [switchBusyPairId, setSwitchBusyPairId] = useState<string | null>(null);
+  const [removeBusyPairId, setRemoveBusyPairId] = useState<string | null>(null);
   const [switchModal, setSwitchModal] = useState<{ title: string; message: string } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
@@ -283,7 +328,7 @@ export default function CointegratedPairPage() {
         ? "Stop Supply"
         : "Start Supply";
 
-  async function refreshCatalog() {
+  async function refreshCatalog(options: { removedPairId?: string } = {}) {
     setPairsLoading(true);
     setError(null);
     try {
@@ -295,7 +340,10 @@ export default function CointegratedPairPage() {
       setCatalog(data);
       setSupplyStatus(supply);
       setPairsHealth(health);
-      if (!selectedPair && data.pairs[0]) setSelectedPair(data.pairs[0]);
+      setSelectedPair((current) => {
+        if (!current || current.id === options.removedPairId) return data.pairs[0] || null;
+        return data.pairs.find((pair) => pair.id === current.id) || data.pairs[0] || null;
+      });
     } catch (err) {
       setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to refresh cointegrated pairs");
     } finally {
@@ -322,6 +370,25 @@ export default function CointegratedPairPage() {
       setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to update pair supply process");
     } finally {
       setSupplyBusy(false);
+    }
+  }
+
+  async function handleRemovePair(pair: CointegratedPair) {
+    if (!canManageSupply || removeBusyPairId || switchBusyPairId || activeKey === pair.pair) return;
+    const confirmed = window.confirm(
+      `Remove ${pair.pair} from Pair Universe and place it in manual graveyard?`,
+    );
+    if (!confirmed) return;
+
+    setRemoveBusyPairId(pair.id);
+    setError(null);
+    try {
+      await removeCointegratedPair(pair.sym_1, pair.sym_2);
+      await refreshCatalog({ removedPairId: pair.id });
+    } catch (err) {
+      setError(isUnauthorizedError(err) ? "Unauthorized" : cleanApiMessage(err, "Failed to remove pair"));
+    } finally {
+      setRemoveBusyPairId(null);
     }
   }
 
@@ -507,6 +574,7 @@ export default function CointegratedPairPage() {
                 {filteredPairs.map((pair) => {
                   const isActive = activeKey === pair.pair;
                   const isSwitching = switchBusyPairId === pair.id;
+                  const isRemoving = removeBusyPairId === pair.id;
                   return (
                     <div key={pair.id} className={pairButtonClass(selectedPair?.id === pair.id)}>
                       <div className="flex items-start justify-between gap-3">
@@ -522,7 +590,7 @@ export default function CointegratedPairPage() {
                           {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
                           <button
                             type="button"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-brand-700 dark:hover:text-brand-300"
+                            className={pairActionButtonClass("switch")}
                             onClick={() => handleManualSwitch(pair)}
                             disabled={!canSwitchPair || isActive || Boolean(switchBusyPairId)}
                             aria-label={`Switch active pair to ${pair.pair}`}
@@ -535,6 +603,22 @@ export default function CointegratedPairPage() {
                             }
                           >
                             <SwitchIcon spinning={isSwitching} />
+                          </button>
+                          <button
+                            type="button"
+                            className={pairActionButtonClass("remove")}
+                            onClick={() => handleRemovePair(pair)}
+                            disabled={!canManageSupply || isActive || Boolean(removeBusyPairId) || Boolean(switchBusyPairId)}
+                            aria-label={`Remove ${pair.pair} from Pair Universe`}
+                            title={
+                              !canManageSupply
+                                ? "Pair supply permission required"
+                                : isActive
+                                  ? "Switch away from the active pair before removing it"
+                                  : `Remove ${pair.pair} from Pair Universe`
+                            }
+                          >
+                            <RemoveIcon spinning={isRemoving} />
                           </button>
                         </div>
                       </div>
@@ -555,18 +639,19 @@ export default function CointegratedPairPage() {
             ) : (
               <TableFrame maxHeightClass="max-h-[38rem]">
                 <div className="min-w-[780px]">
-                  <div className="grid grid-cols-[minmax(13rem,1.2fr)_repeat(5,minmax(6rem,0.7fr))_minmax(3rem,0.25fr)] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+                  <div className="grid grid-cols-[minmax(13rem,1.2fr)_repeat(5,minmax(6rem,0.7fr))_minmax(5rem,0.4fr)] gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
                     <span>Pair</span>
                     <span>Crosses</span>
                     <span>p-value</span>
                     <span>Hedge</span>
                     <span>Liquidity</span>
                     <span>Capacity</span>
-                    <span className="text-right">Switch</span>
+                    <span className="text-right">Actions</span>
                   </div>
                   {filteredPairs.map((pair) => {
                     const isActive = activeKey === pair.pair;
                     const isSwitching = switchBusyPairId === pair.id;
+                    const isRemoving = removeBusyPairId === pair.id;
                     return (
                       <div
                         key={pair.id}
@@ -584,10 +669,10 @@ export default function CointegratedPairPage() {
                         <span>{fmtNumber(pair.hedge_ratio, 3)}</span>
                         <span>{fmtCompact(pair.pair_liquidity_min)}</span>
                         <span>{fmtCompact(pair.pair_order_capacity_usdt)}</span>
-                        <span className="flex justify-end">
+                        <span className="flex justify-end gap-2">
                           <button
                             type="button"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-brand-700 dark:hover:text-brand-300"
+                            className={pairActionButtonClass("switch")}
                             onClick={(event) => {
                               event.stopPropagation();
                               handleManualSwitch(pair);
@@ -603,6 +688,25 @@ export default function CointegratedPairPage() {
                             }
                           >
                             <SwitchIcon spinning={isSwitching} />
+                          </button>
+                          <button
+                            type="button"
+                            className={pairActionButtonClass("remove")}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleRemovePair(pair);
+                            }}
+                            disabled={!canManageSupply || isActive || Boolean(removeBusyPairId) || Boolean(switchBusyPairId)}
+                            aria-label={`Remove ${pair.pair} from Pair Universe`}
+                            title={
+                              !canManageSupply
+                                ? "Pair supply permission required"
+                                : isActive
+                                  ? "Switch away from the active pair before removing it"
+                                  : `Remove ${pair.pair} from Pair Universe`
+                            }
+                          >
+                            <RemoveIcon spinning={isRemoving} />
                           </button>
                         </span>
                       </div>

@@ -6,8 +6,6 @@ import {
   Area,
   CartesianGrid,
   ComposedChart,
-  Legend,
-  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -64,7 +62,7 @@ export function PortfolioChart({
   height = 250,
   caption = "Portfolio equity history",
   title = "Portfolio Performance",
-  subtitle = "Account equity and drawdown from run heartbeat data",
+  subtitle = "Account equity from run heartbeat data",
 }: PortfolioChartProps) {
   const chartData = useMemo(
     () =>
@@ -145,22 +143,11 @@ export function PortfolioChart({
             domain={["auto", "auto"]}
             tickFormatter={(value) => Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}
           />
-          <YAxis
-            yAxisId="drawdown"
-            orientation="right"
-            tickLine={false}
-            axisLine={false}
-            tickMargin={12}
-            fontSize={12}
-            domain={["auto", 0]}
-            tickFormatter={(value) => Number(value).toFixed(2)}
-          />
           <Tooltip
             content={({ active, payload }) => (
               <CustomTooltipWithProps active={active} payload={payload as unknown as TooltipPayloadItem[]} />
             )}
           />
-          <Legend />
           <Area
             type="monotone"
             dataKey="equity"
@@ -170,15 +157,6 @@ export function PortfolioChart({
             strokeWidth={3}
             fillOpacity={1}
             fill="url(#equityGradient)"
-            dot={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="drawdown"
-            yAxisId="drawdown"
-            name="Drawdown"
-            stroke="#f97316"
-            strokeWidth={2}
             dot={false}
           />
         </ComposedChart>

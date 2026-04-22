@@ -79,6 +79,7 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
     monkeypatch.setattr(cp, "PRICE_JSON", price_json)
     monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", tmp_path / "pair_strategy_state.json")
 
     catalog = cp.list_cointegrated_pairs()
     detail = cp.get_cointegrated_pair_detail("AAA-USDT-SWAP", "BBB-USDT-SWAP", limit=50)
@@ -89,6 +90,85 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     assert detail["pair"]["zero_crossing"] == 7
     assert len(detail["points"]) == 4
     assert detail["stats"]["zscore_current"] is not None
+
+
+def test_cointegrated_pair_catalog_filters_hospital_and_graveyard(monkeypatch, tmp_path):
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    pair_state = tmp_path / "pair_strategy_state.json"
+    pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "zero_crossing": 9},
+            {"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP", "zero_crossing": 8},
+            {"sym_1": "EEE-USDT-SWAP", "sym_2": "FFF-USDT-SWAP", "zero_crossing": 7},
+        ]
+    ).to_csv(coint_csv, index=False)
+    status_json.write_text("{}", encoding="utf-8")
+    now = cp._unix_now()
+    pair_state.write_text(
+        json.dumps(
+            {
+                "hospital": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "ts": now,
+                        "cooldown": 3600,
+                        "reason": "test",
+                    }
+                },
+                "graveyard": {
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "ts": now,
+                        "reason": "manual",
+                        "ttl_days": 7,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", pair_state)
+
+    catalog = cp.list_cointegrated_pairs()
+
+    assert catalog["excluded_pair_count"] == 2
+    assert catalog["pair_count"] == 1
+    assert catalog["pairs"][0]["pair"] == "EEE-USDT-SWAP/FFF-USDT-SWAP"
+
+
+def test_remove_cointegrated_pair_moves_pair_to_manual_graveyard(monkeypatch, tmp_path):
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    status_json = tmp_path / "2_cointegrated_pairs_status.json"
+    pair_state = tmp_path / "pair_strategy_state.json"
+    supply_state = tmp_path / "pair_supply_control.json"
+    pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "zero_crossing": 9},
+            {"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP", "zero_crossing": 8},
+        ]
+    ).to_csv(coint_csv, index=False)
+    status_json.write_text(json.dumps({"canonical_rows": 2}), encoding="utf-8")
+    supply_state.write_text(json.dumps({"status": {"canonical_rows": 2}}), encoding="utf-8")
+
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
+    monkeypatch.setattr(cp, "STATUS_JSON", status_json)
+    monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", pair_state)
+    monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", supply_state)
+
+    result = cp.remove_cointegrated_pair("BBB-USDT-SWAP", "AAA-USDT-SWAP", requested_by="tester@example.com")
+    canonical = pd.read_csv(coint_csv)
+    state = json.loads(pair_state.read_text(encoding="utf-8"))
+    status = json.loads(status_json.read_text(encoding="utf-8"))
+
+    assert result["removed"] is True
+    assert result["removed_rows"] == 1
+    assert result["pair_key"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert list(canonical["sym_1"]) == ["CCC-USDT-SWAP"]
+    assert state["graveyard"]["AAA-USDT-SWAP/BBB-USDT-SWAP"]["reason"] == "manual"
+    assert state["graveyard"]["AAA-USDT-SWAP/BBB-USDT-SWAP"]["requested_by"] == "tester@example.com"
+    assert status["canonical_rows"] == 1
 
 
 def test_pair_supply_status_marks_zombie_or_reaped_pid_stopped(monkeypatch, tmp_path):

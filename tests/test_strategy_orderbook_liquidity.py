@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -348,3 +349,53 @@ def test_cointegrated_pairs_writer_caps_accumulated_supply(tmp_path):
     assert len(canonical) == 2
     assert list(canonical["sym_1"]) == ["AAA-USDT-SWAP", "EEE-USDT-SWAP"]
     assert status["accumulation_cap_filtered"] == 1
+
+
+def test_cointegrated_pairs_writer_drops_hospital_and_graveyard_from_accumulation(monkeypatch, tmp_path):
+    output_path = tmp_path / "2_cointegrated_pairs.csv"
+    pair_state = tmp_path / "pair_strategy_state.json"
+    now = time.time()
+    pair_state.write_text(
+        json.dumps(
+            {
+                "hospital": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "ts": now,
+                        "cooldown": 3600,
+                        "reason": "test",
+                    }
+                },
+                "graveyard": {
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "ts": now,
+                        "reason": "manual",
+                        "ttl_days": 7,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "p_value": 0.01, "zero_crossing": 9},
+            {"sym_1": "EEE-USDT-SWAP", "sym_2": "FFF-USDT-SWAP", "p_value": 0.02, "zero_crossing": 7},
+        ]
+    )
+    previous.to_csv(output_path, index=False)
+    latest = pd.DataFrame(
+        [
+            {"sym_1": "DDD-USDT-SWAP", "sym_2": "CCC-USDT-SWAP", "p_value": 0.003, "zero_crossing": 10},
+            {"sym_1": "GGG-USDT-SWAP", "sym_2": "HHH-USDT-SWAP", "p_value": 0.004, "zero_crossing": 8},
+        ]
+    )
+
+    monkeypatch.setattr(fc, "PAIR_STATE_PATH", pair_state)
+
+    status = fc._write_cointegrated_pairs_csv(latest, output_path, max_rows=10)
+    canonical = pd.read_csv(output_path)
+
+    assert set(canonical["sym_1"]) == {"EEE-USDT-SWAP", "GGG-USDT-SWAP"}
+    assert status["latest_attempt_rows"] == 2
+    assert status["latest_attempt_valid_rows"] == 1
+    assert status["excluded_pairs_filtered"] == 2

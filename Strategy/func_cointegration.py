@@ -40,6 +40,7 @@ from func_strategy_log import get_strategy_logger
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+PAIR_STATE_PATH = ROOT_DIR / "Execution" / "state" / "pair_strategy_state.json"
 
 from shared_cointegration_validator import (
     calculate_zscore_series,
@@ -89,8 +90,7 @@ def _read_json_object(path):
 
 def _load_restricted_tickers():
     restricted = set()
-    state_path = Path(__file__).resolve().parents[1] / "Execution" / "state" / "pair_strategy_state.json"
-    data = _read_json_object(state_path)
+    data = _read_json_object(PAIR_STATE_PATH)
     graveyard = data.get("graveyard", {})
     if isinstance(graveyard, dict):
         for key in graveyard.keys():
@@ -338,6 +338,66 @@ def _canonical_pair_key(row):
     return "/".join(sorted((sym_1, sym_2)))
 
 
+def _normalize_pair_key_text(pair_key):
+    parts = str(pair_key or "").strip().upper().split("/")
+    if len(parts) != 2:
+        return ""
+    left = parts[0].strip()
+    right = parts[1].strip()
+    if not left or not right:
+        return ""
+    return "/".join(sorted((left, right)))
+
+
+def _load_pair_exclusion_reasons(now_ts=None):
+    now_value = time.time() if now_ts is None else float(now_ts)
+    data = _read_json_object(PAIR_STATE_PATH)
+    exclusions = {}
+    counts = {"graveyard": 0, "hospital": 0, "expired_hospital": 0}
+
+    graveyard = data.get("graveyard", {})
+    if isinstance(graveyard, dict):
+        for raw_key in graveyard.keys():
+            key_text = str(raw_key or "")
+            if key_text.startswith("ticker::"):
+                continue
+            pair_key = _normalize_pair_key_text(key_text)
+            if not pair_key:
+                continue
+            exclusions[pair_key] = "graveyard"
+            counts["graveyard"] += 1
+
+    hospital = data.get("hospital", {})
+    if isinstance(hospital, dict):
+        for raw_key, entry in hospital.items():
+            pair_key = _normalize_pair_key_text(raw_key)
+            if not pair_key or not isinstance(entry, dict):
+                continue
+            try:
+                ts = float(entry.get("ts") or 0)
+                cooldown = float(entry.get("cooldown") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ts > 0 and cooldown > 0 and now_value - ts < cooldown:
+                exclusions.setdefault(pair_key, "hospital")
+                counts["hospital"] += 1
+            else:
+                counts["expired_hospital"] += 1
+
+    return exclusions, counts
+
+
+def _filter_excluded_pair_rows(df):
+    exclusions, _counts = _load_pair_exclusion_reasons()
+    if df.empty or not exclusions:
+        return df.copy(), 0
+    output = df.copy()
+    output["_pair_key"] = output.apply(_canonical_pair_key, axis=1)
+    before = len(output)
+    output = output[~output["_pair_key"].isin(exclusions.keys())].copy()
+    return output.drop(columns=["_pair_key"], errors="ignore"), int(before - len(output))
+
+
 def _sort_cointegrated_pair_frame(df):
     if df.empty:
         return df.copy()
@@ -414,44 +474,67 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=N
     status_path = output_path.with_name(f"{output_path.stem}_status.json")
     temp_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
 
-    df_coint.to_csv(latest_attempt_path, index=False)
     attempt_rows = int(len(df_coint))
+    df_canonical_attempt, latest_excluded_rows = _filter_excluded_pair_rows(df_coint)
+    df_coint.to_csv(latest_attempt_path, index=False)
     canonical_updated = False
     preserved_existing = False
     accumulation_status = {
         "previous_canonical_rows": _count_csv_rows(output_path),
-        "latest_attempt_valid_rows": attempt_rows,
+        "latest_attempt_valid_rows": int(len(df_canonical_attempt)),
         "accumulated_from_previous": False,
         "accumulated_pairs_added": 0,
         "accumulated_pairs_refreshed": 0,
         "accumulated_pairs_retained": 0,
         "accumulation_cap_filtered": 0,
+        "excluded_pairs_filtered": int(latest_excluded_rows),
     }
 
-    if attempt_rows > 0:
+    if len(df_canonical_attempt) > 0:
         previous_df = pd.DataFrame()
+        previous_excluded_rows = 0
         if output_path.exists() and output_path.stat().st_size > 0:
             try:
                 previous_df = pd.read_csv(output_path)
             except Exception:
                 previous_df = pd.DataFrame()
+            previous_df, previous_excluded_rows = _filter_excluded_pair_rows(previous_df)
         canonical_df, accumulation_status = _accumulate_cointegrated_pair_supply(
             previous_df,
-            df_coint,
+            df_canonical_attempt,
             max_rows=max_rows,
         )
+        accumulation_status["excluded_pairs_filtered"] = int(latest_excluded_rows + previous_excluded_rows)
         canonical_df.to_csv(temp_path, index=False)
         temp_path.replace(output_path)
         canonical_updated = True
     elif output_path.exists() and output_path.stat().st_size > 0:
-        preserved_existing = True
-        if logger:
-            logger.warning(
-                "No pairs found in latest Strategy attempt; preserving existing canonical pair CSV at %s.",
-                output_path,
-            )
+        previous_df = pd.DataFrame()
+        try:
+            previous_df = pd.read_csv(output_path)
+        except Exception:
+            previous_df = pd.DataFrame()
+        canonical_df, previous_excluded_rows = _filter_excluded_pair_rows(previous_df)
+        accumulation_status["excluded_pairs_filtered"] = int(latest_excluded_rows + previous_excluded_rows)
+        if previous_excluded_rows:
+            canonical_df.to_csv(temp_path, index=False)
+            temp_path.replace(output_path)
+            canonical_updated = True
+            if logger:
+                logger.info(
+                    "Removed %d hospital/graveyard pairs from canonical pair CSV at %s.",
+                    previous_excluded_rows,
+                    output_path,
+                )
+        else:
+            preserved_existing = True
+            if logger:
+                logger.warning(
+                    "No pairs found in latest Strategy attempt; preserving existing canonical pair CSV at %s.",
+                    output_path,
+                )
     else:
-        df_coint.to_csv(output_path, index=False)
+        df_canonical_attempt.to_csv(output_path, index=False)
         canonical_updated = True
 
     status = {
@@ -703,39 +786,25 @@ def get_cointegrated_pairs(
     else:
         corr_min = corr_min_filter if fast_path_enabled else 0.0
 
-    # Load graveyard to exclude failed pairs
-    graveyard_pairs = set()
+    # Load pair exclusions so hospital/graveyard pairs do not stay in supply.
+    excluded_pair_reasons = {}
     try:
-        execution_state_path = Path(__file__).resolve().parent.parent / "Execution" / "state" / "pair_strategy_state.json"
-        if execution_state_path.exists():
-            with open(execution_state_path, 'r') as f:
-                exec_state = json.load(f)
-                graveyard = exec_state.get("graveyard", {})
-                for pair_key in graveyard.keys():
-                    graveyard_pairs.add(pair_key)
-                    # Also add reverse
-                    parts = pair_key.split('/')
-                    if len(parts) == 2:
-                        graveyard_pairs.add(f"{parts[1]}/{parts[0]}")
-                logger.info(f"Loaded {len(graveyard)} pairs from graveyard (will exclude from discovery)")
-
-                # Expired hospital entries are already eligible again, but stale state may still contain them.
-                hospital = exec_state.get("hospital", {})
-                now = time.time()
-                expired_hospital_count = 0
-                for pair_key, entry in hospital.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    ts = entry.get("ts", 0)
-                    cooldown = entry.get("cooldown", 3600)
-                    elapsed = now - ts
-                    if elapsed >= cooldown:
-                        expired_hospital_count += 1
-                if expired_hospital_count:
-                    logger.info(
-                        "Found %d expired hospital entries in state (already eligible for discovery).",
-                        expired_hospital_count,
-                    )
+        excluded_pair_reasons, exclusion_counts = _load_pair_exclusion_reasons()
+        if exclusion_counts.get("graveyard"):
+            logger.info(
+                "Loaded %d pairs from graveyard (will exclude from discovery)",
+                exclusion_counts["graveyard"],
+            )
+        if exclusion_counts.get("hospital"):
+            logger.info(
+                "Loaded %d active hospital pairs (will exclude from discovery until cooldown expires)",
+                exclusion_counts["hospital"],
+            )
+        if exclusion_counts.get("expired_hospital"):
+            logger.info(
+                "Found %d expired hospital entries in state (already eligible for discovery).",
+                exclusion_counts["expired_hospital"],
+            )
     except Exception as e:
         logger.warning(f"Could not load graveyard/hospital: {e}")
 
@@ -910,10 +979,12 @@ def get_cointegrated_pairs(
         total_comparisons += 1
         _emit_coint_progress()
 
-        # Skip graveyard pairs
+        # Skip hospital/graveyard pairs
         pair_key = f"{sym_1}/{sym_2}"
-        if pair_key in graveyard_pairs:
-            filtered_breakdown["graveyard"] = filtered_breakdown.get("graveyard", 0) + 1
+        pair_state_key = _normalize_pair_key_text(pair_key)
+        exclusion_reason = excluded_pair_reasons.get(pair_state_key)
+        if exclusion_reason:
+            filtered_breakdown[exclusion_reason] = filtered_breakdown.get(exclusion_reason, 0) + 1
             continue
 
         if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):

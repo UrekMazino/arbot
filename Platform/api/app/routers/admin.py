@@ -33,6 +33,7 @@ from ..services.cointegrated_pairs import (
     get_cointegrated_pair_detail,
     get_pair_supply_status,
     list_cointegrated_pairs,
+    remove_cointegrated_pair,
     start_pair_supply,
     stop_pair_supply,
 )
@@ -311,6 +312,25 @@ def admin_cointegrated_pair_detail(
 ):
     try:
         return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.delete("/cointegrated-pairs")
+def admin_remove_cointegrated_pair(
+    payload: dict = Body(default_factory=dict),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
+):
+    try:
+        return remove_cointegrated_pair(
+            sym_1=str(payload.get("sym_1") or ""),
+            sym_2=str(payload.get("sym_2") or ""),
+            requested_by=user.email,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

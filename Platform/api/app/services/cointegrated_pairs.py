@@ -35,6 +35,8 @@ PRICE_JSON = STRATEGY_OUTPUT_ROOT / "1_price_list.json"
 STATUS_JSON = STRATEGY_OUTPUT_ROOT / "2_cointegrated_pairs_status.json"
 PAIR_SUPPLY_STATE = EXECUTION_STATE_ROOT / "pair_supply_control.json"
 PAIR_SUPPLY_LOG = LOGS_ROOT / "pair_supply_scheduler.log"
+PAIR_STRATEGY_STATE = EXECUTION_STATE_ROOT / "pair_strategy_state.json"
+MANUAL_GRAVEYARD_TTL_DAYS = 7
 
 
 def _safe_float(value: Any) -> float | None:
@@ -111,6 +113,87 @@ def _load_status() -> dict[str, Any]:
 
 def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _unix_now() -> float:
+    return time.time()
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_object(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _normalize_pair_key(sym_1: Any, sym_2: Any) -> str:
+    ticker_1 = str(sym_1 or "").strip().upper()
+    ticker_2 = str(sym_2 or "").strip().upper()
+    if not ticker_1 or not ticker_2:
+        return ""
+    return "/".join(sorted((ticker_1, ticker_2)))
+
+
+def _normalize_pair_key_text(pair_key: Any) -> str:
+    parts = str(pair_key or "").strip().upper().split("/")
+    if len(parts) != 2:
+        return ""
+    return _normalize_pair_key(parts[0], parts[1])
+
+
+def _row_pair_key(row: pd.Series) -> str:
+    return _normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+
+
+def _load_pair_exclusions(now: float | None = None) -> dict[str, str]:
+    now_ts = _unix_now() if now is None else float(now)
+    state = _read_json_object(PAIR_STRATEGY_STATE)
+    excluded: dict[str, str] = {}
+
+    graveyard = state.get("graveyard", {})
+    if isinstance(graveyard, dict):
+        for raw_key in graveyard.keys():
+            key_text = str(raw_key or "")
+            if key_text.startswith("ticker::"):
+                continue
+            pair_key = _normalize_pair_key_text(key_text)
+            if pair_key:
+                excluded[pair_key] = "graveyard"
+
+    hospital = state.get("hospital", {})
+    if isinstance(hospital, dict):
+        for raw_key, entry in hospital.items():
+            pair_key = _normalize_pair_key_text(raw_key)
+            if not pair_key or not isinstance(entry, dict):
+                continue
+            try:
+                ts = float(entry.get("ts") or 0)
+                cooldown = float(entry.get("cooldown") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ts > 0 and cooldown > 0 and now_ts - ts < cooldown:
+                excluded.setdefault(pair_key, "hospital")
+
+    return excluded
+
+
+def _filter_excluded_pairs_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    excluded = _load_pair_exclusions()
+    if df.empty or not excluded:
+        return df.copy(), 0
+    working = df.copy()
+    working["_pair_key"] = working.apply(_row_pair_key, axis=1)
+    before = len(working)
+    working = working[~working["_pair_key"].isin(excluded.keys())].copy()
+    return working.drop(columns=["_pair_key"], errors="ignore"), int(before - len(working))
 
 
 def _parse_iso_timestamp(value: Any) -> datetime | None:
@@ -425,6 +508,15 @@ def _read_pairs_frame() -> pd.DataFrame:
         raise RuntimeError(f"Could not read cointegrated pairs CSV: {exc}") from exc
 
 
+def _count_csv_rows(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        return int(len(pd.read_csv(path)))
+    except Exception:
+        return 0
+
+
 def _pair_id(sym_1: str, sym_2: str) -> str:
     return f"{sym_1}__{sym_2}"
 
@@ -454,6 +546,7 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
     if "sym_1" not in df.columns or "sym_2" not in df.columns:
         raise RuntimeError("Cointegrated pairs CSV is missing sym_1/sym_2 columns.")
 
+    df, excluded_count = _filter_excluded_pairs_frame(df)
     if "zero_crossing" in df.columns:
         df = df.sort_values(by=["zero_crossing"], ascending=[False], kind="stable")
     df = df.head(max(1, min(int(limit), 1000))).copy()
@@ -466,7 +559,103 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
         "price_updated_at": _mtime_iso(PRICE_JSON),
         "status": status,
         "pair_count": len(pairs),
+        "excluded_pair_count": excluded_count,
         "pairs": pairs,
+    }
+
+
+def _write_pairs_frame(df: pd.DataFrame) -> None:
+    COINT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = COINT_CSV.with_name(f".{COINT_CSV.stem}.manual_remove.tmp{COINT_CSV.suffix}")
+    df.to_csv(temp_path, index=False)
+    temp_path.replace(COINT_CSV)
+
+
+def _update_pair_status_after_manual_remove(removed_count: int, pair_key: str, requested_by: str | None) -> None:
+    status = _load_status()
+    status.update(
+        {
+            "updated_at": _utc_iso_now(),
+            "canonical_path": str(COINT_CSV),
+            "canonical_rows": _count_csv_rows(COINT_CSV),
+            "canonical_pairs_rows": _count_csv_rows(COINT_CSV),
+            "manual_removed_pair": pair_key,
+            "manual_removed_rows": int(removed_count),
+            "manual_removed_at": _utc_iso_now(),
+            "manual_removed_by": requested_by or "",
+        }
+    )
+    _write_json_object(STATUS_JSON, status)
+
+    supply_state = _read_supply_state()
+    supply_status = supply_state.get("status")
+    if isinstance(supply_status, dict):
+        rows = _count_csv_rows(COINT_CSV)
+        supply_status["canonical_rows"] = rows
+        supply_status["canonical_pairs_rows"] = rows
+        supply_status["manual_removed_pair"] = pair_key
+        supply_status["manual_removed_rows"] = int(removed_count)
+        supply_status["manual_removed_at"] = status["manual_removed_at"]
+        supply_state["status"] = supply_status
+        _write_supply_state(supply_state)
+
+
+def _move_pair_to_manual_graveyard(sym_1: str, sym_2: str, requested_by: str | None) -> None:
+    pair_key = _normalize_pair_key(sym_1, sym_2)
+    if not pair_key:
+        raise ValueError("sym_1 and sym_2 are required.")
+    state = _read_json_object(PAIR_STRATEGY_STATE)
+    graveyard = state.get("graveyard")
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+    hospital = state.get("hospital")
+    if not isinstance(hospital, dict):
+        hospital = {}
+
+    graveyard[pair_key] = {
+        "ts": _unix_now(),
+        "reason": "manual",
+        "ttl_days": MANUAL_GRAVEYARD_TTL_DAYS,
+        "requested_by": requested_by or "",
+    }
+    hospital.pop(pair_key, None)
+    state["graveyard"] = graveyard
+    state["hospital"] = hospital
+    _write_json_object(PAIR_STRATEGY_STATE, state)
+
+
+def remove_cointegrated_pair(sym_1: str, sym_2: str, requested_by: str | None = None) -> dict[str, Any]:
+    sym_1 = str(sym_1 or "").strip().upper()
+    sym_2 = str(sym_2 or "").strip().upper()
+    pair_key = _normalize_pair_key(sym_1, sym_2)
+    if not pair_key:
+        raise ValueError("sym_1 and sym_2 are required.")
+
+    df = _read_pairs_frame()
+    if "sym_1" not in df.columns or "sym_2" not in df.columns:
+        raise RuntimeError("Cointegrated pairs CSV is missing sym_1/sym_2 columns.")
+
+    _move_pair_to_manual_graveyard(sym_1, sym_2, requested_by=requested_by)
+
+    working = df.copy()
+    working["_pair_key"] = working.apply(_row_pair_key, axis=1)
+    before = len(working)
+    remaining = working[working["_pair_key"] != pair_key].drop(columns=["_pair_key"], errors="ignore").copy()
+    removed_count = int(before - len(remaining))
+    if removed_count:
+        _write_pairs_frame(remaining)
+    _update_pair_status_after_manual_remove(removed_count, pair_key, requested_by)
+
+    return {
+        "ok": True,
+        "removed": removed_count > 0,
+        "removed_rows": removed_count,
+        "pair_key": pair_key,
+        "status": "graveyard",
+        "reason": "manual",
+        "ttl_days": MANUAL_GRAVEYARD_TTL_DAYS,
+        "pair_count": _count_csv_rows(COINT_CSV),
+        "requested_by": requested_by or "",
     }
 
 

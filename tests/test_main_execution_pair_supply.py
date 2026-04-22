@@ -142,6 +142,44 @@ def test_execution_trusts_fresh_remote_pair_supply_state_without_local_pid(monke
     assert status["defer_to_supply"] is True
 
 
+def test_execution_trusts_existing_supplied_pair_universe_rows_when_runner_stopped(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        + "\n".join(
+            [
+                f"AAA{i}-USDT-SWAP,BBB{i}-USDT-SWAP,10000,10000,10000"
+                for i in range(8)
+            ]
+        ),
+        encoding="utf-8",
+    )
+    old = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    _write_supply_state(
+        state_path,
+        {
+            "running": False,
+            "desired_running": False,
+            "detail": "stopped",
+            "updated_at": old,
+            "status": {
+                "canonical_rows": 8,
+                "canonical_path": str(csv_path),
+                "accumulated_supply": True,
+            },
+        },
+    )
+
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATE_FILE", state_path)
+
+    status = me._get_pair_supply_runtime_status()
+
+    assert status["defer_to_supply"] is False
+    assert status["canonical_rows"] == 8
+    assert me._should_trust_pair_universe_candidates(csv_path) is True
+
+
 def test_execution_does_not_defer_to_stale_pair_supply_request(monkeypatch, tmp_path):
     state_path = tmp_path / "pair_supply_control.json"
     old = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()

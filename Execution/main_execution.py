@@ -1266,6 +1266,22 @@ def _read_pair_supply_state():
     return data if isinstance(data, dict) else {}
 
 
+def _pair_supply_canonical_rows(state=None):
+    if state is None:
+        state = _read_pair_supply_state()
+    status = state.get("status") if isinstance(state, dict) else {}
+    if not isinstance(status, dict):
+        return 0
+    for key in ("canonical_rows", "canonical_pairs_rows"):
+        try:
+            rows = int(status.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if rows > 0:
+            return rows
+    return 0
+
+
 def _pid_matches_pair_supply(pid):
     try:
         pid_int = int(pid or 0)
@@ -1373,6 +1389,7 @@ def _get_pair_supply_runtime_status():
         "process_mode": state.get("process_mode") or "",
         "process_owner": state.get("process_owner") or "",
         "runner_heartbeat_at": state.get("runner_heartbeat_at") or "",
+        "canonical_rows": _pair_supply_canonical_rows(state),
     }
 
 
@@ -1544,6 +1561,18 @@ def _csv_has_pair_rows(csv_path):
         return csv_path.exists() and csv_path.stat().st_size > 200
     except Exception:
         return False
+
+
+def _should_trust_pair_universe_candidates(csv_path=None):
+    status = _get_pair_supply_runtime_status()
+    if status.get("defer_to_supply"):
+        return True
+    canonical_rows = int(status.get("canonical_rows") or 0)
+    if canonical_rows <= 0:
+        return False
+    if csv_path is not None and not _csv_has_pair_rows(csv_path):
+        return False
+    return True
 
 
 def _wait_for_pair_supply_csv(csv_path):
@@ -1872,11 +1901,11 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     precheck_limit = _get_switch_precheck_limit()
     precheck_window = _get_switch_precheck_window()
     precheck_cache = {}
-    trust_pair_supply = _should_defer_to_pair_supply()
+    trust_pair_supply = _should_trust_pair_universe_candidates(csv_path)
     if precheck_coint_enabled:
         if trust_pair_supply:
             logger.info(
-                "Pair supply is active; trusting supplied Pair Universe candidates and skipping extra switch coint pre-check."
+                "Pair Universe has supplied candidates; trusting supplied rows and skipping extra switch coint pre-check."
             )
         else:
             logger.info(

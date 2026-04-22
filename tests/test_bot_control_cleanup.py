@@ -56,6 +56,9 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
         _touch_file(logs_root / "index.json", "{}", 150)
         control_log = logs_root / "superadmin_bot_control.log"
         _touch_file(control_log, "control log", 150)
+        _touch_file(logs_root / "superadmin_bot_control.log.1", "control backup", 150)
+        _touch_file(logs_root / "pair_supply_scheduler.log", "pair supply log", 150)
+        _touch_file(logs_root / "pair_supply_scheduler.log.1", "pair supply backup", 150)
         os.utime(old_log_run, (100, 100))
         os.utime(latest_log_run, (200, 200))
 
@@ -107,6 +110,10 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
         monkeypatch.setattr(bot_control, "LOGS_ROOT", logs_root)
         monkeypatch.setattr(bot_control, "REPORTS_ROOT", reports_root)
         monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", control_log)
+        env_file = tmp_path / "Execution" / ".env"
+        env_file.parent.mkdir(parents=True)
+        env_file.write_text("STATBOT_LOG_BACKUPS=2\n", encoding="utf-8")
+        monkeypatch.setattr(bot_control, "ENV_FILE", env_file)
         monkeypatch.setattr(bot_control, "SessionLocal", session_factory)
 
         result = bot_control.clear_logs_and_reports(keep_latest=True)
@@ -114,7 +121,7 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
         expected = {
             "deleted_logs": 1,
             "deleted_reports": 1,
-            "deleted_log_files": 1,
+            "deleted_log_files": 4,
             "deleted_run_rows": 1,
             "deleted_report_rows": 1,
             "deleted_report_files": 1,
@@ -128,6 +135,10 @@ def test_clear_logs_and_reports_removes_old_runs_indexes_and_report_rows(tmp_pat
 
         assert not old_log_run.exists()
         assert latest_log_run.exists()
+        assert not control_log.exists()
+        assert not (logs_root / "superadmin_bot_control.log.1").exists()
+        assert not (logs_root / "pair_supply_scheduler.log").exists()
+        assert not (logs_root / "pair_supply_scheduler.log.1").exists()
         assert not old_report_run.exists()
         assert latest_report_run.exists()
         assert not (logs_root / "index.csv").exists()

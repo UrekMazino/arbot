@@ -1,0 +1,208 @@
+name: okxstatbot-v1
+
+x-backend-env: &backend-env
+  env_file:
+    - ./.env.v1
+  environment:
+    APP_ENV: production
+    DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-okxbot}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-okxbot_v2}
+    REDIS_URL: redis://redis:6379/0
+    CORS_ORIGINS: ${CORS_ORIGINS:-https://example.com}
+    PASSWORD_RESET_LINK_BASE: ${PASSWORD_RESET_LINK_BASE:-https://example.com/reset-password}
+    BOT_CONTROL_WORKSPACE_ROOT: /workspace
+    BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
+    STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+    STATBOT_BOT_PROCESS_MODE: runner
+    STATBOT_PAIR_SUPPLY_PROCESS_MODE: runner
+    STATBOT_PROCESS_OWNER: api
+  volumes:
+    - logs_v1:/workspace/Logs
+    - reports_v1:/workspace/Reports
+    - execution_state_v1:/workspace/Execution/state
+    - strategy_output_v1:/workspace/Strategy/output
+    - strategy_state_v1:/workspace/Strategy/state
+    - ./runtime/Execution.env:/workspace/Execution/.env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - ./.env.v1
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-okxbot_v2}
+      POSTGRES_USER: ${POSTGRES_USER:-okxbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres}
+    volumes:
+      - pgdata_v1:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-okxbot} -d ${POSTGRES_DB:-okxbot_v2}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata_v1:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    <<: *backend-env
+    build:
+      context: ..
+      dockerfile: Platform/Dockerfile.backend
+    image: okxstatbot-backend:v1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-okxbot}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-okxbot_v2}
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://example.com}
+      PASSWORD_RESET_LINK_BASE: ${PASSWORD_RESET_LINK_BASE:-https://example.com/reset-password}
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
+      STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+      STATBOT_BOT_PROCESS_MODE: runner
+      STATBOT_PAIR_SUPPLY_PROCESS_MODE: runner
+      STATBOT_PROCESS_OWNER: api
+    expose:
+      - "8080"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips='*' --timeout-graceful-shutdown 10"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v2/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  bot-runner:
+    <<: *backend-env
+    image: okxstatbot-backend:v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-okxbot}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-okxbot_v2}
+      REDIS_URL: redis://redis:6379/0
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      BOT_CONTROL_COMMAND: python /workspace/Execution/main_execution.py
+      STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+      STATBOT_PROCESS_OWNER: bot-runner
+    command: python -m app.process_runner bot
+
+  pair-supply-runner:
+    <<: *backend-env
+    image: okxstatbot-backend:v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-okxbot}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-okxbot_v2}
+      REDIS_URL: redis://redis:6379/0
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      STATBOT_EVENT_API_BASE: http://api:8080/api/v2
+      STATBOT_PROCESS_OWNER: pair-supply-runner
+    command: python -m app.process_runner pair-supply
+
+  worker:
+    <<: *backend-env
+    image: okxstatbot-backend:v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-okxbot}:${POSTGRES_PASSWORD:-change-me-postgres}@postgres:5432/${POSTGRES_DB:-okxbot_v2}
+      REDIS_URL: redis://redis:6379/0
+    working_dir: /workspace/Platform/worker
+    command: python worker.py
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-/api/v2}
+        NEXT_PUBLIC_WS_BASE: ${NEXT_PUBLIC_WS_BASE:-same-origin}
+    image: okxstatbot-web:v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    environment:
+      PUBLIC_SITE_ADDRESS: ${PUBLIC_SITE_ADDRESS:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data_v1:/data
+      - caddy_config_v1:/config
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    depends_on:
+      - caddy
+    command: tunnel --no-autoupdate --url http://caddy:80
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    restart: unless-stopped
+    profiles:
+      - tools
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-change-me-pgadmin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin_data_v1:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+
+volumes:
+  pgdata_v1:
+  redisdata_v1:
+  logs_v1:
+  reports_v1:
+  execution_state_v1:
+  strategy_output_v1:
+  strategy_state_v1:
+  caddy_data_v1:
+  caddy_config_v1:
+  pgadmin_data_v1:

@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .log_rotation import rotate_log_file_if_needed
+
 
 def _workspace_root() -> Path:
     explicit = str(os.getenv("BOT_CONTROL_WORKSPACE_ROOT", "")).strip()
@@ -406,11 +408,12 @@ def _start_pair_supply_local(requested_by: str | None = None) -> dict[str, Any]:
 
     interval_seconds = _pair_supply_interval_seconds()
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
-    log_handle = PAIR_SUPPLY_LOG.open("a", encoding="utf-8", errors="ignore")
+    rotate_log_file_if_needed(PAIR_SUPPLY_LOG, env_file=EXECUTION_ENV_FILE)
     env = _merged_child_env()
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", str(interval_seconds))
     env.setdefault("STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY", "1")
+    env["STATBOT_PAIR_SUPPLY_LOG_PATH"] = str(PAIR_SUPPLY_LOG)
     command = [sys.executable, str(entrypoint)]
 
     try:
@@ -418,15 +421,13 @@ def _start_pair_supply_local(requested_by: str | None = None) -> dict[str, Any]:
             command,
             cwd=str(WORKSPACE_ROOT),
             env=env,
-            stdout=log_handle,
-            stderr=log_handle,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
     except Exception as exc:
-        log_handle.close()
         return {"running": False, "detail": f"start_failed:{exc}", "command": command}
-    log_handle.close()
 
     state = {
         "running": True,

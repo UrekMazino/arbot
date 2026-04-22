@@ -1,0 +1,39 @@
+.git
+.claude
+.continue
+.pytest_cache
+.tmp
+.venv
+.vscode
+__pycache__
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Secrets and local environment files. Keep examples.
+**/.env
+**/.env.*
+!**/.env.example
+!**/*.env.example
+!Platform/.env.v1.example
+!Platform/runtime/Execution.env.example
+
+# Runtime data
+Logs
+Reports
+Simulation/output
+Execution/state/*.json
+Execution/state/event_spool
+Strategy/output
+Strategy/state/*.json
+
+# Frontend local artifacts
+Platform/web/node_modules
+Platform/web/.next
+Platform/web/*.tsbuildinfo
+
+# Generated/documentation clutter not needed in images
+*.log
+*.pdf
+okx_api_methods.html
+list_http_methods.py

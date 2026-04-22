@@ -48,7 +48,7 @@ export function useDashboardWebSocket(botInstanceId?: string) {
     setConnectionState("connecting");
 
     // Build WebSocket URL
-    const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws/dashboard${botInstanceId ? `?bot_instance_id=${botInstanceId}` : ""}`;
+    const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/dashboard${botInstanceId ? `?bot_instance_id=${botInstanceId}` : ""}`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -92,9 +92,10 @@ export function useDashboardWebSocket(botInstanceId?: string) {
 
   // Connect on mount, auto-reconnect on disconnect via effect
   useEffect(() => {
-    connect();
+    const timer = setTimeout(connect, 0);
 
     return () => {
+      clearTimeout(timer);
       cleanup();
     };
   }, [connect, cleanup]);

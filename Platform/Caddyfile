@@ -1,0 +1,21 @@
+{
+	email {$ACME_EMAIL:}
+}
+
+{$PUBLIC_SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	@api path /api/v2/*
+	reverse_proxy @api api:8080
+
+	@apiws path /api/ws/*
+	handle @apiws {
+		uri strip_prefix /api
+		reverse_proxy api:8080
+	}
+
+	@ws path /ws/*
+	reverse_proxy @ws api:8080
+
+	reverse_proxy web:3000
+}

@@ -42,6 +42,7 @@ from ..models import (
     StrategyMetric,
     Trade,
 )
+from .log_rotation import log_rotation_settings, open_rotating_append_log, rotated_log_paths
 from .run_pair_segments import list_run_pair_history_rows_by_run_key, sync_run_pair_segments_for_event
 
 
@@ -73,6 +74,7 @@ REPORTS_ROOT = WORKSPACE_ROOT / "Reports" / "v1"
 ENV_FILE = EXECUTION_ROOT / ".env"
 STATE_FILE = EXECUTION_ROOT / "state" / "ui_bot_control.json"
 CONTROL_LOG_FILE = LOGS_ROOT / "superadmin_bot_control.log"
+PAIR_SUPPLY_LOG_FILE = LOGS_ROOT / "pair_supply_scheduler.log"
 STARTING_EQUITY_RE = re.compile(r"Starting equity:\s*(?P<eq>[-+]?\d+(?:\.\d+)?)\s*USDT", re.IGNORECASE)
 LOG_TIMESTAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 PAIR_TEXT_PATTERN = r"[A-Z0-9]+-[A-Z]+-SWAP/[A-Z0-9]+-[A-Z]+-SWAP"
@@ -849,7 +851,6 @@ def _resolve_live_tail_target(run_key: str | None) -> tuple[str | None, Path | N
     started_ts = started_at.timestamp() if started_at else 0.0
     should_prefer_control = CONTROL_LOG_FILE.exists() and (
         not latest_log_file
-        or control_mtime >= latest_log_mtime
         or (started_ts > 0 and latest_log_mtime < started_ts)
     )
     if should_prefer_control:
@@ -949,8 +950,6 @@ def _start_bot_local(requested_by: str | None = None) -> dict:
         }
 
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
-    CONTROL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    log_handle = CONTROL_LOG_FILE.open("a", encoding="utf-8", errors="ignore")
 
     env = _normalize_bot_child_env(os.environ.copy())
     # Start the top-level execution manager so exit code 3 can trigger in-process restarts.
@@ -983,19 +982,17 @@ def _start_bot_local(requested_by: str | None = None) -> dict:
             command,
             cwd=str(WORKSPACE_ROOT),
             env=env,
-            stdout=log_handle,
-            stderr=log_handle,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
     except Exception as exc:
-        log_handle.close()
         return {
             "running": False,
             "detail": f"start_failed:{exc}",
             "command": command,
         }
-    log_handle.close()
 
     state = {
         "running": True,
@@ -1826,9 +1823,12 @@ def clear_logs_and_reports(keep_latest: bool = False) -> dict:
                 continue  # Keep the newest
             run_keys_to_delete.add(run_dir.name)
             log_dirs_to_delete.append(run_dir)
-        for path in (CONTROL_LOG_FILE,):
-            if path.exists() and remove_path(path):
-                deleted_log_files += 1
+        aggregate_log_files = [CONTROL_LOG_FILE, LOGS_ROOT / PAIR_SUPPLY_LOG_FILE.name]
+        _max_log_mb, max_backups = log_rotation_settings(ENV_FILE)
+        for path in aggregate_log_files:
+            for candidate in [path, *rotated_log_paths(path, max_backups)]:
+                if candidate.exists() and remove_path(candidate):
+                    deleted_log_files += 1
         deleted_indexes += clear_index_files(LOGS_ROOT)
 
     # Handle reports
@@ -2048,7 +2048,7 @@ def _append_control_log(level: str, message: str) -> None:
         CONTROL_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         ts = _log_now()
         timestamp_text = f"{ts.strftime('%Y-%m-%d %H:%M:%S')},{int(ts.microsecond / 1000):03d}"
-        with CONTROL_LOG_FILE.open("a", encoding="utf-8", errors="ignore") as handle:
+        with open_rotating_append_log(CONTROL_LOG_FILE, env_file=ENV_FILE) as handle:
             handle.write(f"{timestamp_text} {str(level or 'INFO').upper()} {message}\n")
     except Exception:
         pass

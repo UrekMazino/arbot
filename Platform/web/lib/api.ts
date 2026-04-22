@@ -457,7 +457,27 @@ export type PairSupplyStatus = {
   status?: Record<string, unknown>;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8082/api/v2";
+function resolveApiBase(): string {
+  const configured = String(process.env.NEXT_PUBLIC_API_BASE || "").trim();
+  if (!configured || configured.toLowerCase() === "same-origin") {
+    return "/api/v2";
+  }
+  return configured;
+}
+
+function resolveWsBase(): string {
+  const configured = String(process.env.NEXT_PUBLIC_WS_BASE || "").trim();
+  if (configured && configured.toLowerCase() !== "same-origin") {
+    return configured;
+  }
+  if (typeof window === "undefined") {
+    return "ws://127.0.0.1:8082";
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}`;
+}
+
+const API_BASE = resolveApiBase();
 
 async function apiRequest<T>(
   path: string,
@@ -902,7 +922,7 @@ export function apiRootUrl(): string {
 }
 
 export function wsDashboardUrl(botInstanceId: string): string {
-  const wsBase = process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8082";
+  const wsBase = resolveWsBase();
   const encoded = encodeURIComponent(botInstanceId);
   return `${wsBase}/ws/dashboard?bot_instance_id=${encoded}`;
 }

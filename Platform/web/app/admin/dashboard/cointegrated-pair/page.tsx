@@ -502,7 +502,9 @@ export default function CointegratedPairPage() {
                 <button
                   type="button"
                   className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                  onClick={refreshCatalog}
+                  onClick={() => {
+                    void refreshCatalog();
+                  }}
                   disabled={pairsLoading}
                   aria-label="Refresh pair universe"
                   title="Refresh pair universe"

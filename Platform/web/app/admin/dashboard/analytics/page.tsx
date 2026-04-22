@@ -228,7 +228,11 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     if (!showLive) return;
-    const wsUrl = `${process.env.NEXT_PUBLIC_WS_BASE || "ws://127.0.0.1:8082"}/ws/dashboard`;
+    const wsBase =
+      process.env.NEXT_PUBLIC_WS_BASE && process.env.NEXT_PUBLIC_WS_BASE !== "same-origin"
+        ? process.env.NEXT_PUBLIC_WS_BASE
+        : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+    const wsUrl = `${wsBase}/ws/dashboard`;
     const w = new WebSocket(wsUrl);
     w.onmessage = (evt) => {
       try {
@@ -305,6 +309,12 @@ export default function AnalyticsPage() {
       auth={auth}
     >
       <div className="space-y-6">
+        {error ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+            {error}
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap gap-4">
           <select
             className={UI_CLASSES.input}

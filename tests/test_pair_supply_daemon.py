@@ -45,3 +45,17 @@ def test_pair_supply_daemon_execution_env_interval_overrides_process_default(mon
     daemon._load_execution_env()
 
     assert daemon._pair_supply_interval_seconds() == 0
+
+
+def test_pair_supply_daemon_rotates_scheduler_log(monkeypatch, tmp_path):
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    log_path.write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
+
+    monkeypatch.setenv("STATBOT_PAIR_SUPPLY_LOG_PATH", str(log_path))
+    monkeypatch.setenv("STATBOT_LOG_MAX_MB", "1")
+    monkeypatch.setenv("STATBOT_LOG_BACKUPS", "1")
+
+    daemon._write_log_line("new line")
+
+    assert log_path.read_text(encoding="utf-8") == "new line\n"
+    assert (tmp_path / "pair_supply_scheduler.log.1").exists()

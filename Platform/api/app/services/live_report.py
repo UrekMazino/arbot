@@ -151,6 +151,49 @@ def _build_trade_rows_from_models(trades: list[Trade], event_lookup: dict[tuple[
     return trade_rows
 
 
+def _build_open_trade_rows_from_models(trades: list[Trade]) -> list[dict]:
+    open_rows: list[dict] = []
+    for trade in trades:
+        open_rows.append(
+            {
+                "timestamp": _coerce_timestamp(trade.entry_ts),
+                "pair": str(trade.pair_key or "").strip(),
+                "side": str(trade.side or "").strip(),
+                "entry_ts": _coerce_timestamp(trade.entry_ts),
+                "entry_z": _coerce_float(trade.entry_z),
+                "strategy": str(trade.strategy or "").strip(),
+                "regime": str(trade.regime or "").strip(),
+                "entry_strategy": str(trade.entry_strategy or "").strip(),
+                "entry_regime": str(trade.entry_regime or "").strip(),
+                "entry_z_threshold_used": _coerce_float(trade.entry_z_threshold_used),
+                "size_multiplier_used": _coerce_float(trade.size_multiplier_used),
+            }
+        )
+    return open_rows
+
+
+def _build_open_trade_rows_from_events(rows: list[RunEvent]) -> list[dict]:
+    open_rows: list[dict] = []
+    for row in rows:
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        open_rows.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "side": str(payload.get("side") or "").strip(),
+                "entry_ts": str(payload.get("entry_ts") or "").strip(),
+                "entry_z": _coerce_float(payload.get("entry_z")),
+                "strategy": str(payload.get("strategy") or "").strip(),
+                "regime": str(payload.get("regime") or "").strip(),
+                "entry_strategy": str(payload.get("entry_strategy") or "").strip(),
+                "entry_regime": str(payload.get("entry_regime") or "").strip(),
+                "entry_z_threshold_used": _coerce_float(payload.get("entry_z_threshold_used")),
+                "size_multiplier_used": _coerce_float(payload.get("size_multiplier_used")),
+            }
+        )
+    return open_rows
+
+
 def _derive_strategy_metrics_from_trades(trade_rows: list[dict]) -> list[dict]:
     aggregates: dict[str, dict[str, float]] = defaultdict(
         lambda: {
@@ -524,12 +567,19 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         .where(RunEvent.run_id == run.id, RunEvent.event_type == "trade_close")
         .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
     ).scalars().all()
-    trade_event_lookup = _trade_event_lookup(trade_close_events)
-    model_trades = db.execute(
-        select(Trade)
-        .where(Trade.run_id == run.id, Trade.exit_ts.is_not(None))
-        .order_by(Trade.exit_ts.asc(), Trade.id.asc())
+    trade_open_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "trade_open")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
     ).scalars().all()
+    trade_event_lookup = _trade_event_lookup(trade_close_events)
+    all_model_trades = db.execute(
+        select(Trade)
+        .where(Trade.run_id == run.id)
+        .order_by(Trade.entry_ts.asc(), Trade.exit_ts.asc(), Trade.id.asc())
+    ).scalars().all()
+    model_trades = [trade for trade in all_model_trades if trade.exit_ts is not None]
+    open_model_trades = [trade for trade in all_model_trades if trade.exit_ts is None]
 
     if model_trades:
         trade_rows = _build_trade_rows_from_models(model_trades, trade_event_lookup)
@@ -537,6 +587,9 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     else:
         trade_rows = _build_trade_rows_from_events(trade_close_events)
         trades_source = "trade_close_events"
+    open_trade_rows = _build_open_trade_rows_from_models(open_model_trades)
+    if not open_trade_rows and trade_open_events and len(trade_open_events) > len(trade_rows):
+        open_trade_rows = _build_open_trade_rows_from_events(trade_open_events[len(trade_rows):])
 
     liquidity_check_events = db.execute(
         select(RunEvent)
@@ -592,8 +645,11 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
             wins += 1
         elif pnl_usdt < 0:
             losses += 1
-    trades_total = len(trade_rows)
-    win_rate_pct = round((wins / trades_total) * 100.0, 2) if trades_total > 0 else None
+    closed_trades_total = len(trade_rows)
+    open_trades_total = len(open_trade_rows)
+    trade_opens_total = max(len(trade_open_events), len(all_model_trades), closed_trades_total)
+    trades_total = max(trade_opens_total, closed_trades_total + open_trades_total)
+    win_rate_pct = round((wins / closed_trades_total) * 100.0, 2) if closed_trades_total > 0 else None
 
     pair_switches = 0
     gate_blocks = 0
@@ -704,6 +760,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "runtime": "events_db",
         "equity_curve": "equity_snapshots" if equity_snapshot_rows else "heartbeat_events" if equity_curve else "none",
         "trades": trades_source,
+        "open_trades": "trades_table" if open_model_trades else "trade_open_events" if open_trade_rows else "none",
         "config": config_source,
         "strategy_metrics": strategy_metrics_source,
         "regime_metrics": regime_metrics_source,
@@ -736,9 +793,13 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "pair_switches": pair_switches,
         "gate_blocks": gate_blocks,
         "trades_total": trades_total,
+        "trade_opens_total": trade_opens_total,
+        "open_trades_total": open_trades_total,
+        "closed_trades_total": closed_trades_total,
         "wins": wins,
         "losses": losses,
         "win_rate_pct": win_rate_pct,
+        "win_rate_basis": "closed_trades",
         "strategy_metric_rows": len(strategy_metric_rows),
         "regime_metric_rows": len(regime_metric_rows),
         "position_snapshot_rows": len(position_snapshot_rows),
@@ -757,6 +818,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     equity_curve_path = report_dir / "equity_curve.csv"
     pair_history_path = report_dir / "pair_history.csv"
     trade_closes_path = report_dir / "trade_closes.csv"
+    open_trades_path = report_dir / "open_trades.csv"
     event_counts_path = report_dir / "event_counts.json"
     config_snapshot_path = report_dir / "config_snapshot.json"
     strategy_metrics_path = report_dir / "strategy_metrics.csv"
@@ -821,6 +883,23 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
             "session_pnl_pct",
         ],
     )
+    _write_csv(
+        open_trades_path,
+        open_trade_rows,
+        [
+            "timestamp",
+            "pair",
+            "side",
+            "entry_ts",
+            "entry_z",
+            "strategy",
+            "regime",
+            "entry_strategy",
+            "entry_regime",
+            "entry_z_threshold_used",
+            "size_multiplier_used",
+        ],
+    )
 
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     event_counts_path.write_text(
@@ -839,6 +918,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         _artifact(equity_curve_path, "csv", len(equity_curve)),
         _artifact(pair_history_path, "csv", len(pair_history_rows)),
         _artifact(trade_closes_path, "csv", len(trade_rows)),
+        _artifact(open_trades_path, "csv", len(open_trade_rows)),
         _artifact(event_counts_path, "json", len(event_counts)),
     ]
 

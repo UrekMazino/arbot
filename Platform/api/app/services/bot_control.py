@@ -23,7 +23,7 @@ try:
 except ImportError:  # pragma: no cover - Python < 3.9 fallback
     ZoneInfo = None
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
@@ -1592,9 +1592,10 @@ def _report_file_sort_key(name: str) -> tuple[int, str]:
         "summary.json": 0,
         "report_manifest.json": 1,
         "trade_closes.csv": 2,
-        "pair_history.csv": 3,
-        "equity_curve.csv": 4,
-        "event_counts.json": 5,
+        "open_trades.csv": 3,
+        "pair_history.csv": 4,
+        "equity_curve.csv": 5,
+        "event_counts.json": 6,
     }
     return priority.get(name, 100), name.lower()
 
@@ -1608,6 +1609,21 @@ def get_report_run_summary(db: Session, run_key: str) -> dict:
     report_dir = _resolve_run_directory(REPORTS_ROOT, selected)
     summary_path = report_dir / "summary.json" if report_dir else None
     manifest_path = report_dir / "report_manifest.json" if report_dir else None
+    db_changed_after_summary = False
+    if run and summary_path is not None and summary_path.exists():
+        latest_event_created_at = db.execute(
+            select(func.max(RunEvent.created_at)).where(RunEvent.run_id == run.id)
+        ).scalar_one_or_none()
+        if latest_event_created_at is not None:
+            if latest_event_created_at.tzinfo is None:
+                latest_event_created_at = latest_event_created_at.replace(tzinfo=timezone.utc)
+            else:
+                latest_event_created_at = latest_event_created_at.astimezone(timezone.utc)
+            try:
+                summary_mtime = datetime.fromtimestamp(summary_path.stat().st_mtime, tz=timezone.utc)
+                db_changed_after_summary = latest_event_created_at.timestamp() > (summary_mtime.timestamp() + 0.5)
+            except Exception:
+                db_changed_after_summary = True
     should_refresh = bool(
         run and (
             run.status == "running"
@@ -1615,6 +1631,7 @@ def get_report_run_summary(db: Session, run_key: str) -> dict:
             or not summary_path.exists()
             or manifest_path is None
             or not manifest_path.exists()
+            or db_changed_after_summary
         )
     )
     refreshed = False

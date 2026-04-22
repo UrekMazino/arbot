@@ -523,6 +523,10 @@ export default function AdminConsolePage() {
     [logRuns, reportRuns],
   );
   const reportSummary = reportViewerData?.summary ?? null;
+  const reportTradesTotal = readRecordNumber(reportSummary, "trades_total");
+  const reportClosedTradesTotal = readRecordNumber(reportSummary, "closed_trades_total") ?? reportTradesTotal;
+  const reportOpenTradesTotal = readRecordNumber(reportSummary, "open_trades_total") ?? 0;
+  const reportTradeOpensTotal = readRecordNumber(reportSummary, "trade_opens_total") ?? reportTradesTotal;
   const reportDataSources = useMemo(() => {
     const dataSources = readRecordObject(reportSummary, "data_sources");
     return Object.entries(dataSources || {});
@@ -1814,9 +1818,11 @@ export default function AdminConsolePage() {
                       <article className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Trades</p>
                         <p className="mt-2 font-mono text-lg font-semibold text-gray-900 dark:text-white">
-                          {fmtNumber(readRecordNumber(reportSummary, "trades_total"), 0)}
+                          {fmtNumber(reportTradesTotal, 0)}
                         </p>
                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {fmtNumber(reportClosedTradesTotal, 0)} closed / {fmtNumber(reportOpenTradesTotal, 0)} open
+                          {" | "}
                           Win rate {fmtPercent(readRecordNumber(reportSummary, "win_rate_pct"))}
                         </p>
                       </article>
@@ -1871,12 +1877,24 @@ export default function AdminConsolePage() {
                           <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{reportViewerData.report_source || "n/a"}</p>
                         </div>
                         <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Wins</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Closed Wins</p>
                           <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(readRecordNumber(reportSummary, "wins"), 0)}</p>
                         </div>
                         <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Losses</p>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Closed Losses</p>
                           <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(readRecordNumber(reportSummary, "losses"), 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Trade Opens</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(reportTradeOpensTotal, 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Open Trades</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(reportOpenTradesTotal, 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Closed Trades</p>
+                          <p className="mt-1 text-sm text-gray-900 dark:text-white/90">{fmtNumber(reportClosedTradesTotal, 0)}</p>
                         </div>
                         <div>
                           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Updated At</p>

@@ -89,6 +89,14 @@ def test_adaptive_persistence_rejects_when_qualified_count_is_too_low(monkeypatc
     assert "qualified=2/4" in reason
 
 
+def test_adaptive_persistence_reports_below_threshold_separately(monkeypatch):
+    signal, reason = _run_signal(monkeypatch, [0.71, 0.78, 0.89, 0.98])
+
+    assert signal is None
+    assert "below entry threshold" in reason
+    assert "need=+/-1.95" in reason
+
+
 def test_adaptive_persistence_waits_for_clean_bars_after_extreme(monkeypatch):
     signal, reason = _run_signal(monkeypatch, [3.68, 3.68, 2.62, 2.66])
 

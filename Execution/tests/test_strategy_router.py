@@ -68,6 +68,14 @@ class TestStrategyRouter(unittest.TestCase):
         "STATBOT_STRATEGY_MIN_HOLD_SECONDS",
         "STATBOT_STRATEGY_CONFIRM_COUNT",
         "STATBOT_STRATEGY_ALLOW_SWITCH_IN_POSITION",
+        "STATBOT_ENTRY_Z",
+        "STATBOT_ENTRY_Z_MAX",
+        "STATBOT_MIN_PERSIST_BARS",
+        "STATBOT_STRATEGY_MR_ENTRY_Z",
+        "STATBOT_STRATEGY_MR_ENTRY_Z_MAX",
+        "STATBOT_STRATEGY_MR_MIN_PERSIST",
+        "STATBOT_STRATEGY_MR_SIZE_MULT",
+        "STATBOT_STRATEGY_MR_MIN_LIQ_RATIO",
         "STATBOT_STRATEGY_TREND_ENABLE_MEAN_SHIFT_GATE",
         "STATBOT_STRATEGY_TREND_MEAN_SHORT_WINDOW",
         "STATBOT_STRATEGY_TREND_MEAN_LONG_WINDOW",
@@ -111,6 +119,21 @@ class TestStrategyRouter(unittest.TestCase):
         decision_risk = router.evaluate(_input(ts=1010.0, regime="RISK_OFF"))
         self.assertEqual(decision_risk.active_strategy, "DEFENSIVE")
         self.assertFalse(decision_risk.allow_new_entries)
+
+    def test_mr_profile_follows_base_entry_env_when_router_active(self):
+        os.environ["STATBOT_ENTRY_Z"] = "1.9"
+        os.environ["STATBOT_ENTRY_Z_MAX"] = "2.8"
+        os.environ["STATBOT_MIN_PERSIST_BARS"] = "3"
+
+        store = _MemoryStateStore()
+        router = StrategyRouter(state_store=store)
+
+        decision = router.evaluate(_input(ts=1000.0, regime="RANGE"))
+
+        self.assertEqual(decision.active_strategy, "STATARB_MR")
+        self.assertEqual(decision.entry_z, 1.9)
+        self.assertEqual(decision.entry_z_max, 2.8)
+        self.assertEqual(decision.min_persist_bars, 3)
 
     def test_pending_switch_while_in_position(self):
         store = _MemoryStateStore()

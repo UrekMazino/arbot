@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import math
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,11 @@ from typing import Iterable
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from shared_cointegration_validator import calculate_zscore_series
+
 DEFAULT_PRICE_JSON = ROOT_DIR / "Strategy" / "output" / "1_price_list.json"
 DEFAULT_PAIRS_CSV = ROOT_DIR / "Strategy" / "output" / "2_cointegrated_pairs.csv"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "Simulation" / "output"
@@ -168,18 +174,10 @@ def _align_series(
 
 
 def _rolling_zscore(values: list[float], window: int) -> list[float | None]:
-    zscores: list[float | None] = [None] * len(values)
     if window < 2:
         window = 2
-    for idx in range(window - 1, len(values)):
-        sample = values[idx - window + 1 : idx + 1]
-        avg = sum(sample) / len(sample)
-        variance = sum((item - avg) ** 2 for item in sample) / len(sample)
-        std = math.sqrt(variance)
-        if std <= 0:
-            continue
-        zscores[idx] = (values[idx] - avg) / std
-    return zscores
+    zscores = calculate_zscore_series(values, window=window)
+    return [float(value) if math.isfinite(float(value)) else None for value in zscores]
 
 
 def _format_timestamp(raw_ts: int) -> str:

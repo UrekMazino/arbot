@@ -1089,7 +1089,11 @@ def generate_signal(
                     f"clean={clean_bars}, tolerance={tolerance:.2f}, history: {rounded_history})",
                 )
 
-            return None, f"No entry - Z-score not persistent (history: {rounded_history})"
+            return (
+                None,
+                f"No entry - below entry threshold "
+                f"(current_z={current_z:.2f}, need=+/-{entry_floor:.2f}, history: {rounded_history})",
+            )
         else:
             return None, (
                 f"Insufficient history: {len(persistence_history)} cycles < "
@@ -1600,7 +1604,10 @@ def manage_new_trades(
                 logger.warning("Failed to log pre-trade balance snapshot: %s", exc)
             _ENTRY_BALANCE_SNAPSHOT_LOGGED = True
     else:
-        logger.info(
+        entry_floor = _entry_band_floor(effective_entry_z, ENTRY_Z_TOLERANCE)
+        below_entry_threshold = abs(latest_zscore) < entry_floor
+        reject_log = logger.debug if below_entry_threshold else logger.info
+        reject_log(
             "STRATEGY_ENTRY_REJECT: strategy=%s reason=%s entry_z=%.2f min_persist=%d coint=%d",
             strategy_name,
             reason,
@@ -1608,20 +1615,20 @@ def manage_new_trades(
             effective_min_persist_bars,
             int(coint_flag),
         )
-        _emit_entry_reject(
-            "strategy_gate",
-            reason,
-            pair=_active_pair_key(),
-            strategy=strategy_name,
-            regime=regime_name,
-            entry_z=latest_zscore,
-            required_entry_z=effective_entry_z,
-            min_persist_bars=effective_min_persist_bars,
-            coint_flag=int(coint_flag),
-        )
+        if not below_entry_threshold:
+            _emit_entry_reject(
+                "strategy_gate",
+                reason,
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                entry_z=latest_zscore,
+                required_entry_z=effective_entry_z,
+                min_persist_bars=effective_min_persist_bars,
+                coint_flag=int(coint_flag),
+            )
         # Log waiting status
-        entry_floor = _entry_band_floor(effective_entry_z, ENTRY_Z_TOLERANCE)
-        if abs(latest_zscore) < entry_floor:
+        if below_entry_threshold:
             _log_waiting("⏳ WAITING: Not at entry threshold yet")
         else:
             # It's beyond threshold but not persistent yet

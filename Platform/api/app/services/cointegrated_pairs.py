@@ -31,7 +31,7 @@ WORKSPACE_ROOT = _workspace_root()
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from shared_cointegration_validator import calculate_zscore_series, count_mean_reversion_crossings  # noqa: E402
+from shared_cointegration_validator import calculate_zscore_series, mean_reversion_crossing_indices  # noqa: E402
 
 STRATEGY_OUTPUT_ROOT = WORKSPACE_ROOT / "Strategy" / "output"
 EXECUTION_STATE_ROOT = WORKSPACE_ROOT / "Execution" / "state"
@@ -764,10 +764,12 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
     zscore_window = min(_env_int("STATBOT_STRATEGY_Z_SCORE_WINDOW", 60, minimum=2), max(len(spread), 2))
     zscores = calculate_zscore_series(spread, window=zscore_window)
     finite_zscores = [float(value) for value in zscores if np.isfinite(value)]
-    zero_crossing_window = count_mean_reversion_crossings(
+    crossing_indices = mean_reversion_crossing_indices(
         spread,
         threshold_ratio=_env_float("STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO", 0.1, minimum=0.0),
     )
+    crossing_index_set = set(crossing_indices)
+    crossing_labels = {idx: order for order, idx in enumerate(crossing_indices, start=1)}
 
     base_1 = prices_1[0] if prices_1[0] else 1.0
     base_2 = prices_2[0] if prices_2[0] else 1.0
@@ -784,6 +786,8 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
                 "spread": float(spread[idx]),
                 "spread_mean": spread_mean,
                 "zscore": float(zscores[idx]) if idx < len(zscores) and np.isfinite(zscores[idx]) else None,
+                "crossing_spread": float(spread[idx]) if idx in crossing_index_set else None,
+                "crossing_label": f"#{crossing_labels[idx]}" if idx in crossing_labels else None,
                 "z_upper": 2.0,
                 "z_lower": -2.0,
                 "z_mid": 0.0,
@@ -802,7 +806,7 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
             "spread_std": spread_std,
             "zscore_current": finite_zscores[-1] if finite_zscores else None,
             "zscore_window": int(zscore_window),
-            "zero_crossing_window": int(zero_crossing_window),
+            "zero_crossing_window": len(crossing_indices),
             "price_1_current": float(prices_1[-1]) if len(prices_1) else None,
             "price_2_current": float(prices_2[-1]) if len(prices_2) else None,
         },

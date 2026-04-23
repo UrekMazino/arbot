@@ -258,6 +258,39 @@ function PairUniverseCharts({
             <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
             <Legend />
             <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} />
+            <Line
+              yAxisId="spread"
+              type="monotone"
+              dataKey="spread_mean"
+              name="Spread mean"
+              stroke="#64748b"
+              strokeDasharray="3 6"
+              strokeWidth={1}
+              dot={false}
+            />
+            <Line
+              yAxisId="spread"
+              type="linear"
+              dataKey="crossing_spread"
+              name="Chart crossing"
+              legendType="circle"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={{
+                r: fullscreen ? 5 : 4,
+                fill: "#facc15",
+                stroke: "#0f172a",
+                strokeWidth: 1.8,
+              }}
+              activeDot={{
+                r: fullscreen ? 7 : 6,
+                fill: "#facc15",
+                stroke: "#fef3c7",
+                strokeWidth: 2,
+              }}
+              isAnimationActive={false}
+            />
             <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} />
             <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} />
             <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} />

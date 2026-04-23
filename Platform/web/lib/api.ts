@@ -469,6 +469,8 @@ export type CointegratedPairPoint = {
   spread: number;
   spread_mean: number;
   zscore: number | null;
+  crossing_spread?: number | null;
+  crossing_label?: string | null;
   z_upper: number;
   z_lower: number;
   z_mid: number;

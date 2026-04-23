@@ -44,10 +44,10 @@ def calculate_zscore_series(spread, window):
     return zscore.astype(float).values
 
 
-def count_spread_zero_crossings(spread, threshold=None, threshold_ratio=0.1):
+def spread_zero_crossing_indices(spread, threshold=None, threshold_ratio=0.1):
     spread_series = pd.Series(spread, dtype=float).dropna()
     if len(spread_series) < 2:
-        return 0
+        return []
 
     if threshold is None:
         try:
@@ -57,27 +57,46 @@ def count_spread_zero_crossings(spread, threshold=None, threshold_ratio=0.1):
 
     values = spread_series.to_numpy(dtype=float)
     signs = np.where(values > threshold, 1, np.where(values < -threshold, -1, 0))
-    directional_signs = signs[signs != 0]
-    if len(directional_signs) < 2:
-        return 0
+    directional = []
+    for pos, (idx, sign) in enumerate(zip(spread_series.index, signs)):
+        if sign == 0:
+            continue
+        marker_idx = int(idx) if isinstance(idx, (int, np.integer)) else pos
+        directional.append((marker_idx, int(sign)))
+    if len(directional) < 2:
+        return []
 
     # Ignore neutral/deadband samples between regimes. A normal crossing often
     # moves +spread -> neutral -> -spread over several bars; requiring an
     # immediate +threshold to -threshold jump undercounts mean reversion.
-    return int(np.count_nonzero(directional_signs[1:] != directional_signs[:-1]))
+    crossings = []
+    previous_sign = directional[0][1]
+    for idx, sign in directional[1:]:
+        if sign != previous_sign:
+            crossings.append(idx)
+        previous_sign = sign
+    return crossings
 
 
-def count_mean_reversion_crossings(spread, threshold=None, threshold_ratio=0.1):
+def count_spread_zero_crossings(spread, threshold=None, threshold_ratio=0.1):
+    return len(spread_zero_crossing_indices(spread, threshold=threshold, threshold_ratio=threshold_ratio))
+
+
+def mean_reversion_crossing_indices(spread, threshold=None, threshold_ratio=0.1):
     spread_series = pd.Series(spread, dtype=float).dropna()
     if len(spread_series) < 2:
-        return 0
+        return []
 
     centered_spread = spread_series - float(spread_series.mean())
-    return count_spread_zero_crossings(
+    return spread_zero_crossing_indices(
         centered_spread,
         threshold=threshold,
         threshold_ratio=threshold_ratio,
     )
+
+
+def count_mean_reversion_crossings(spread, threshold=None, threshold_ratio=0.1):
+    return len(mean_reversion_crossing_indices(spread, threshold=threshold, threshold_ratio=threshold_ratio))
 
 
 def evaluate_cointegration(

@@ -26,6 +26,7 @@ def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
 
 def test_pair_doctor_ui_refresh_seconds_defaults_to_twenty(monkeypatch):
     monkeypatch.delenv("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS", raising=False)
+    monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", Path("missing-test.env"))
 
     assert cp._pair_doctor_ui_refresh_seconds() == 20
 
@@ -96,6 +97,8 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     monkeypatch.setattr(cp, "PRICE_JSON", price_json)
     monkeypatch.setattr(cp, "STATUS_JSON", status_json)
     monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", tmp_path / "pair_strategy_state.json")
+    monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", tmp_path / "missing.env")
+    monkeypatch.delenv("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS", raising=False)
     monkeypatch.setenv("STATBOT_STRATEGY_Z_SCORE_WINDOW", "3")
     monkeypatch.setenv("STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO", "0.1")
 

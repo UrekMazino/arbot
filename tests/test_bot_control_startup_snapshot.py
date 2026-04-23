@@ -3,16 +3,21 @@ from __future__ import annotations
 import json
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from Platform.api.app.database import Base
+from Platform.api.app.models import BotInstance, EquitySnapshot, Run, RunEvent, Trade
 from Platform.api.app.routers import events
 from Platform.api.app.services import bot_control
 
@@ -48,6 +53,16 @@ class _FakeSession:
 
     def close(self):
         return None
+
+
+def _build_session_factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    return engine, sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def test_tail_run_log_reads_and_persists_starting_equity_from_log_header(tmp_path, monkeypatch):
@@ -503,3 +518,98 @@ def test_manual_switch_blocked_when_runtime_reports_position(tmp_path, monkeypat
     assert "position/orders" in exc_info.value.result["detail"]
     assert not manual_switch_file.exists()
     assert "Manual pair switch blocked" in control_log.read_text(encoding="utf-8")
+
+
+def test_manual_switch_blockers_ignore_stale_open_trade_after_trade_close_event():
+    engine, session_factory = _build_session_factory()
+    db = session_factory()
+    try:
+        pair_key = "XRP-USDT-SWAP/SUI-USDT-SWAP"
+        start_ts = datetime(2026, 4, 23, 8, 0, tzinfo=timezone.utc)
+        close_ts = start_ts + timedelta(minutes=4)
+        bot = BotInstance(id="bot-1", name="default", environment="demo", is_active=True)
+        run = Run(id="run-1", bot_instance_id=bot.id, run_key="run_01_20260423_080000", status="running", start_ts=start_ts)
+        db.add_all(
+            [
+                bot,
+                run,
+                Trade(run_id=run.id, pair_key=pair_key, entry_ts=start_ts + timedelta(minutes=1)),
+                RunEvent(
+                    event_id="evt-close-1",
+                    run_id=run.id,
+                    bot_instance_id=bot.id,
+                    ts=close_ts,
+                    event_type="trade_close",
+                    severity="info",
+                    payload_json={"pair": pair_key, "in_position": False},
+                ),
+            ]
+        )
+        db.commit()
+
+        blockers = bot_control._manual_switch_blockers(db, run, bot_running=True)
+
+        assert blockers == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_manual_switch_blockers_ignore_stale_open_trade_after_flat_equity_snapshot():
+    engine, session_factory = _build_session_factory()
+    db = session_factory()
+    try:
+        pair_key = "XRP-USDT-SWAP/SUI-USDT-SWAP"
+        start_ts = datetime(2026, 4, 23, 9, 0, tzinfo=timezone.utc)
+        flat_ts = start_ts + timedelta(minutes=6)
+        bot = BotInstance(id="bot-2", name="default-2", environment="demo", is_active=True)
+        run = Run(id="run-2", bot_instance_id=bot.id, run_key="run_02_20260423_090000", status="running", start_ts=start_ts)
+        db.add_all(
+            [
+                bot,
+                run,
+                Trade(run_id=run.id, pair_key=pair_key, entry_ts=start_ts + timedelta(minutes=1)),
+                EquitySnapshot(
+                    run_id=run.id,
+                    ts=flat_ts,
+                    equity_usdt=1000,
+                    current_pair=pair_key,
+                    in_position=False,
+                    source="heartbeat",
+                    source_event_id="eq-flat-1",
+                ),
+            ]
+        )
+        db.commit()
+
+        blockers = bot_control._manual_switch_blockers(db, run, bot_running=True)
+
+        assert blockers == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_manual_switch_blockers_keep_open_trade_without_flat_runtime_evidence():
+    engine, session_factory = _build_session_factory()
+    db = session_factory()
+    try:
+        pair_key = "XRP-USDT-SWAP/SUI-USDT-SWAP"
+        start_ts = datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc)
+        bot = BotInstance(id="bot-3", name="default-3", environment="demo", is_active=True)
+        run = Run(id="run-3", bot_instance_id=bot.id, run_key="run_03_20260423_100000", status="running", start_ts=start_ts)
+        db.add_all(
+            [
+                bot,
+                run,
+                Trade(run_id=run.id, pair_key=pair_key, entry_ts=start_ts + timedelta(minutes=1)),
+            ]
+        )
+        db.commit()
+
+        blockers = bot_control._manual_switch_blockers(db, run, bot_running=True)
+
+        assert blockers == [f"Open trade record exists for {pair_key}; wait for it to close before switching."]
+    finally:
+        db.close()
+        engine.dispose()

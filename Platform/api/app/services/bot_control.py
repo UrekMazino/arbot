@@ -2093,6 +2093,52 @@ def _latest_event_payload(db: Session, run_id: str, event_type: str) -> dict:
     return {}
 
 
+def _latest_event_row(db: Session, run_id: str, event_type: str) -> RunEvent | None:
+    return db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type == event_type)
+        .order_by(RunEvent.ts.desc(), RunEvent.created_at.desc(), RunEvent.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _as_utc_dt(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _ts_is_at_or_after(candidate: datetime | None, reference: datetime | None) -> bool:
+    candidate_utc = _as_utc_dt(candidate)
+    reference_utc = _as_utc_dt(reference)
+    if candidate_utc is None:
+        return False
+    if reference_utc is None:
+        return True
+    return candidate_utc >= reference_utc
+
+
+def _latest_trade_close_ts(db: Session, run_id: str, pair_key: str | None = None) -> datetime | None:
+    rows = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type == "trade_close")
+        .order_by(RunEvent.ts.desc(), RunEvent.created_at.desc(), RunEvent.id.desc())
+    ).scalars().all()
+    for row in rows:
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        raw_pair = str(payload.get("pair") or payload.get("current_pair") or "").strip().upper()
+        event_pair = raw_pair
+        if "/" in raw_pair:
+            left, right = raw_pair.split("/", 1)
+            event_pair = _pair_key(left, right) or raw_pair
+        if pair_key and (not event_pair or event_pair != pair_key):
+            continue
+        return _as_utc_dt(row.ts)
+    return None
+
+
 def _manual_switch_blockers(db: Session, run: Run | None, *, bot_running: bool) -> list[str]:
     if run is None:
         return []
@@ -2108,7 +2154,8 @@ def _manual_switch_blockers(db: Session, run: Run | None, *, bot_running: bool) 
         pair = str(latest_equity.current_pair or "").strip() or "the active pair"
         blockers.append(f"Latest runtime snapshot reports an open position/order on {pair}.")
 
-    heartbeat_payload = _latest_event_payload(db, run.id, "heartbeat")
+    latest_heartbeat_row = _latest_event_row(db, run.id, "heartbeat")
+    heartbeat_payload = latest_heartbeat_row.payload_json if latest_heartbeat_row and isinstance(latest_heartbeat_row.payload_json, dict) else {}
     if bool(heartbeat_payload.get("in_position")):
         pair = str(heartbeat_payload.get("current_pair") or heartbeat_payload.get("pair") or "").strip() or "the active pair"
         blockers.append(f"Latest heartbeat reports the bot is still in position/orders on {pair}.")
@@ -2120,7 +2167,13 @@ def _manual_switch_blockers(db: Session, run: Run | None, *, bot_running: bool) 
         .limit(1)
     ).scalar_one_or_none()
     if open_trade is not None and (bot_running or str(run.status or "").strip().lower() == "running"):
-        blockers.append(f"Open trade record exists for {open_trade.pair_key}; wait for it to close before switching.")
+        flat_runtime_after_trade = (
+            (latest_equity is not None and not bool(latest_equity.in_position) and _ts_is_at_or_after(latest_equity.ts, open_trade.entry_ts))
+            or (latest_heartbeat_row is not None and not bool(heartbeat_payload.get("in_position")) and _ts_is_at_or_after(latest_heartbeat_row.ts, open_trade.entry_ts))
+            or _ts_is_at_or_after(_latest_trade_close_ts(db, run.id, open_trade.pair_key), open_trade.entry_ts)
+        )
+        if not flat_runtime_after_trade:
+            blockers.append(f"Open trade record exists for {open_trade.pair_key}; wait for it to close before switching.")
 
     return list(dict.fromkeys(blockers))
 

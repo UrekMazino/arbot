@@ -105,6 +105,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   HOSPITAL_COOLDOWN_SECONDS: { description: "Cooldown time in seconds for pairs in hospital", default: "3600" },
   STRATEGY_REFRESH_SLEEP_SECONDS: { description: "Sleep seconds between retry attempts when execution refreshes Strategy for replacement pairs", default: "5" },
   PAIR_SUPPLY_WAIT_SECONDS: { description: "Sleep seconds between execution checks while waiting for active continuous pair supply", default: "5" },
+  PAIR_DOCTOR_UI_REFRESH_SECONDS: { description: "Seconds between dashboard background refreshes while Pair Doctor is enabled", default: "20" },
   // Strategy settings (exposed ones)
   STRATEGY_TIMEFRAME: { description: "Strategy candle timeframe used for discovery scans", default: "1m" },
   STRATEGY_Z_SCORE_WINDOW: { description: "Rolling window used for Strategy-side Z-score analytics", default: "60" },
@@ -256,6 +257,7 @@ const BOT_SETTING_GROUPS: SettingGroupDefinition[] = [
       "STATBOT_HOSPITAL_COOLDOWN_SECONDS",
       "STATBOT_STRATEGY_REFRESH_SLEEP_SECONDS",
       "STATBOT_PAIR_SUPPLY_WAIT_SECONDS",
+      "STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS",
       "STATBOT_MAX_CONSECUTIVE_LOSSES",
       "STATBOT_COINT_GATE_THRESHOLD",
       "STATBOT_COINT_WATCH_GATE_THRESHOLD",

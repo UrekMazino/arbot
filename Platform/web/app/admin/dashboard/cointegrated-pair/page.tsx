@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   CartesianGrid,
@@ -105,6 +105,54 @@ function pairMatches(pair: CointegratedPair, query: string): boolean {
   if (!query.trim()) return true;
   const haystack = `${pair.sym_1} ${pair.sym_2} ${pair.pair}`.toLowerCase();
   return haystack.includes(query.trim().toLowerCase());
+}
+
+function sameStringArray(left?: string[], right?: string[]): boolean {
+  const a = left || [];
+  const b = right || [];
+  if (a.length !== b.length) return false;
+  for (let idx = 0; idx < a.length; idx += 1) {
+    if (a[idx] !== b[idx]) return false;
+  }
+  return true;
+}
+
+function samePairSnapshot(left: CointegratedPair, right: CointegratedPair): boolean {
+  return (
+    left.id === right.id &&
+    left.rank === right.rank &&
+    left.sym_1 === right.sym_1 &&
+    left.sym_2 === right.sym_2 &&
+    left.pair === right.pair &&
+    left.p_value === right.p_value &&
+    left.adf_stat === right.adf_stat &&
+    left.hedge_ratio === right.hedge_ratio &&
+    left.zero_crossing === right.zero_crossing &&
+    left.min_capital_per_leg === right.min_capital_per_leg &&
+    left.min_equity_recommended === right.min_equity_recommended &&
+    left.pair_liquidity_min === right.pair_liquidity_min &&
+    left.pair_order_capacity_usdt === right.pair_order_capacity_usdt &&
+    left.curator_score === right.curator_score &&
+    left.curator_status === right.curator_status &&
+    left.curator_recommendation === right.curator_recommendation &&
+    left.curator_priority_rank === right.curator_priority_rank &&
+    left.curator_checked_at === right.curator_checked_at &&
+    sameStringArray(left.curator_reasons, right.curator_reasons)
+  );
+}
+
+function mergeCatalogSnapshot(
+  current: CointegratedPairsResponse | null,
+  incoming: CointegratedPairsResponse,
+): CointegratedPairsResponse {
+  if (!current) return incoming;
+  const currentPairs = new Map(current.pairs.map((pair) => [pair.id, pair]));
+  const mergedPairs = incoming.pairs.map((pair) => {
+    const existing = currentPairs.get(pair.id);
+    if (!existing) return pair;
+    return samePairSnapshot(existing, pair) ? existing : { ...existing, ...pair, curator_reasons: pair.curator_reasons || [] };
+  });
+  return { ...current, ...incoming, pairs: mergedPairs };
 }
 
 function pairButtonClass(active: boolean): string {
@@ -263,6 +311,11 @@ function PairUniverseCharts({
   const headingClass = fullscreen
     ? "mb-3 text-sm font-semibold text-white/90"
     : "mb-2 text-sm font-semibold text-gray-800 dark:text-white/90";
+  const lineAnimation = {
+    isAnimationActive: true,
+    animationDuration: fullscreen ? 850 : 700,
+    animationEasing: "ease-in-out" as const,
+  };
 
   return (
     <div className={fullscreen ? "space-y-10" : "space-y-8"}>
@@ -275,8 +328,8 @@ function PairUniverseCharts({
             <YAxis tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
             <Legend />
-            <Line type="monotone" dataKey="price_1_norm" name={selectedPair.sym_1} stroke="#2563eb" strokeWidth={2.5} dot={false} />
-            <Line type="monotone" dataKey="price_2_norm" name={selectedPair.sym_2} stroke="#14b8a6" strokeWidth={2.5} dot={false} />
+            <Line type="monotone" dataKey="price_1_norm" name={selectedPair.sym_1} stroke="#2563eb" strokeWidth={2.5} dot={false} {...lineAnimation} />
+            <Line type="monotone" dataKey="price_2_norm" name={selectedPair.sym_2} stroke="#14b8a6" strokeWidth={2.5} dot={false} {...lineAnimation} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -291,7 +344,7 @@ function PairUniverseCharts({
             <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
             <Legend />
-            <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} />
+            <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} {...lineAnimation} />
             <Line
               yAxisId="spread"
               type="monotone"
@@ -301,6 +354,7 @@ function PairUniverseCharts({
               strokeDasharray="3 6"
               strokeWidth={1}
               dot={false}
+              {...lineAnimation}
             />
             <Line
               yAxisId="spread"
@@ -325,10 +379,10 @@ function PairUniverseCharts({
               }}
               isAnimationActive={false}
             />
-            <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} />
-            <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} />
-            <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} />
-            <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} />
+            <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} {...lineAnimation} />
+            <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} {...lineAnimation} />
+            <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} {...lineAnimation} />
+            <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} {...lineAnimation} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -342,6 +396,7 @@ export default function CointegratedPairPage() {
   const [user, setUser] = useState<UserRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [pairsLoading, setPairsLoading] = useState(false);
+  const [pairsRefreshing, setPairsRefreshing] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CointegratedPairsResponse | null>(null);
@@ -358,6 +413,10 @@ export default function CointegratedPairPage() {
   const [showGraph, setShowGraph] = useState(true);
   const [query, setQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const refreshInFlightRef = useRef(false);
+  const detailRefreshInFlightRef = useRef(false);
+  const detailRequestIdRef = useRef(0);
+  const foregroundDetailRequestIdRef = useRef(0);
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
   const auth = useMemo(() => ({ email: getStoredAdminEmail(), hasToken: true }), []);
@@ -410,35 +469,6 @@ export default function CointegratedPairPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedPair) {
-      setDetail(null);
-      setGraphFullscreen(false);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      await Promise.resolve();
-      if (cancelled) return;
-      setDetailLoading(true);
-      setError(null);
-      try {
-        const data = await getCointegratedPairDetail(selectedPair.sym_1, selectedPair.sym_2, 720);
-        if (!cancelled) setDetail(data);
-      } catch (err) {
-        if (cancelled) return;
-        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load selected pair graph");
-        setDetail(null);
-      } finally {
-        if (!cancelled) setDetailLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedPair]);
-
-  useEffect(() => {
     if (!graphFullscreen) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -456,10 +486,6 @@ export default function CointegratedPairPage() {
     () => (catalog?.pairs || []).filter((pair) => pairMatches(pair, query)),
     [catalog, query],
   );
-
-  if (loading) {
-    return <div className="p-8 text-center text-gray-500">Loading...</div>;
-  }
 
   const activeHref = "/admin/dashboard/cointegrated-pair";
   const status = catalog?.status;
@@ -481,6 +507,9 @@ export default function CointegratedPairPage() {
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const pairDoctorEnabled = catalog?.curator?.enabled ?? false;
+  const pairDoctorRefreshSeconds = Math.max(5, Number(catalog?.pair_doctor_ui_refresh_seconds || 20) || 20);
+  const selectedSym1 = selectedPair?.sym_1 || "";
+  const selectedSym2 = selectedPair?.sym_2 || "";
   const activeKey = activePairKey(pairsHealth?.active_pair);
   const supplyTargetRunning = supplyStatus?.desired_running ?? supplyStatus?.running ?? false;
   const supplyTransitioning = Boolean(
@@ -495,27 +524,106 @@ export default function CointegratedPairPage() {
         ? "Stop Supply"
         : "Start Supply";
 
-  async function refreshCatalog(options: { removedPairId?: string } = {}) {
-    setPairsLoading(true);
-    setError(null);
+  const loadPairDetail = useCallback(async (sym1: string, sym2: string, options: { background?: boolean } = {}) => {
+    const background = Boolean(options.background);
+    if (background && detailRefreshInFlightRef.current) return;
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
+    if (background) {
+      detailRefreshInFlightRef.current = true;
+    } else {
+      foregroundDetailRequestIdRef.current = requestId;
+      setDetailLoading(true);
+      setError(null);
+    }
+    try {
+      const data = await getCointegratedPairDetail(sym1, sym2, 720);
+      if (detailRequestIdRef.current !== requestId) return;
+      setDetail(data);
+    } catch (err) {
+      if (detailRequestIdRef.current !== requestId) return;
+      if (!background) {
+        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load selected pair graph");
+        setDetail(null);
+      }
+    } finally {
+      if (background) {
+        detailRefreshInFlightRef.current = false;
+      } else if (foregroundDetailRequestIdRef.current === requestId) {
+        setDetailLoading(false);
+      }
+    }
+  }, []);
+
+  const refreshCatalog = useCallback(async (options: { removedPairId?: string; background?: boolean; refreshDetail?: boolean } = {}) => {
+    if (refreshInFlightRef.current) return;
+    const background = Boolean(options.background);
+    refreshInFlightRef.current = true;
+    if (!background) {
+      setPairsRefreshing(true);
+      setError(null);
+    }
     try {
       const [data, supply, health] = await Promise.all([
         getCointegratedPairs(500),
         getPairSupplyStatus().catch(() => null),
         getAdminPairsHealth().catch(() => null),
       ]);
-      setCatalog(data);
+      setCatalog((current) => mergeCatalogSnapshot(current, data));
       setSupplyStatus(supply);
       setPairsHealth(health);
+      let nextSelectedPair: CointegratedPair | null = null;
       setSelectedPair((current) => {
         if (!current || current.id === options.removedPairId) return data.pairs[0] || null;
-        return data.pairs.find((pair) => pair.id === current.id) || data.pairs[0] || null;
+        nextSelectedPair = data.pairs.find((pair) => pair.id === current.id) || data.pairs[0] || null;
+        return nextSelectedPair;
       });
+      if (!nextSelectedPair && data.pairs.length) {
+        nextSelectedPair = data.pairs[0] || null;
+      }
+      if (nextSelectedPair) {
+        setDetail((current) =>
+          current && current.pair.id === nextSelectedPair?.id
+            ? { ...current, pair: nextSelectedPair }
+            : current,
+        );
+      }
+      if (options.refreshDetail && nextSelectedPair) {
+        void loadPairDetail(nextSelectedPair.sym_1, nextSelectedPair.sym_2, { background });
+      }
     } catch (err) {
-      setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to refresh cointegrated pairs");
+      if (!background || !catalog) {
+        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to refresh cointegrated pairs");
+      }
     } finally {
-      setPairsLoading(false);
+      refreshInFlightRef.current = false;
+      if (!background) {
+        setPairsRefreshing(false);
+      }
     }
+  }, [catalog, loadPairDetail]);
+
+  useEffect(() => {
+    if (!selectedSym1 || !selectedSym2) {
+      setDetail(null);
+      setGraphFullscreen(false);
+      return;
+    }
+    void loadPairDetail(selectedSym1, selectedSym2);
+  }, [loadPairDetail, selectedSym1, selectedSym2]);
+
+  useEffect(() => {
+    if (!pairDoctorEnabled) return;
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      if (doctorBusy || supplyBusy || switchBusyPairId || removeBusyPairId) return;
+      void refreshCatalog({ background: true, refreshDetail: true });
+    }, pairDoctorRefreshSeconds * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [doctorBusy, pairDoctorEnabled, pairDoctorRefreshSeconds, refreshCatalog, removeBusyPairId, supplyBusy, switchBusyPairId]);
+
+  if (loading) {
+    return <div className="p-8 text-center text-gray-500">Loading...</div>;
   }
 
   async function togglePairSupply() {
@@ -546,7 +654,7 @@ export default function CointegratedPairPage() {
     setError(null);
     try {
       await setPairCuratorEnabled(enabled);
-      await refreshCatalog();
+      await refreshCatalog({ refreshDetail: true });
     } catch (err) {
       setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to update Pair Doctor");
     } finally {
@@ -565,7 +673,7 @@ export default function CointegratedPairPage() {
     setError(null);
     try {
       await removeCointegratedPair(pair.sym_1, pair.sym_2);
-      await refreshCatalog({ removedPairId: pair.id });
+      await refreshCatalog({ removedPairId: pair.id, refreshDetail: true });
     } catch (err) {
       setError(isUnauthorizedError(err) ? "Unauthorized" : cleanApiMessage(err, "Failed to remove pair"));
     } finally {
@@ -708,10 +816,10 @@ export default function CointegratedPairPage() {
         >
           <PanelCard
             title="Pair Universe"
-            subtitle="Grid/list view of the canonical pair supply. Search still works even when Strategy preserves a previous scan."
+            subtitle="Co-integrated pairs reserved"
             titleRight={
-              <div className="ml-auto flex max-w-[18.5rem] flex-col items-end gap-2">
-                <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
+              <div className="ml-auto flex max-w-full flex-col items-end gap-1.5">
+                <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5 sm:flex-nowrap">
                   <span
                     className={[
                       "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.06em]",
@@ -726,15 +834,15 @@ export default function CointegratedPairPage() {
                     type="button"
                     className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
                     onClick={() => {
-                      void refreshCatalog();
+                      void refreshCatalog({ refreshDetail: true });
                     }}
-                    disabled={pairsLoading}
+                    disabled={pairsLoading || pairsRefreshing}
                     aria-label="Refresh pair universe"
                     title="Refresh pair universe"
                   >
                     <svg
                       aria-hidden="true"
-                      className={pairsLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"}
+                      className={pairsLoading || pairsRefreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"}
                       viewBox="0 0 20 20"
                       fill="none"
                       stroke="currentColor"
@@ -758,14 +866,12 @@ export default function CointegratedPairPage() {
                   >
                     {showGraph ? "Hide Graph" : "Show Graph"}
                   </button>
-                </div>
-                <div className="flex w-[7.25rem] shrink-0 flex-col items-stretch gap-1.5">
                   <button
                     type="button"
                     className={
                       supplyTargetRunning
-                        ? "inline-flex h-9 items-center justify-center rounded-xl border border-error-300 bg-error-50 px-3 text-sm font-medium text-error-700 hover:bg-error-100 disabled:opacity-70 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400"
-                        : `${UI_CLASSES.primaryButton} h-9 justify-center px-3`
+                        ? "inline-flex h-10 min-w-[8.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-xl border border-error-300 bg-error-50 px-4 text-sm font-semibold leading-none text-error-700 hover:bg-error-100 disabled:opacity-70 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400"
+                        : "inline-flex h-10 min-w-[8.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-xl bg-brand-500 px-4 text-sm font-semibold leading-none text-white hover:bg-brand-600 disabled:opacity-70"
                     }
                     onClick={togglePairSupply}
                     disabled={supplyBusy || !canManageSupply}
@@ -773,19 +879,19 @@ export default function CointegratedPairPage() {
                   >
                     {supplyButtonLabel}
                   </button>
-                  <label className="inline-flex cursor-pointer select-none items-center justify-center gap-1.5 text-[11px] font-medium leading-none text-gray-500 disabled:cursor-not-allowed dark:text-gray-400">
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
-                      checked={pairDoctorEnabled}
-                      disabled={doctorBusy || !canManageSupply}
-                      onChange={(event) => {
-                        void togglePairDoctor(event.target.checked);
-                      }}
-                    />
-                    <span>Pair Doctor</span>
-                  </label>
                 </div>
+                <label className="inline-flex cursor-pointer select-none items-center justify-end gap-1.5 text-[11px] font-medium leading-none text-gray-500 disabled:cursor-not-allowed dark:text-gray-400">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                    checked={pairDoctorEnabled}
+                    disabled={doctorBusy || !canManageSupply}
+                    onChange={(event) => {
+                      void togglePairDoctor(event.target.checked);
+                    }}
+                  />
+                  <span>Pair Doctor</span>
+                </label>
               </div>
             }
           >
@@ -815,14 +921,19 @@ export default function CointegratedPairPage() {
               </div>
             </div>
 
-            {pairsLoading ? (
+            {pairsLoading && !catalog ? (
               <ChartEmpty message="Loading pair universe..." />
             ) : error && !catalog ? (
               <ChartEmpty message={error} />
             ) : !filteredPairs.length ? (
               <ChartEmpty message="No pairs match the current search." />
             ) : viewMode === "grid" ? (
-              <div className="grid max-h-[38rem] grid-cols-1 gap-2.5 overflow-auto pr-1 custom-scrollbar sm:grid-cols-2">
+              <div
+                className="grid max-h-[38rem] gap-2.5 overflow-auto pr-1 custom-scrollbar"
+                style={{
+                  gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${showGraph ? "18rem" : "15.75rem"}), 1fr))`,
+                }}
+              >
                 {filteredPairs.map((pair) => {
                   const isActive = activeKey === pair.pair;
                   const isSwitching = switchBusyPairId === pair.id;

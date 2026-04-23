@@ -24,6 +24,22 @@ def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
     assert cp._pair_supply_interval_seconds() == 0
 
 
+def test_pair_doctor_ui_refresh_seconds_defaults_to_twenty(monkeypatch):
+    monkeypatch.delenv("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS", raising=False)
+
+    assert cp._pair_doctor_ui_refresh_seconds() == 20
+
+
+def test_pair_doctor_ui_refresh_seconds_reads_execution_env(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS=33\n", encoding="utf-8")
+
+    monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", env_file)
+    monkeypatch.delenv("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS", raising=False)
+
+    assert cp._pair_doctor_ui_refresh_seconds() == 33
+
+
 def test_pair_supply_child_env_includes_execution_env(monkeypatch, tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=0\n", encoding="utf-8")
@@ -87,6 +103,7 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     detail = cp.get_cointegrated_pair_detail("AAA-USDT-SWAP", "BBB-USDT-SWAP", limit=50)
 
     assert catalog["pair_count"] == 1
+    assert catalog["pair_doctor_ui_refresh_seconds"] == 20
     assert catalog["status"]["preserved_existing"] is True
     assert catalog["pairs"][0]["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
     assert detail["pair"]["zero_crossing"] == 7

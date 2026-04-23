@@ -448,6 +448,7 @@ export type CointegratedPairsResponse = {
   updated_at: string | null;
   price_updated_at: string | null;
   curator_updated_at?: string | null;
+  pair_doctor_ui_refresh_seconds?: number;
   status: Record<string, unknown>;
   curator?: {
     enabled?: boolean;

@@ -447,6 +447,10 @@ def _pair_supply_interval_seconds() -> int:
     return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=0)
 
 
+def _pair_doctor_ui_refresh_seconds() -> int:
+    return _env_int("STATBOT_PAIR_DOCTOR_UI_REFRESH_SECONDS", 20, minimum=5)
+
+
 def get_pair_supply_status() -> dict[str, Any]:
     state = _read_supply_state()
     pid = int(state.get("pid") or 0)
@@ -707,6 +711,7 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
             "pair_count": curator_report.get("pair_count") if isinstance(curator_report, dict) else 0,
             "status_counts": curator_report.get("status_counts") if isinstance(curator_report, dict) else {},
         },
+        "pair_doctor_ui_refresh_seconds": _pair_doctor_ui_refresh_seconds(),
         "pair_count": len(pairs),
         "excluded_pair_count": excluded_count,
         "unusable_liquidity_pair_count": unusable_liquidity_count,

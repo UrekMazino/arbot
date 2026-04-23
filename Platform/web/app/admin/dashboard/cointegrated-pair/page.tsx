@@ -710,8 +710,8 @@ export default function CointegratedPairPage() {
             title="Pair Universe"
             subtitle="Grid/list view of the canonical pair supply. Search still works even when Strategy preserves a previous scan."
             titleRight={
-              <div className="flex max-w-full items-start justify-end gap-2">
-                <div className="flex flex-wrap items-center justify-end gap-1.5 pt-0.5">
+              <div className="ml-auto flex max-w-[18.5rem] flex-col items-end gap-2">
+                <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
                   <span
                     className={[
                       "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.06em]",
@@ -759,7 +759,7 @@ export default function CointegratedPairPage() {
                     {showGraph ? "Hide Graph" : "Show Graph"}
                   </button>
                 </div>
-                <div className="flex w-[7.25rem] shrink-0 flex-col items-stretch gap-1">
+                <div className="flex w-[7.25rem] shrink-0 flex-col items-stretch gap-1.5">
                   <button
                     type="button"
                     className={

@@ -450,7 +450,9 @@ export type CointegratedPairsResponse = {
   curator_updated_at?: string | null;
   status: Record<string, unknown>;
   curator?: {
+    enabled?: boolean;
     running?: boolean;
+    desired_running?: boolean;
     pair_count?: number;
     status_counts?: Record<string, number>;
   };
@@ -524,6 +526,20 @@ export type PairSupplyStatus = {
   interval_seconds?: number;
   log_file?: string;
   status?: Record<string, unknown>;
+};
+
+export type PairCuratorStatus = {
+  enabled: boolean;
+  running: boolean;
+  desired_running?: boolean;
+  pid: number;
+  detail?: string;
+  updated_at?: string | null;
+  last_run_at?: string | null;
+  stopped_at?: string | null;
+  interval_seconds?: number | null;
+  pair_count?: number;
+  status_counts?: Record<string, number>;
 };
 
 function resolveApiBase(): string {
@@ -840,6 +856,13 @@ export async function removeCointegratedPair(sym1: string, sym2: string): Promis
 
 export async function getPairSupplyStatus(): Promise<PairSupplyStatus> {
   return apiRequest<PairSupplyStatus>("/admin/cointegrated-pairs/supply/status", { method: "GET" });
+}
+
+export async function setPairCuratorEnabled(enabled: boolean): Promise<PairCuratorStatus> {
+  return apiRequest<PairCuratorStatus>("/admin/cointegrated-pairs/curator/enabled", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 export async function startPairSupply(): Promise<PairSupplyStatus> {

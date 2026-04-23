@@ -182,12 +182,23 @@ def _curator_pair_meta(pair_key: str, report: dict[str, Any] | None = None) -> d
     return item if isinstance(item, dict) else {}
 
 
+def _curator_enabled(state: dict[str, Any] | None = None) -> bool:
+    source = state if isinstance(state, dict) else _load_curator_state()
+    if "desired_running" in source:
+        return bool(source.get("desired_running"))
+    if "enabled" in source:
+        return bool(source.get("enabled"))
+    return _env_bool("STATBOT_PAIR_CURATOR_ENABLED", True)
+
+
 def get_pair_curator_status() -> dict[str, Any]:
     report = _load_curator_report()
     state = _load_curator_state()
+    enabled = _curator_enabled(state)
     return {
+        "enabled": enabled,
         "running": bool(state.get("running")),
-        "desired_running": bool(state.get("desired_running")),
+        "desired_running": enabled,
         "pid": int(state.get("pid") or 0),
         "detail": state.get("detail") or "",
         "updated_at": report.get("updated_at") or state.get("updated_at"),
@@ -201,6 +212,21 @@ def get_pair_curator_status() -> dict[str, Any]:
         "top_pairs": report.get("top_pairs") or [],
         "settings": report.get("settings") or {},
     }
+
+
+def set_pair_curator_enabled(enabled: bool, requested_by: str | None = None) -> dict[str, Any]:
+    state = _load_curator_state()
+    state.update(
+        {
+            "enabled": bool(enabled),
+            "desired_running": bool(enabled),
+            "requested_by": requested_by or state.get("requested_by", ""),
+            "request_updated_at": _utc_iso_now(),
+            "detail": "enabled" if enabled else "disabled",
+        }
+    )
+    _write_json_object(PAIR_CURATOR_STATE, state)
+    return get_pair_curator_status()
 
 
 def _load_pair_exclusions(now: float | None = None) -> dict[str, str]:
@@ -401,6 +427,20 @@ def _env_float(name: str, default: float, minimum: float | None = None) -> float
     if minimum is not None and value < minimum:
         value = minimum
     return value
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        raw = _read_execution_env_settings().get(name)
+    if raw in (None, ""):
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
 
 
 def _pair_supply_interval_seconds() -> int:
@@ -631,7 +671,9 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
 
     df, excluded_count = _filter_excluded_pairs_frame(df)
     df, unusable_liquidity_count = _filter_unusable_liquidity_pairs_frame(df)
-    curator_report = _load_curator_report()
+    curator_state = _load_curator_state()
+    curator_enabled = _curator_enabled(curator_state)
+    curator_report = _load_curator_report() if curator_enabled else {}
     curator_pairs = _curator_pairs_by_key(curator_report)
     if curator_pairs:
         df = df.copy()
@@ -659,7 +701,9 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
         "curator_updated_at": curator_report.get("updated_at") if isinstance(curator_report, dict) else None,
         "status": status,
         "curator": {
-            "running": bool(_load_curator_state().get("running")),
+            "enabled": curator_enabled,
+            "running": bool(curator_state.get("running")),
+            "desired_running": curator_enabled,
             "pair_count": curator_report.get("pair_count") if isinstance(curator_report, dict) else 0,
             "status_counts": curator_report.get("status_counts") if isinstance(curator_report, dict) else {},
         },

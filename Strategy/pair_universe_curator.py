@@ -507,7 +507,9 @@ def _handle_stop(signum, _frame) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
     _log(f"stop_requested signal={signum}")
-    _write_state(running=False, desired_running=False, stopped_at=_utc_iso_now(), detail="stop_requested")
+    state = _read_json_object(CURATOR_STATE_JSON)
+    desired = bool(state.get("desired_running", _env_flag("STATBOT_PAIR_CURATOR_ENABLED", True)))
+    _write_state(running=False, desired_running=desired, stopped_at=_utc_iso_now(), detail="stop_requested")
 
 
 def _sleep_interruptibly(seconds: int) -> None:
@@ -521,26 +523,31 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_stop)
 
     interval = _env_int("STATBOT_PAIR_CURATOR_INTERVAL_SECONDS", 60, minimum=5)
-    enabled = _env_flag("STATBOT_PAIR_CURATOR_ENABLED", True)
-    if not enabled:
-        _write_state(running=False, desired_running=False, detail="disabled")
-        _log("disabled")
-        return 0
+    default_enabled = _env_flag("STATBOT_PAIR_CURATOR_ENABLED", True)
+    initial_state = _read_json_object(CURATOR_STATE_JSON)
+    desired_enabled = bool(initial_state.get("desired_running", initial_state.get("enabled", default_enabled)))
 
     _write_state(
         running=True,
-        desired_running=True,
+        enabled=desired_enabled,
+        desired_running=desired_enabled,
         pid=os.getpid(),
         started_at=_utc_iso_now(),
         stopped_at=None,
         interval_seconds=interval,
         report_file=str(CURATOR_REPORT_JSON),
         log_file=str(Path(str(os.getenv("STATBOT_PAIR_CURATOR_LOG_PATH") or CURATOR_LOG))),
-        detail="started",
+        detail="started" if desired_enabled else "disabled",
     )
     _log(f"starting interval={interval}s")
 
     while not STOP_REQUESTED:
+        state = _read_json_object(CURATOR_STATE_JSON)
+        desired_enabled = bool(state.get("desired_running", state.get("enabled", default_enabled)))
+        if not desired_enabled:
+            _write_state(running=True, enabled=False, desired_running=False, detail="disabled")
+            _sleep_interruptibly(interval)
+            continue
         try:
             report = run_curator_once()
             _log(
@@ -553,7 +560,9 @@ def main() -> int:
             _log(f"scan_failed error={exc}")
         _sleep_interruptibly(interval)
 
-    _write_state(running=False, desired_running=False, stopped_at=_utc_iso_now(), detail="stopped")
+    state = _read_json_object(CURATOR_STATE_JSON)
+    desired_enabled = bool(state.get("desired_running", state.get("enabled", default_enabled)))
+    _write_state(running=False, desired_running=desired_enabled, stopped_at=_utc_iso_now(), detail="stopped")
     _log("stopped")
     return 0
 

@@ -27,6 +27,7 @@ import {
   getPairSupplyStatus,
   isUnauthorizedError,
   removeCointegratedPair,
+  setPairCuratorEnabled,
   switchAdminActivePair,
   startPairSupply,
   stopPairSupply,
@@ -155,6 +156,17 @@ function curatorReason(pair: CointegratedPair): string {
   const reasons = pair.curator_reasons || [];
   if (!reasons.length) return pair.curator_recommendation || "No curator notes yet";
   return reasons.slice(0, 2).map((reason) => reason.replace(/_/g, " ")).join(", ");
+}
+
+function pairMiniPillClass(tone: "success" | "warn" | "error" | "info" | "neutral"): string {
+  const toneClasses = {
+    success: "border-success-700/50 bg-success-950/35 text-success-300",
+    warn: "border-warning-700/50 bg-warning-950/35 text-warning-300",
+    error: "border-error-700/50 bg-error-950/35 text-error-300",
+    info: "border-blue-light-700/50 bg-blue-light-950/35 text-blue-light-300",
+    neutral: "border-gray-700 bg-gray-900/70 text-gray-300",
+  };
+  return `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.05em] ${toneClasses[tone]}`;
 }
 
 function SwitchIcon({ spinning = false }: { spinning?: boolean }) {
@@ -336,12 +348,14 @@ export default function CointegratedPairPage() {
   const [pairsHealth, setPairsHealth] = useState<AdminPairsHealth | null>(null);
   const [supplyStatus, setSupplyStatus] = useState<PairSupplyStatus | null>(null);
   const [supplyBusy, setSupplyBusy] = useState(false);
+  const [doctorBusy, setDoctorBusy] = useState(false);
   const [switchBusyPairId, setSwitchBusyPairId] = useState<string | null>(null);
   const [removeBusyPairId, setRemoveBusyPairId] = useState<string | null>(null);
   const [switchModal, setSwitchModal] = useState<{ title: string; message: string } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
+  const [showGraph, setShowGraph] = useState(true);
   const [query, setQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
@@ -466,6 +480,7 @@ export default function CointegratedPairPage() {
   const chartData = detail?.points || [];
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
+  const pairDoctorEnabled = catalog?.curator?.enabled ?? false;
   const activeKey = activePairKey(pairsHealth?.active_pair);
   const supplyTargetRunning = supplyStatus?.desired_running ?? supplyStatus?.running ?? false;
   const supplyTransitioning = Boolean(
@@ -522,6 +537,20 @@ export default function CointegratedPairPage() {
       setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to update pair supply process");
     } finally {
       setSupplyBusy(false);
+    }
+  }
+
+  async function togglePairDoctor(enabled: boolean) {
+    if (!canManageSupply) return;
+    setDoctorBusy(true);
+    setError(null);
+    try {
+      await setPairCuratorEnabled(enabled);
+      await refreshCatalog();
+    } catch (err) {
+      setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to update Pair Doctor");
+    } finally {
+      setDoctorBusy(false);
     }
   }
 
@@ -653,13 +682,15 @@ export default function CointegratedPairPage() {
           />
           <MetricCard
             label="Curator"
-            value={catalog?.curator?.running ? "Running" : catalog?.curator_updated_at ? "Scored" : "Pending"}
+            value={!pairDoctorEnabled ? "Disabled" : catalog?.curator?.running ? "Running" : catalog?.curator_updated_at ? "Scored" : "Pending"}
             hint={
-              catalog?.curator_updated_at
+              !pairDoctorEnabled
+                ? "Pair Doctor unchecked"
+                : catalog?.curator_updated_at
                 ? `${curatorHealthyCount} healthy, ${curatorWatchCount} watch`
                 : "Waiting for first advisory scan"
             }
-            tone={curatorWatchCount > 0 ? "amber" : catalog?.curator_updated_at ? "teal" : "violet"}
+            tone={!pairDoctorEnabled ? "violet" : curatorWatchCount > 0 ? "amber" : catalog?.curator_updated_at ? "teal" : "violet"}
           />
           <MetricCard
             label="Selected Z"
@@ -669,59 +700,92 @@ export default function CointegratedPairPage() {
           />
         </div>
 
-        <div className="grid min-h-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.6fr)]">
+        <div
+          className={[
+            "grid min-h-0 grid-cols-1 gap-6",
+            showGraph ? "xl:grid-cols-[minmax(22rem,0.9fr)_minmax(0,1.6fr)]" : "xl:grid-cols-1",
+          ].join(" ")}
+        >
           <PanelCard
             title="Pair Universe"
             subtitle="Grid/list view of the canonical pair supply. Search still works even when Strategy preserves a previous scan."
             titleRight={
-              <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
-                <span
-                  className={[
-                    "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.06em]",
-                    preservedExisting
-                      ? "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400"
-                      : "border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400",
-                  ].join(" ")}
-                >
-                  {preservedExisting ? "Last-good preserved" : "Fresh"}
-                </span>
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                  onClick={() => {
-                    void refreshCatalog();
-                  }}
-                  disabled={pairsLoading}
-                  aria-label="Refresh pair universe"
-                  title="Refresh pair universe"
-                >
-                  <svg
-                    aria-hidden="true"
-                    className={pairsLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"}
-                    viewBox="0 0 20 20"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+              <div className="flex max-w-full items-start justify-end gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-1.5 pt-0.5">
+                  <span
+                    className={[
+                      "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-[0.06em]",
+                      preservedExisting
+                        ? "border-warning-200 bg-warning-50 text-warning-700 dark:border-warning-900 dark:bg-warning-950/20 dark:text-warning-400"
+                        : "border-success-200 bg-success-50 text-success-700 dark:border-success-900 dark:bg-success-950/20 dark:text-success-400",
+                    ].join(" ")}
                   >
-                    <path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6" />
-                    <path d="M16.5 4.5v4h-4" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className={
-                    supplyTargetRunning
-                      ? "inline-flex items-center rounded-xl border border-error-300 bg-error-50 px-4 py-2 text-sm font-medium text-error-700 hover:bg-error-100 disabled:opacity-70 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400"
-                      : UI_CLASSES.primaryButton
-                  }
-                  onClick={togglePairSupply}
-                  disabled={supplyBusy || !canManageSupply}
-                  title={!canManageSupply ? "Pair supply permission required" : undefined}
-                >
-                  {supplyButtonLabel}
-                </button>
+                    {preservedExisting ? "Last-good preserved" : "Fresh"}
+                  </span>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    onClick={() => {
+                      void refreshCatalog();
+                    }}
+                    disabled={pairsLoading}
+                    aria-label="Refresh pair universe"
+                    title="Refresh pair universe"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      className={pairsLoading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"}
+                      viewBox="0 0 20 20"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6" />
+                      <path d="M16.5 4.5v4h-4" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center rounded-lg border border-gray-300 bg-white px-2.5 text-[11px] font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-70 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                    onClick={() => {
+                      if (showGraph) setGraphFullscreen(false);
+                      setShowGraph(!showGraph);
+                    }}
+                    aria-label={showGraph ? "Hide pair graph" : "Show pair graph"}
+                    title={showGraph ? "Hide graph and widen Pair Universe" : "Show graph"}
+                  >
+                    {showGraph ? "Hide Graph" : "Show Graph"}
+                  </button>
+                </div>
+                <div className="flex w-[7.25rem] shrink-0 flex-col items-stretch gap-1">
+                  <button
+                    type="button"
+                    className={
+                      supplyTargetRunning
+                        ? "inline-flex h-9 items-center justify-center rounded-xl border border-error-300 bg-error-50 px-3 text-sm font-medium text-error-700 hover:bg-error-100 disabled:opacity-70 dark:border-error-900 dark:bg-error-950/20 dark:text-error-400"
+                        : `${UI_CLASSES.primaryButton} h-9 justify-center px-3`
+                    }
+                    onClick={togglePairSupply}
+                    disabled={supplyBusy || !canManageSupply}
+                    title={!canManageSupply ? "Pair supply permission required" : undefined}
+                  >
+                    {supplyButtonLabel}
+                  </button>
+                  <label className="inline-flex cursor-pointer select-none items-center justify-center gap-1.5 text-[11px] font-medium leading-none text-gray-500 disabled:cursor-not-allowed dark:text-gray-400">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                      checked={pairDoctorEnabled}
+                      disabled={doctorBusy || !canManageSupply}
+                      onChange={(event) => {
+                        void togglePairDoctor(event.target.checked);
+                      }}
+                    />
+                    <span>Pair Doctor</span>
+                  </label>
+                </div>
               </div>
             }
           >
@@ -776,8 +840,12 @@ export default function CointegratedPairPage() {
                         </button>
                         <div className="flex items-center justify-between gap-1.5">
                           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                            {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
-                            <StatusPill label={curatorLabel(pair)} tone={curatorTone(pair.curator_status)} />
+                            <span className={pairMiniPillClass(isActive ? "success" : "info")}>
+                              {isActive ? "Active" : `${pair.zero_crossing ?? 0} crosses`}
+                            </span>
+                            {pairDoctorEnabled ? (
+                              <span className={pairMiniPillClass(curatorTone(pair.curator_status))}>{curatorLabel(pair)}</span>
+                            ) : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-1.5">
                             <button
@@ -824,7 +892,11 @@ export default function CointegratedPairPage() {
                         <span className="text-gray-500">hedge <b className="font-mono text-gray-900 dark:text-white">{fmtNumber(pair.hedge_ratio, 3)}</b></span>
                         <span className="text-gray-500">liq <b className="font-mono text-gray-900 dark:text-white">{fmtCompact(pair.pair_liquidity_min)}</b></span>
                         <span className="text-gray-500">cap <b className="font-mono text-gray-900 dark:text-white">{fmtCompact(pair.pair_order_capacity_usdt)}</b></span>
-                        <span className="col-span-2 truncate text-gray-500">curator <b className="font-mono text-gray-900 dark:text-white">{curatorReason(pair)}</b></span>
+                        {pairDoctorEnabled ? (
+                          <span className="col-span-2 truncate text-gray-500">
+                            doctor <b className="font-mono text-gray-900 dark:text-white">{curatorReason(pair)}</b>
+                          </span>
+                        ) : null}
                       </button>
                     </div>
                   );
@@ -859,9 +931,11 @@ export default function CointegratedPairPage() {
                       >
                         <span className="min-w-0">
                           <span className="block truncate font-mono font-semibold">{pair.pair}</span>
-                          <span className="mt-1 block truncate text-[11px] text-gray-500 dark:text-gray-400">
-                            Curator: {curatorLabel(pair)} - {curatorReason(pair)}
-                          </span>
+                          {pairDoctorEnabled ? (
+                            <span className="mt-1 block truncate text-[11px] text-gray-500 dark:text-gray-400">
+                              Pair Doctor: {curatorLabel(pair)} - {curatorReason(pair)}
+                            </span>
+                          ) : null}
                         </span>
                         <span>{isActive ? "Active" : pair.zero_crossing ?? 0}</span>
                         <span>{fmtNumber(pair.p_value, 5)}</span>
@@ -916,6 +990,7 @@ export default function CointegratedPairPage() {
             )}
           </PanelCard>
 
+          {showGraph ? (
           <div className="space-y-6">
             <PanelCard
               title={selectedPair ? selectedPair.pair : "Pair Detail"}
@@ -964,6 +1039,7 @@ export default function CointegratedPairPage() {
               <MetricCard label="Spread Std" value={fmtNumber(detail?.stats.spread_std, 5)} hint="Latest chart window" tone="violet" />
             </div>
           </div>
+          ) : null}
         </div>
       </div>
     </DashboardShell>

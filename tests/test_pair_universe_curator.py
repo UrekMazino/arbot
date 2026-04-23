@@ -141,10 +141,53 @@ def test_pair_universe_api_uses_curator_priority(monkeypatch, tmp_path):
     monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", tmp_path / "pair_strategy_state.json")
     monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
     monkeypatch.setattr(cp, "PAIR_CURATOR_STATE", tmp_path / "pair_curator_state.json")
+    cp.set_pair_curator_enabled(True, requested_by="test")
 
     payload = cp.list_cointegrated_pairs()
 
     assert payload["curator_updated_at"] == "2026-04-23T00:00:00+00:00"
+    assert payload["curator"]["enabled"] is True
     assert payload["pairs"][0]["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
     assert payload["pairs"][0]["curator_score"] == 90.0
     assert payload["pairs"][0]["curator_status"] == "healthy"
+
+
+def test_pair_universe_api_disables_curator_priority(monkeypatch, tmp_path):
+    pairs_path, price_path = _write_sample_inputs(tmp_path)
+    report_path = tmp_path / "pair_universe_curator.json"
+    state_path = tmp_path / "pair_curator_state.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "updated_at": "2026-04-23T00:00:00+00:00",
+                "pair_count": 2,
+                "status_counts": {"healthy": 1},
+                "pairs": {
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "score": 90.0,
+                        "status": "healthy",
+                        "recommendation": "promote",
+                        "reasons": ["cointegration_confirmed"],
+                        "priority_rank": 1,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "COINT_CSV", pairs_path)
+    monkeypatch.setattr(cp, "PRICE_JSON", price_path)
+    monkeypatch.setattr(cp, "STATUS_JSON", tmp_path / "status.json")
+    monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", tmp_path / "pair_strategy_state.json")
+    monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+    monkeypatch.setattr(cp, "PAIR_CURATOR_STATE", state_path)
+
+    status = cp.set_pair_curator_enabled(False, requested_by="test")
+    payload = cp.list_cointegrated_pairs()
+
+    assert status["enabled"] is False
+    assert payload["curator"]["enabled"] is False
+    assert payload["curator_updated_at"] is None
+    assert payload["pairs"][0]["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert payload["pairs"][0]["curator_score"] is None

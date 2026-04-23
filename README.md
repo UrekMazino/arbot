@@ -185,6 +185,7 @@ Strategy outputs are stored under `OKXStatBot/Strategy/output`:
 - `2_cointegrated_pairs.csv`
 - `2_cointegrated_pairs_latest_attempt.csv`
 - `2_cointegrated_pairs_status.json`
+- `pair_universe_curator.json`
 - `3_backtest_file.csv`
 - `4_summary_report.csv` (overwritten each run)
 
@@ -200,6 +201,18 @@ uses the same last-good CSV protection:
 ```env
 STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS=900
 STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY=1
+```
+
+The Pair Universe Curator is a separate advisory process. It does not place
+trades or move pairs by itself; it scores the canonical pair supply and writes
+`Strategy/output/pair_universe_curator.json`, which the dashboard uses for
+priority, status, and recommendation badges:
+
+```env
+STATBOT_PAIR_CURATOR_ENABLED=1
+STATBOT_PAIR_CURATOR_INTERVAL_SECONDS=60
+STATBOT_PAIR_CURATOR_MIN_LIQUIDITY_USDT=1000
+STATBOT_PAIR_CURATOR_MIN_CROSSINGS=3
 ```
 
 ## Offline Replay Simulation

@@ -31,6 +31,7 @@ from ..services.bot_control import (
 )
 from ..services.cointegrated_pairs import (
     get_cointegrated_pair_detail,
+    get_pair_curator_status,
     get_pair_supply_status,
     list_cointegrated_pairs,
     remove_cointegrated_pair,
@@ -344,6 +345,13 @@ def admin_cointegrated_pair_supply_status(
     _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     return get_pair_supply_status()
+
+
+@router.get("/cointegrated-pairs/curator/status")
+def admin_cointegrated_pair_curator_status(
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    return get_pair_curator_status()
 
 
 @router.post("/cointegrated-pairs/supply/start")

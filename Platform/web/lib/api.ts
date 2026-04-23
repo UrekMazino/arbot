@@ -433,14 +433,27 @@ export type CointegratedPair = {
   min_equity_recommended: number | null;
   pair_liquidity_min: number | null;
   pair_order_capacity_usdt: number | null;
+  curator_score?: number | null;
+  curator_status?: string | null;
+  curator_recommendation?: string | null;
+  curator_reasons?: string[];
+  curator_priority_rank?: number | null;
+  curator_checked_at?: string | null;
 };
 
 export type CointegratedPairsResponse = {
   source_path: string;
   price_path: string;
+  curator_path?: string;
   updated_at: string | null;
   price_updated_at: string | null;
+  curator_updated_at?: string | null;
   status: Record<string, unknown>;
+  curator?: {
+    running?: boolean;
+    pair_count?: number;
+    status_counts?: Record<string, number>;
+  };
   pair_count: number;
   excluded_pair_count?: number;
   unusable_liquidity_pair_count?: number;

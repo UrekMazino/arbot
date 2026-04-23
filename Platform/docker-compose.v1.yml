@@ -121,6 +121,22 @@ services:
       STATBOT_PROCESS_OWNER: pair-supply-runner
     command: python -m app.process_runner pair-supply
 
+  pair-curator:
+    <<: *backend-env
+    image: okxstatbot-backend:v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      STATBOT_PROCESS_OWNER: pair-curator
+      STATBOT_PAIR_CURATOR_ENABLED: ${STATBOT_PAIR_CURATOR_ENABLED:-1}
+      STATBOT_PAIR_CURATOR_INTERVAL_SECONDS: ${STATBOT_PAIR_CURATOR_INTERVAL_SECONDS:-60}
+    working_dir: /workspace
+    command: python /workspace/Strategy/pair_universe_curator.py
+
   worker:
     <<: *backend-env
     image: okxstatbot-backend:v1

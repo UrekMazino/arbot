@@ -43,6 +43,7 @@ wheels/
 2_cointegrated_pairs.csv
 2_cointegrated_pairs_latest_attempt.csv
 2_cointegrated_pairs_status.json
+pair_universe_curator.json
 3_backtest_file.csv
 Simulation/output/
 

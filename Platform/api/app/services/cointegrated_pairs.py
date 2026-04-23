@@ -43,6 +43,8 @@ STATUS_JSON = STRATEGY_OUTPUT_ROOT / "2_cointegrated_pairs_status.json"
 PAIR_SUPPLY_STATE = EXECUTION_STATE_ROOT / "pair_supply_control.json"
 PAIR_SUPPLY_LOG = LOGS_ROOT / "pair_supply_scheduler.log"
 PAIR_STRATEGY_STATE = EXECUTION_STATE_ROOT / "pair_strategy_state.json"
+PAIR_CURATOR_REPORT = STRATEGY_OUTPUT_ROOT / "pair_universe_curator.json"
+PAIR_CURATOR_STATE = EXECUTION_STATE_ROOT / "pair_universe_curator_control.json"
 MANUAL_GRAVEYARD_TTL_DAYS = 7
 
 
@@ -158,6 +160,47 @@ def _normalize_pair_key_text(pair_key: Any) -> str:
 
 def _row_pair_key(row: pd.Series) -> str:
     return _normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+
+
+def _load_curator_report() -> dict[str, Any]:
+    return _read_json_object(PAIR_CURATOR_REPORT)
+
+
+def _load_curator_state() -> dict[str, Any]:
+    return _read_json_object(PAIR_CURATOR_STATE)
+
+
+def _curator_pairs_by_key(report: dict[str, Any] | None = None) -> dict[str, Any]:
+    source = report if isinstance(report, dict) else _load_curator_report()
+    pairs = source.get("pairs") if isinstance(source, dict) else {}
+    return pairs if isinstance(pairs, dict) else {}
+
+
+def _curator_pair_meta(pair_key: str, report: dict[str, Any] | None = None) -> dict[str, Any]:
+    pairs = _curator_pairs_by_key(report)
+    item = pairs.get(pair_key)
+    return item if isinstance(item, dict) else {}
+
+
+def get_pair_curator_status() -> dict[str, Any]:
+    report = _load_curator_report()
+    state = _load_curator_state()
+    return {
+        "running": bool(state.get("running")),
+        "desired_running": bool(state.get("desired_running")),
+        "pid": int(state.get("pid") or 0),
+        "detail": state.get("detail") or "",
+        "updated_at": report.get("updated_at") or state.get("updated_at"),
+        "last_run_at": state.get("last_run_at"),
+        "stopped_at": state.get("stopped_at"),
+        "interval_seconds": state.get("interval_seconds"),
+        "report_file": str(PAIR_CURATOR_REPORT),
+        "log_file": state.get("log_file") or str(LOGS_ROOT / "pair_universe_curator.log"),
+        "pair_count": report.get("pair_count") or state.get("pair_count") or 0,
+        "status_counts": report.get("status_counts") or state.get("status_counts") or {},
+        "top_pairs": report.get("top_pairs") or [],
+        "settings": report.get("settings") or {},
+    }
 
 
 def _load_pair_exclusions(now: float | None = None) -> dict[str, str]:
@@ -553,9 +596,11 @@ def _pair_id(sym_1: str, sym_2: str) -> str:
     return f"{sym_1}__{sym_2}"
 
 
-def _pair_row(row: pd.Series, rank: int) -> dict[str, Any]:
+def _pair_row(row: pd.Series, rank: int, curator_report: dict[str, Any] | None = None) -> dict[str, Any]:
     sym_1 = str(row.get("sym_1") or "").strip()
     sym_2 = str(row.get("sym_2") or "").strip()
+    pair_key = _normalize_pair_key(sym_1, sym_2)
+    curator = _curator_pair_meta(pair_key, curator_report)
     return {
         "id": _pair_id(sym_1, sym_2),
         "rank": rank,
@@ -570,6 +615,12 @@ def _pair_row(row: pd.Series, rank: int) -> dict[str, Any]:
         "min_equity_recommended": _safe_float(row.get("min_equity_recommended")),
         "pair_liquidity_min": _safe_float(row.get("pair_liquidity_min")),
         "pair_order_capacity_usdt": _safe_float(row.get("pair_order_capacity_usdt")),
+        "curator_score": _safe_float(curator.get("score")),
+        "curator_status": curator.get("status") or None,
+        "curator_recommendation": curator.get("recommendation") or None,
+        "curator_reasons": curator.get("reasons") if isinstance(curator.get("reasons"), list) else [],
+        "curator_priority_rank": _safe_int(curator.get("priority_rank")),
+        "curator_checked_at": curator.get("checked_at") or None,
     }
 
 
@@ -580,17 +631,38 @@ def list_cointegrated_pairs(limit: int = 500) -> dict[str, Any]:
 
     df, excluded_count = _filter_excluded_pairs_frame(df)
     df, unusable_liquidity_count = _filter_unusable_liquidity_pairs_frame(df)
-    if "zero_crossing" in df.columns:
+    curator_report = _load_curator_report()
+    curator_pairs = _curator_pairs_by_key(curator_report)
+    if curator_pairs:
+        df = df.copy()
+        df["_curator_score"] = df.apply(
+            lambda row: _safe_float(_curator_pair_meta(_row_pair_key(row), curator_report).get("score")) or 0.0,
+            axis=1,
+        )
+        df["_curator_rank"] = df.apply(
+            lambda row: _safe_int(_curator_pair_meta(_row_pair_key(row), curator_report).get("priority_rank")) or 999999,
+            axis=1,
+        )
+        df = df.sort_values(by=["_curator_score", "_curator_rank"], ascending=[False, True], kind="stable")
+        df = df.drop(columns=["_curator_score", "_curator_rank"], errors="ignore")
+    elif "zero_crossing" in df.columns:
         df = df.sort_values(by=["zero_crossing"], ascending=[False], kind="stable")
     df = df.head(max(1, min(int(limit), 1000))).copy()
-    pairs = [_pair_row(row, idx + 1) for idx, (_, row) in enumerate(df.iterrows())]
+    pairs = [_pair_row(row, idx + 1, curator_report=curator_report) for idx, (_, row) in enumerate(df.iterrows())]
     status = _load_status()
     return {
         "source_path": str(COINT_CSV),
         "price_path": str(PRICE_JSON),
+        "curator_path": str(PAIR_CURATOR_REPORT),
         "updated_at": _mtime_iso(COINT_CSV),
         "price_updated_at": _mtime_iso(PRICE_JSON),
+        "curator_updated_at": curator_report.get("updated_at") if isinstance(curator_report, dict) else None,
         "status": status,
+        "curator": {
+            "running": bool(_load_curator_state().get("running")),
+            "pair_count": curator_report.get("pair_count") if isinstance(curator_report, dict) else 0,
+            "status_counts": curator_report.get("status_counts") if isinstance(curator_report, dict) else {},
+        },
         "pair_count": len(pairs),
         "excluded_pair_count": excluded_count,
         "unusable_liquidity_pair_count": unusable_liquidity_count,

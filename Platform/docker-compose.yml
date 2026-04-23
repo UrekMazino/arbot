@@ -108,6 +108,26 @@ services:
     command: >
       sh -c "python -m app.process_runner pair-supply"
 
+  pair-curator:
+    build:
+      context: ./api
+    restart: unless-stopped
+    depends_on:
+      - api
+      - postgres
+      - redis
+    environment:
+      APP_ENV: development
+      BOT_CONTROL_WORKSPACE_ROOT: /workspace
+      STATBOT_PROCESS_OWNER: pair-curator
+      STATBOT_PAIR_CURATOR_ENABLED: ${STATBOT_PAIR_CURATOR_ENABLED:-1}
+      STATBOT_PAIR_CURATOR_INTERVAL_SECONDS: ${STATBOT_PAIR_CURATOR_INTERVAL_SECONDS:-60}
+    volumes:
+      - ../:/workspace
+    working_dir: /workspace
+    command: >
+      sh -c "python /workspace/Strategy/pair_universe_curator.py"
+
   worker:
     build:
       context: ./worker

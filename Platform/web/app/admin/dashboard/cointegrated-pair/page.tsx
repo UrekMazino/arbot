@@ -135,6 +135,28 @@ function pairActionButtonClass(tone: "switch" | "remove"): string {
   ].join(" ");
 }
 
+function curatorTone(status: string | null | undefined): "success" | "warn" | "error" | "info" | "neutral" {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "healthy") return "success";
+  if (normalized === "watch" || normalized === "stale") return "warn";
+  if (normalized === "degraded" || normalized === "hospital_candidate") return "error";
+  if (normalized === "hospital" || normalized === "graveyard") return "neutral";
+  return "info";
+}
+
+function curatorLabel(pair: CointegratedPair): string {
+  const status = String(pair.curator_status || "unscored").replace(/_/g, " ");
+  const score = pair.curator_score;
+  if (typeof score === "number" && Number.isFinite(score)) return `${Math.round(score)} ${status}`;
+  return status;
+}
+
+function curatorReason(pair: CointegratedPair): string {
+  const reasons = pair.curator_reasons || [];
+  if (!reasons.length) return pair.curator_recommendation || "No curator notes yet";
+  return reasons.slice(0, 2).map((reason) => reason.replace(/_/g, " ")).join(", ");
+}
+
 function SwitchIcon({ spinning = false }: { spinning?: boolean }) {
   return (
     <svg
@@ -438,6 +460,9 @@ export default function CointegratedPairPage() {
       : preservedExisting
         ? "Empty scan preserved last-good CSV"
         : "Latest scan became canonical";
+  const curatorCounts = catalog?.curator?.status_counts || {};
+  const curatorHealthyCount = Number(curatorCounts.healthy || 0);
+  const curatorWatchCount = Number(curatorCounts.watch || 0) + Number(curatorCounts.degraded || 0) + Number(curatorCounts.hospital_candidate || 0);
   const chartData = detail?.points || [];
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
@@ -607,7 +632,7 @@ export default function CointegratedPairPage() {
         </div>
       ) : null}
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="Canonical Pairs"
             value={String(catalog?.pair_count ?? canonicalRows ?? 0)}
@@ -625,6 +650,16 @@ export default function CointegratedPairPage() {
             value={supplyStatus?.running ? "Running" : "Stopped"}
             hint={supplyStatus?.running ? `PID ${supplyStatus.pid}` : supplyStatus?.detail || "Independent scanner"}
             tone={supplyStatus?.running ? "teal" : "amber"}
+          />
+          <MetricCard
+            label="Curator"
+            value={catalog?.curator?.running ? "Running" : catalog?.curator_updated_at ? "Scored" : "Pending"}
+            hint={
+              catalog?.curator_updated_at
+                ? `${curatorHealthyCount} healthy, ${curatorWatchCount} watch`
+                : "Waiting for first advisory scan"
+            }
+            tone={curatorWatchCount > 0 ? "amber" : catalog?.curator_updated_at ? "teal" : "violet"}
           />
           <MetricCard
             label="Selected Z"
@@ -740,7 +775,10 @@ export default function CointegratedPairPage() {
                           <p className="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">Rank #{pair.rank}</p>
                         </button>
                         <div className="flex items-center justify-between gap-1.5">
-                          {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            {isActive ? <StatusPill label="Active" tone="success" /> : <StatusPill label={`${pair.zero_crossing ?? 0} crosses`} tone="info" />}
+                            <StatusPill label={curatorLabel(pair)} tone={curatorTone(pair.curator_status)} />
+                          </div>
                           <div className="flex shrink-0 items-center gap-1.5">
                             <button
                               type="button"
@@ -786,6 +824,7 @@ export default function CointegratedPairPage() {
                         <span className="text-gray-500">hedge <b className="font-mono text-gray-900 dark:text-white">{fmtNumber(pair.hedge_ratio, 3)}</b></span>
                         <span className="text-gray-500">liq <b className="font-mono text-gray-900 dark:text-white">{fmtCompact(pair.pair_liquidity_min)}</b></span>
                         <span className="text-gray-500">cap <b className="font-mono text-gray-900 dark:text-white">{fmtCompact(pair.pair_order_capacity_usdt)}</b></span>
+                        <span className="col-span-2 truncate text-gray-500">curator <b className="font-mono text-gray-900 dark:text-white">{curatorReason(pair)}</b></span>
                       </button>
                     </div>
                   );
@@ -818,7 +857,12 @@ export default function CointegratedPairPage() {
                           if (event.key === "Enter" || event.key === " ") setSelectedPair(pair);
                         }}
                       >
-                        <span className="font-mono font-semibold">{pair.pair}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate font-mono font-semibold">{pair.pair}</span>
+                          <span className="mt-1 block truncate text-[11px] text-gray-500 dark:text-gray-400">
+                            Curator: {curatorLabel(pair)} - {curatorReason(pair)}
+                          </span>
+                        </span>
                         <span>{isActive ? "Active" : pair.zero_crossing ?? 0}</span>
                         <span>{fmtNumber(pair.p_value, 5)}</span>
                         <span>{fmtNumber(pair.hedge_ratio, 3)}</span>

@@ -932,3 +932,52 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
             "price_2_current": float(prices_2[-1]) if len(prices_2) else None,
         },
     }
+
+
+def get_healthiest_pair_from_curator() -> dict[str, Any] | None:
+    """Find the healthiest pair (Rank #1) from the curator report.
+
+    Returns:
+        dict with ticker_1, ticker_2, pair, priority_rank, score, status
+        or None if no curator report or no healthy pairs found.
+    """
+    curator_report = _load_curator_report()
+    curator_pairs = _curator_pairs_by_key(curator_report)
+
+    if not curator_pairs:
+        return None
+
+    # Find the pair with priority_rank = 1 (healthiest)
+    for pair_key, pair_data in curator_pairs.items():
+        if not isinstance(pair_data, dict):
+            continue
+        priority_rank = _safe_int(pair_data.get("priority_rank"))
+        if priority_rank == 1:
+            return {
+                "ticker_1": pair_data.get("sym_1"),
+                "ticker_2": pair_data.get("sym_2"),
+                "pair": pair_data.get("pair"),
+                "priority_rank": priority_rank,
+                "score": pair_data.get("score"),
+                "status": pair_data.get("status"),
+            }
+
+    # Fallback: find by highest score
+    best_pair = None
+    best_score = -1.0
+    for pair_key, pair_data in curator_pairs.items():
+        if not isinstance(pair_data, dict):
+            continue
+        score = _safe_float(pair_data.get("score")) or 0.0
+        if score > best_score:
+            best_score = score
+            best_pair = {
+                "ticker_1": pair_data.get("sym_1"),
+                "ticker_2": pair_data.get("sym_2"),
+                "pair": pair_data.get("pair"),
+                "priority_rank": _safe_int(pair_data.get("priority_rank")),
+                "score": score,
+                "status": pair_data.get("status"),
+            }
+
+    return best_pair

@@ -1451,6 +1451,58 @@ def _reject_manual_pair_switch(request, blockers):
     )
 
 
+def _open_orders_blocker(inst_id):
+    try:
+        response = trade_session.get_order_list(instId=inst_id)
+    except Exception as exc:
+        return f"could not confirm open orders cleared for {inst_id}: {exc}"
+
+    if not isinstance(response, dict):
+        return f"could not confirm open orders cleared for {inst_id}: invalid response"
+    if response.get("code") != "0":
+        return f"could not confirm open orders cleared for {inst_id}: {response.get('msg') or response.get('code') or 'unknown error'}"
+
+    orders = response.get("data", [])
+    if orders:
+        try:
+            count = len(orders)
+        except TypeError:
+            count = 1
+        return f"{count} open order(s) remain for {inst_id}"
+    return ""
+
+
+def _force_close_current_pair_for_manual_switch(current_pair, active_tickers):
+    timeout_seconds = _env_int("STATBOT_FORCE_SWITCH_CLOSE_TIMEOUT_SECONDS", 30, minimum=5)
+    poll_seconds = _env_int("STATBOT_FORCE_SWITCH_CLOSE_POLL_SECONDS", 2, minimum=1)
+    logger.warning("Force manual pair switch: closing positions/orders for %s", current_pair)
+    close_all_positions(0)
+
+    deadline = time.time() + timeout_seconds
+    last_blockers = []
+    while True:
+        blockers = []
+        for inst_id in active_tickers:
+            if open_position_confirmation(inst_id):
+                blockers.append(f"open position or unconfirmed position state remains for {inst_id}")
+            order_blocker = _open_orders_blocker(inst_id)
+            if order_blocker:
+                blockers.append(order_blocker)
+
+        if not blockers:
+            logger.info("Force manual pair switch: confirmed %s is flat before switching.", current_pair)
+            return True, []
+
+        last_blockers = blockers
+        if time.time() >= deadline:
+            break
+        time.sleep(poll_seconds)
+
+    detail = f"force close did not confirm flat within {timeout_seconds}s"
+    logger.error("Force manual pair switch blocked: %s; blockers=%s", detail, "; ".join(last_blockers))
+    return False, [detail, *last_blockers]
+
+
 def _apply_manual_pair_switch_request(request, in_position_or_orders):
     next_t1 = str(request.get("ticker_1") or "").strip().upper()
     next_t2 = str(request.get("ticker_2") or "").strip().upper()
@@ -1458,10 +1510,12 @@ def _apply_manual_pair_switch_request(request, in_position_or_orders):
     curr_t1, curr_t2 = ticker_1, ticker_2
     current_pair = f"{ticker_1}/{ticker_2}"
 
+    force_switch = bool(request.get("force", False))
+
     blockers = []
     if lock_on_pair:
         blockers.append("lock_on_pair is enabled")
-    if in_position_or_orders:
+    if in_position_or_orders and not force_switch:
         blockers.append("active position or order is present")
     if is_restricted_ticker(next_t1):
         blockers.append(f"{next_t1} is ticker-restricted: {get_restricted_ticker_reason(next_t1) or 'restricted'}")
@@ -1479,6 +1533,16 @@ def _apply_manual_pair_switch_request(request, in_position_or_orders):
         logger.info("Manual pair switch no-op: %s", detail)
         _mark_manual_pair_switch_request(request, "already_active", detail)
         return SWITCH_RESULT_BLOCKED
+
+    # Force switch: close any existing positions before switching
+    if force_switch and in_position_or_orders:
+        closed, close_blockers = _force_close_current_pair_for_manual_switch(
+            current_pair,
+            [curr_t1, curr_t2],
+        )
+        if not closed:
+            _reject_manual_pair_switch(request, close_blockers)
+            return SWITCH_RESULT_BLOCKED
 
     logger.warning(
         "Manual pair switch requested by %s: %s -> %s",

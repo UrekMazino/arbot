@@ -417,6 +417,8 @@ export type ManualPairSwitchResult = {
   target_pair: Record<string, string>;
   running: boolean;
   request_id: string;
+  force_available?: boolean;
+  blockers?: string[];
 };
 
 export type CointegratedPair = {
@@ -565,6 +567,18 @@ function resolveWsBase(): string {
 
 const API_BASE = resolveApiBase();
 
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+
+  constructor(status: number, message: string, payload?: unknown) {
+    super(`HTTP ${status}: ${message}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 async function apiRequest<T>(
   path: string,
   options: RequestInit,
@@ -601,10 +615,21 @@ async function apiRequest<T>(
 
     const text = await response.text();
     let message = text;
+    let payload: unknown = text;
     try {
       const parsed = JSON.parse(text);
+      payload = parsed;
       if (parsed && typeof parsed === "object") {
         const parsedRecord = parsed as Record<string, unknown>;
+        if (parsedRecord.detail && typeof parsedRecord.detail === "object") {
+          payload = parsedRecord.detail;
+          const detailRecord = parsedRecord.detail as Record<string, unknown>;
+          if (typeof detailRecord.detail === "string") {
+            message = detailRecord.detail;
+          } else if (typeof detailRecord.message === "string") {
+            message = detailRecord.message;
+          }
+        }
         if (response.status === 400 || response.status === 422) {
           message = "Invalid request. Please check your input and try again.";
         } else if (typeof parsedRecord.detail === "string") {
@@ -616,7 +641,7 @@ async function apiRequest<T>(
     } catch {
       // ignore parse errors and keep raw text
     }
-    throw new Error(`HTTP ${response.status}: ${message}`);
+    throw new ApiError(response.status, message, payload);
   }
 
   return (await response.json()) as T;
@@ -882,15 +907,15 @@ export async function clearAdminActivePair(): Promise<{
   detail: string;
   requested_by: string;
   previous_active_pair: Record<string, string> | null;
-  active_pair: null;
+  active_pair: null | Record<string, unknown>;
 }> {
   return apiRequest("/admin/pairs/active/clear", { method: "POST", body: JSON.stringify({}) });
 }
 
-export async function switchAdminActivePair(sym1: string, sym2: string): Promise<ManualPairSwitchResult> {
+export async function switchAdminActivePair(sym1: string, sym2: string, force: boolean = false): Promise<ManualPairSwitchResult> {
   return apiRequest<ManualPairSwitchResult>("/admin/pairs/active/switch", {
     method: "POST",
-    body: JSON.stringify({ sym_1: sym1, sym_2: sym2 }),
+    body: JSON.stringify({ sym_1: sym1, sym_2: sym2, force }),
   });
 }
 
@@ -1026,9 +1051,9 @@ export function wsDashboardUrl(botInstanceId: string): string {
 }
 
 export function isUnauthorizedError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("HTTP 401");
+  return (err instanceof ApiError && err.status === 401) || (err instanceof Error && err.message.includes("HTTP 401"));
 }
 
 export function isForbiddenError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("HTTP 403");
+  return (err instanceof ApiError && err.status === 403) || (err instanceof Error && err.message.includes("HTTP 403"));
 }

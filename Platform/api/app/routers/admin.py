@@ -391,13 +391,21 @@ def admin_manual_switch_active_pair(
     user: User = Depends(require_permissions("switch_active_pair", "manage_bot")),
 ):
     try:
+        force = bool(payload.get("force", False))
+        user_permissions = get_user_permission_ids(user)
+        if force and "manage_bot" not in user_permissions:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Force switching requires manage_bot permission")
         return manual_switch_active_pair(
             sym_1=str(payload.get("sym_1") or payload.get("ticker_1") or ""),
             sym_2=str(payload.get("sym_2") or payload.get("ticker_2") or ""),
             requested_by=user.email,
+            force=force,
         )
     except ManualPairSwitchBlocked as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.result.get("detail")) from exc
+        result = dict(exc.result)
+        if "manage_bot" not in get_user_permission_ids(user):
+            result["force_available"] = False
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=result) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except RuntimeError as exc:

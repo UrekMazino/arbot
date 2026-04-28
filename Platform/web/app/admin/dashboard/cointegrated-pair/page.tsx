@@ -15,6 +15,7 @@ import {
 
 import {
   AdminPairsHealth,
+  ApiError,
   CointegratedPair,
   CointegratedPairDetail,
   CointegratedPairsResponse,
@@ -406,7 +407,13 @@ export default function CointegratedPairPage() {
   const [doctorBusy, setDoctorBusy] = useState(false);
   const [switchBusyPairId, setSwitchBusyPairId] = useState<string | null>(null);
   const [removeBusyPairId, setRemoveBusyPairId] = useState<string | null>(null);
-  const [switchModal, setSwitchModal] = useState<{ title: string; message: string } | null>(null);
+  const [switchModal, setSwitchModal] = useState<{
+    title: string;
+    message: string;
+    pair?: CointegratedPair;
+    blockers?: string[];
+    forceAvailable?: boolean;
+  } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
@@ -506,6 +513,7 @@ export default function CointegratedPairPage() {
   const chartData = detail?.points || [];
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
+  const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
   const pairDoctorEnabled = catalog?.curator?.enabled ?? false;
   const pairDoctorRefreshSeconds = Math.max(5, Number(catalog?.pair_doctor_ui_refresh_seconds || 20) || 20);
   const selectedSym1 = selectedPair?.sym_1 || "";
@@ -681,12 +689,12 @@ export default function CointegratedPairPage() {
     }
   }
 
-  async function handleManualSwitch(pair: CointegratedPair) {
+  async function handleManualSwitch(pair: CointegratedPair, force: boolean = false) {
     if (!canSwitchPair || switchBusyPairId) return;
     setSwitchBusyPairId(pair.id);
     setError(null);
     try {
-      const result = await switchAdminActivePair(pair.sym_1, pair.sym_2);
+      const result = await switchAdminActivePair(pair.sym_1, pair.sym_2, force);
       const [health] = await Promise.all([
         getAdminPairsHealth().catch(() => null),
         sleep(result.pending ? 1200 : 0),
@@ -699,12 +707,18 @@ export default function CointegratedPairPage() {
         });
       }
     } catch (err) {
+      const payload = err instanceof ApiError && err.payload && typeof err.payload === "object"
+        ? err.payload as { blockers?: string[]; force_available?: boolean }
+        : null;
       setSwitchModal({
-        title: "Manual switch not allowed",
+        title: "Manual switch blocked",
         message: cleanApiMessage(
           err,
           "Manual pair switch is not allowed while there is an active position or order.",
         ),
+        pair,
+        blockers: payload?.blockers,
+        forceAvailable: canForceSwitchPair && (payload?.force_available ?? false),
       });
     } finally {
       setSwitchBusyPairId(null);
@@ -730,16 +744,48 @@ export default function CointegratedPairPage() {
               <div>
                 <h2 className="text-base font-semibold text-gray-950 dark:text-white">{switchModal.title}</h2>
                 <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">{switchModal.message}</p>
+                {switchModal.blockers && switchModal.blockers.length > 0 && (
+                  <ul className="mt-2 list-disc pl-4 text-xs text-gray-500 dark:text-gray-400">
+                    {switchModal.blockers.map((blocker, idx) => (
+                      <li key={idx}>{blocker}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                className={UI_CLASSES.primaryButton}
-                onClick={() => setSwitchModal(null)}
-              >
-                OK
-              </button>
+            <div className="mt-5 flex justify-end gap-2">
+              {switchModal.forceAvailable && switchModal.pair ? (
+                <>
+                  <button
+                    type="button"
+                    className="inline-flex items-center rounded-xl border border-warning-200 bg-warning-50 px-3 py-2 text-sm font-medium text-warning-700 hover:bg-warning-100 dark:border-warning-800 dark:bg-warning-950/30 dark:text-warning-300 dark:hover:bg-warning-950/50"
+                    onClick={() => {
+                      const pair = switchModal.pair;
+                      setSwitchModal(null);
+                      if (pair) {
+                        handleManualSwitch(pair, true);
+                      }
+                    }}
+                  >
+                    Force Switch
+                  </button>
+                  <button
+                    type="button"
+                    className={UI_CLASSES.primaryButton}
+                    onClick={() => setSwitchModal(null)}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className={UI_CLASSES.primaryButton}
+                  onClick={() => setSwitchModal(null)}
+                >
+                  OK
+                </button>
+              )}
             </div>
           </div>
         </div>

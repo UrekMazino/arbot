@@ -2220,8 +2220,16 @@ def manual_switch_active_pair(
     sym_1: str,
     sym_2: str,
     requested_by: str | None = None,
+    force: bool = False,
 ) -> dict:
-    """Request a manual active-pair switch from the Cointegration dashboard."""
+    """Request a manual active-pair switch from the Cointegration dashboard.
+
+    Args:
+        sym_1: First ticker symbol (e.g., 'ETH-USDT-SWAP')
+        sym_2: Second ticker symbol (e.g., 'SOL-USDT-SWAP')
+        requested_by: Email of the user requesting the switch
+        force: If True, bypass blockers and force close any open positions/trades
+    """
     ticker_1_next = _normalize_ticker_id(sym_1)
     ticker_2_next = _normalize_ticker_id(sym_2)
     if ticker_1_next == ticker_2_next:
@@ -2239,39 +2247,48 @@ def manual_switch_active_pair(
     db: Session = SessionLocal()
     try:
         run = _latest_run_for_manual_switch(db, bot_status)
-        blockers = _manual_switch_blockers(db, run, bot_running=bot_running)
-        if blockers:
-            detail = "Manual pair switch is not allowed because " + " ".join(blockers)
-            _record_manual_pair_switch_event(
-                db,
-                run,
-                request_id=request_id,
-                requested_by=requested_by,
-                from_pair=from_pair,
-                to_pair=target_pair,
-                status_text="blocked",
-                reason="manual_switch",
-                blockers=blockers,
-                severity="warn",
-            )
-            db.commit()
+        # If force=True, bypass all blockers
+        if not force:
+            blockers = _manual_switch_blockers(db, run, bot_running=bot_running)
+            if blockers:
+                detail = "Manual pair switch is not allowed because " + " ".join(blockers)
+                _record_manual_pair_switch_event(
+                    db,
+                    run,
+                    request_id=request_id,
+                    requested_by=requested_by,
+                    from_pair=from_pair,
+                    to_pair=target_pair,
+                    status_text="blocked",
+                    reason="manual_switch",
+                    blockers=blockers,
+                    severity="warn",
+                )
+                db.commit()
+                _append_control_log(
+                    "WARNING",
+                    f"Manual pair switch blocked by {requested_by or 'unknown'}: from={from_pair or 'n/a'} to={target_pair} blockers={' | '.join(blockers)}",
+                )
+                raise ManualPairSwitchBlocked(
+                    {
+                        "ok": False,
+                        "allowed": False,
+                        "status": "blocked",
+                        "detail": detail,
+                        "blockers": blockers,
+                        "requested_by": requested_by or "",
+                        "previous_active_pair": previous,
+                        "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
+                        "running": bot_running,
+                        "request_id": request_id,
+                        "force_available": True,
+                    }
+                )
+        else:
+            # Force mode: log the forced switch request
             _append_control_log(
                 "WARNING",
-                f"Manual pair switch blocked by {requested_by or 'unknown'}: from={from_pair or 'n/a'} to={target_pair} blockers={' | '.join(blockers)}",
-            )
-            raise ManualPairSwitchBlocked(
-                {
-                    "ok": False,
-                    "allowed": False,
-                    "status": "blocked",
-                    "detail": detail,
-                    "blockers": blockers,
-                    "requested_by": requested_by or "",
-                    "previous_active_pair": previous,
-                    "target_pair": {"ticker_1": ticker_1_next, "ticker_2": ticker_2_next, "pair": target_pair},
-                    "running": bot_running,
-                    "request_id": request_id,
-                }
+                f"FORCE manual pair switch requested by {requested_by or 'unknown'}: from={from_pair or 'n/a'} to={target_pair}; will force close positions",
             )
 
         if from_pair == target_pair:
@@ -2300,6 +2317,7 @@ def manual_switch_active_pair(
                 "requested_by": requested_by or "",
                 "requested_at": _utc_iso_now(),
                 "from_pair": from_pair,
+                "force": force,
             }
             _write_json_object(MANUAL_PAIR_SWITCH_FILE, request)
             _record_manual_pair_switch_event(
@@ -2310,8 +2328,8 @@ def manual_switch_active_pair(
                 from_pair=from_pair,
                 to_pair=target_pair,
                 status_text="requested",
-                reason="manual_switch",
-                severity="info",
+                reason="manual_switch" + ("_force" if force else ""),
+                severity="warning" if force else "info",
             )
             db.commit()
             _append_control_log(
@@ -2410,8 +2428,13 @@ def _graveyard_ticker_from_key(key: str) -> str:
     return key_text[len(TICKER_GRAVEYARD_PREFIX):]
 
 
-def clear_active_pair(requested_by: str | None = None) -> dict:
-    """Clear the persisted active_pair.json so startup falls back to defaults."""
+def clear_active_pair(requested_by: str | None = None, auto_select_healthiest: bool = False) -> dict:
+    """Clear the persisted active_pair.json so startup falls back to defaults.
+
+    Args:
+        requested_by: Email of the user requesting the clear
+        auto_select_healthiest: If True, find the healthiest pair and set it as the new active pair
+    """
     existed = ACTIVE_PAIR_FILE.exists()
     previous: dict | None = None
 
@@ -2422,6 +2445,37 @@ def clear_active_pair(requested_by: str | None = None) -> dict:
                 "ticker_1": str(previous_data.get("ticker_1") or "").strip(),
                 "ticker_2": str(previous_data.get("ticker_2") or "").strip(),
             }
+
+    status = get_bot_status()
+    running = bool(status.get("running"))
+    new_pair = None
+
+    # If auto_select_healthiest is True, find the healthiest pair and set it
+    if auto_select_healthiest:
+        try:
+            from .cointegrated_pairs import get_healthiest_pair_from_curator
+
+            healthiest = get_healthiest_pair_from_curator()
+            if healthiest and healthiest.get("ticker_1") and healthiest.get("ticker_2"):
+                _write_active_pair(
+                    str(healthiest["ticker_1"]),
+                    str(healthiest["ticker_2"]),
+                )
+                new_pair = {
+                    "ticker_1": str(healthiest["ticker_1"]),
+                    "ticker_2": str(healthiest["ticker_2"]),
+                    "pair": str(healthiest.get("pair", "")),
+                    "priority_rank": healthiest.get("priority_rank"),
+                    "score": healthiest.get("score"),
+                }
+                existed = True
+            else:
+                _append_control_log("WARNING", "Clear active pair: no healthiest pair found in curator report")
+        except Exception as exc:
+            _append_control_log("WARNING", f"Clear active pair: failed to find healthiest pair: {exc}")
+
+    # Only remove the file if we're not setting a new pair
+    if new_pair is None and existed:
         try:
             ACTIVE_PAIR_FILE.unlink()
         except FileNotFoundError:
@@ -2429,10 +2483,10 @@ def clear_active_pair(requested_by: str | None = None) -> dict:
         except Exception as exc:
             raise RuntimeError(f"Failed to clear active pair: {exc}") from exc
 
-    status = get_bot_status()
-    running = bool(status.get("running"))
     detail = "Persisted active pair cleared."
-    if not existed:
+    if new_pair:
+        detail = f"Cleared and switched to healthiest pair: {new_pair.get('pair')}"
+    elif not existed:
         detail = "No persisted active pair was set."
     elif running:
         detail = (
@@ -2447,7 +2501,7 @@ def clear_active_pair(requested_by: str | None = None) -> dict:
         "detail": detail,
         "requested_by": requested_by or "",
         "previous_active_pair": previous,
-        "active_pair": None,
+        "active_pair": new_pair,
     }
 
 

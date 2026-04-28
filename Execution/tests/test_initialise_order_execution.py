@@ -31,6 +31,17 @@ def test_deterministic_dry_run():
             "asks": [["43010", "1"]],
         }],
     }
+    mock_instrument_info = {
+        "instId": ticker_1,
+        "ctVal": "0.01",
+        "ctMult": "1",
+        "ctValCcy": "BTC",
+        "lotSz": "1",
+        "minSz": "1",
+        "maxMktSz": "1000",
+        "maxLmtSz": "1000",
+        "maxStopSz": "1000",
+    }
 
     result = initialise_order_execution(
         ticker=ticker_1,
@@ -40,6 +51,7 @@ def test_deterministic_dry_run():
         dry_run_override=True,
         place_stop=True,
         enforce_lot_size=False,
+        instrument_info=mock_instrument_info,
     )
     assert _print_result("Deterministic dry-run", result), "Deterministic dry-run returned failed result"
 

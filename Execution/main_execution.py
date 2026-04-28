@@ -70,7 +70,7 @@ from func_price_calls import (
 from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
-from func_close_positions import close_all_positions, get_position_info, close_non_active_positions
+from func_close_positions import close_all_positions_and_confirm, get_position_info, close_non_active_positions
 from func_event_emitter import emit_event, flush_events, get_event_context
 from func_save_status import save_status
 from regime_router import RegimeInput, RegimeRouter, should_block_new_entries as should_block_regime_entries
@@ -1451,56 +1451,24 @@ def _reject_manual_pair_switch(request, blockers):
     )
 
 
-def _open_orders_blocker(inst_id):
-    try:
-        response = trade_session.get_order_list(instId=inst_id)
-    except Exception as exc:
-        return f"could not confirm open orders cleared for {inst_id}: {exc}"
-
-    if not isinstance(response, dict):
-        return f"could not confirm open orders cleared for {inst_id}: invalid response"
-    if response.get("code") != "0":
-        return f"could not confirm open orders cleared for {inst_id}: {response.get('msg') or response.get('code') or 'unknown error'}"
-
-    orders = response.get("data", [])
-    if orders:
-        try:
-            count = len(orders)
-        except TypeError:
-            count = 1
-        return f"{count} open order(s) remain for {inst_id}"
-    return ""
-
-
 def _force_close_current_pair_for_manual_switch(current_pair, active_tickers):
     timeout_seconds = _env_int("STATBOT_FORCE_SWITCH_CLOSE_TIMEOUT_SECONDS", 30, minimum=5)
     poll_seconds = _env_int("STATBOT_FORCE_SWITCH_CLOSE_POLL_SECONDS", 2, minimum=1)
     logger.warning("Force manual pair switch: closing positions/orders for %s", current_pair)
-    close_all_positions(0)
+    result = close_all_positions_and_confirm(
+        0,
+        tickers=active_tickers,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    if result.get("ok"):
+        logger.info("Force manual pair switch: confirmed %s is flat before switching.", current_pair)
+        return True, []
 
-    deadline = time.time() + timeout_seconds
-    last_blockers = []
-    while True:
-        blockers = []
-        for inst_id in active_tickers:
-            if open_position_confirmation(inst_id):
-                blockers.append(f"open position or unconfirmed position state remains for {inst_id}")
-            order_blocker = _open_orders_blocker(inst_id)
-            if order_blocker:
-                blockers.append(order_blocker)
-
-        if not blockers:
-            logger.info("Force manual pair switch: confirmed %s is flat before switching.", current_pair)
-            return True, []
-
-        last_blockers = blockers
-        if time.time() >= deadline:
-            break
-        time.sleep(poll_seconds)
-
-    detail = f"force close did not confirm flat within {timeout_seconds}s"
-    logger.error("Force manual pair switch blocked: %s; blockers=%s", detail, "; ".join(last_blockers))
-    return False, [detail, *last_blockers]
+    blockers = result.get("blockers") or result.get("errors") or ["force close did not confirm flat"]
+    blockers = [str(item) for item in blockers if str(item).strip()]
+    logger.error("Force manual pair switch blocked: blockers=%s", "; ".join(blockers))
+    return False, blockers
 
 
 def _apply_manual_pair_switch_request(request, in_position_or_orders):
@@ -1844,10 +1812,10 @@ State Transitions (deterministic):
 
 0 â†’ 1: Hot trigger activated + cointegration valid + Z-score extreme
         â†’ manage_new_trades() returns 1 after placing orders
-        â†’ main_execution sees 1, calls close_all_positions()
+        â†’ main_execution sees 1, calls close_all_positions_and_confirm()
 
 1 â†’ 2: Close operation complete
-        â†’ close_all_positions() returns 2
+        â†’ close_all_positions_and_confirm() keeps retrying until flat
         â†’ circuit breaker also returns 2
         â†’ hard stop/regime break also returns 2
         â†’ main_execution exits loop
@@ -2855,6 +2823,11 @@ if __name__ == "__main__":
 
             # 1. Consolidated API Fetch (Position/Order Status)
             acc_state = get_account_state()
+            if isinstance(acc_state, dict) and not bool(acc_state.get("ok", True)):
+                logger.warning(
+                    "Account state fetch is untrusted; failing closed for this cycle: %s",
+                    "; ".join(str(item) for item in acc_state.get("errors", []) if str(item).strip()) or "unknown error",
+                )
             is_p_open, is_p_active = check_inst_status(acc_state, signal_positive_ticker)
             is_n_open, is_n_active = check_inst_status(acc_state, signal_negative_ticker)
 
@@ -3526,7 +3499,18 @@ if __name__ == "__main__":
                     )
                     status_dict["message"] = "Session circuit breaker triggered - closing all positions"
                     save_status(status_dict)
-                    close_all_positions(0)
+                    close_result = close_all_positions_and_confirm(0)
+                    if not close_result.get("ok"):
+                        detail = "; ".join(
+                            str(item)
+                            for item in (close_result.get("errors") or close_result.get("blockers") or [])
+                            if str(item).strip()
+                        ) or "close confirmation failed"
+                        logger.critical("Session circuit breaker close not confirmed: %s", detail)
+                        status_dict["message"] = "Session circuit breaker close not confirmed; retrying close"
+                        save_status(status_dict)
+                        kill_switch = 2
+                        continue
                     run_end_reason = "session_circuit_breaker"
                     run_end_detail = (
                         f"session_loss={session_drawdown:.2f} session_pct={session_drawdown_pct:.2f} limit={max_drawdown_pct*100:.1f}%"
@@ -3553,7 +3537,18 @@ if __name__ == "__main__":
                 )
                 status_dict["message"] = "Pair circuit breaker triggered - closing all positions"
                 save_status(status_dict)
-                close_all_positions(0)
+                close_result = close_all_positions_and_confirm(0)
+                if not close_result.get("ok"):
+                    detail = "; ".join(
+                        str(item)
+                        for item in (close_result.get("errors") or close_result.get("blockers") or [])
+                        if str(item).strip()
+                    ) or "close confirmation failed"
+                    logger.error("Pair circuit breaker close not confirmed: %s", detail)
+                    status_dict["message"] = "Pair circuit breaker close not confirmed; retrying close"
+                    save_status(status_dict)
+                    kill_switch = 2
+                    continue
                 run_end_reason = "pair_circuit_breaker"
                 run_end_detail = (
                     f"pair_pnl={total_pnl:.2f} pair_pct={pnl_pct:.2f} max_drawdown_pct={max_drawdown_pct*100:.1f}"
@@ -3838,7 +3833,19 @@ if __name__ == "__main__":
                             pre_close_diff,
                         )
 
-                kill_switch = close_all_positions(kill_switch)
+                close_result = close_all_positions_and_confirm(kill_switch)
+                if not close_result.get("ok"):
+                    detail = "; ".join(
+                        str(item)
+                        for item in (close_result.get("errors") or close_result.get("blockers") or [])
+                        if str(item).strip()
+                    ) or "close confirmation failed"
+                    logger.error("Close not confirmed; retrying close before recording trade result: %s", detail)
+                    status_dict["message"] = "Close not confirmed; retrying close"
+                    save_status(status_dict)
+                    kill_switch = 2
+                    continue
+                kill_switch = int(close_result.get("kill_switch", 0) or 0)
 
                 post_equity_usdt = None
                 try:

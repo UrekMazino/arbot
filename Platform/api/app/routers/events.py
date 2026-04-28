@@ -122,6 +122,9 @@ def ingest_events_batch(
     _ensure_bot_instance(db, bot_instance_id)
     db.commit()
 
+    affected_runs: dict[str, Run] = {}
+    publish_payloads: list[dict] = []
+
     for event in body.events:
         try:
             run = _ensure_run(db, event.run_id, bot_instance_id)
@@ -160,20 +163,8 @@ def ingest_events_batch(
                 )
                 db.add(alert)
                 db.flush()
-            db.commit()
-            try:
-                materialize_live_run_report(db, run)
-            except Exception as report_exc:
-                logger.warning(
-                    "Live report materialization failed: bot=%s run=%s type=%s err=%s",
-                    bot_instance_id,
-                    event.run_id,
-                    event.event_type,
-                    report_exc,
-                )
-
-            publish_bot_event(
-                bot_instance_id,
+            affected_runs[run.id] = run
+            publish_payloads.append(
                 {
                     "event_id": row.event_id,
                     "run_id": row.run_id,
@@ -182,8 +173,9 @@ def ingest_events_batch(
                     "event_type": row.event_type,
                     "severity": row.severity,
                     "payload": row.payload_json or {},
-                },
+                }
             )
+            db.commit()
         except IntegrityError:
             db.rollback()
             duplicate += 1
@@ -191,6 +183,21 @@ def ingest_events_batch(
             db.rollback()
             rejected += 1
             logger.warning("Event ingest rejected: bot=%s run=%s type=%s err=%s", bot_instance_id, event.run_id, event.event_type, exc)
+
+    for run in affected_runs.values():
+        try:
+            materialize_live_run_report(db, run)
+        except Exception as report_exc:
+            db.rollback()
+            logger.warning(
+                "Live report materialization failed: bot=%s run=%s err=%s",
+                bot_instance_id,
+                run.run_key or run.id,
+                report_exc,
+            )
+
+    for payload in publish_payloads:
+        publish_bot_event(bot_instance_id, payload)
 
     return EventIngestResultOut(accepted=accepted, duplicate=duplicate, rejected=rejected)
 

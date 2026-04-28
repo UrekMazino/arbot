@@ -8,10 +8,10 @@ import pandas as pd
 from Platform.api.app.services import cointegrated_pairs as cp
 
 
-def test_pair_supply_interval_allows_zero(monkeypatch):
+def test_pair_supply_interval_enforces_minimum(monkeypatch):
     monkeypatch.setenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", "0")
 
-    assert cp._pair_supply_interval_seconds() == 0
+    assert cp._pair_supply_interval_seconds() == 5
 
 
 def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
@@ -21,7 +21,76 @@ def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cp, "EXECUTION_ENV_FILE", env_file)
     monkeypatch.delenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", raising=False)
 
-    assert cp._pair_supply_interval_seconds() == 0
+    assert cp._pair_supply_interval_seconds() == 5
+
+
+def test_healthiest_pair_from_curator_requires_healthy_or_promote(monkeypatch, tmp_path):
+    report_path = tmp_path / "pair_universe_curator.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                        "priority_rank": 1,
+                        "score": 99,
+                        "status": "watch",
+                        "recommendation": "hold",
+                    },
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "sym_1": "CCC-USDT-SWAP",
+                        "sym_2": "DDD-USDT-SWAP",
+                        "pair": "CCC-USDT-SWAP/DDD-USDT-SWAP",
+                        "priority_rank": 2,
+                        "score": 10,
+                        "status": "watch",
+                        "recommendation": "promote",
+                    },
+                    "EEE-USDT-SWAP/FFF-USDT-SWAP": {
+                        "sym_1": "EEE-USDT-SWAP",
+                        "sym_2": "FFF-USDT-SWAP",
+                        "pair": "EEE-USDT-SWAP/FFF-USDT-SWAP",
+                        "priority_rank": 3,
+                        "score": 20,
+                        "status": "healthy",
+                        "recommendation": "hold",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+
+    assert cp.get_healthiest_pair_from_curator()["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
+
+
+def test_healthiest_pair_from_curator_returns_none_without_selectable_pair(monkeypatch, tmp_path):
+    report_path = tmp_path / "pair_universe_curator.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "priority_rank": 1,
+                        "score": 99,
+                        "status": "watch",
+                        "recommendation": "hold",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+
+    assert cp.get_healthiest_pair_from_curator() is None
 
 
 def test_pair_doctor_ui_refresh_seconds_defaults_to_twenty(monkeypatch):

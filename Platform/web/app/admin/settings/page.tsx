@@ -114,7 +114,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   STRATEGY_INTERNAL_MIN_PAIRS: { description: "Minimum usable pairs Strategy tries to find before accepting a fallback scan result", default: "3" },
   STRATEGY_STARTUP_RETRY_SECONDS: { description: "Sleep seconds between startup Strategy discovery retries when no pairs are found", default: "5" },
   STRATEGY_STARTUP_MAX_ATTEMPTS: { description: "Maximum startup Strategy discovery attempts before execution gives up; 0 retries forever", default: "0" },
-  PAIR_SUPPLY_INTERVAL_SECONDS: { description: "Seconds between independent continuous Strategy pair-supply scans; 0 starts the next scan immediately", default: "300" },
+  PAIR_SUPPLY_INTERVAL_SECONDS: { description: "Seconds between independent continuous Strategy pair-supply scans; minimum 5 seconds", default: "300" },
   PAIR_SUPPLY_RUN_IMMEDIATELY: { description: "Run the independent pair-supply scanner immediately on start instead of waiting one interval", default: "1" },
   STRATEGY_SETTLE_CCY: { description: "Comma-separated settle currencies Strategy is allowed to scan", default: "USDT" },
   STRATEGY_MIN_EQUITY: { description: "Maximum recommended pair equity allowed during strategy discovery (0 disables)", default: "0" },

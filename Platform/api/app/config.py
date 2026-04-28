@@ -42,5 +42,22 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in str(self.cors_origins or "").split(",") if item.strip()]
 
+    def validate_runtime_safety(self) -> None:
+        if str(self.app_env or "").strip().lower() != "production":
+            return
+
+        errors: list[str] = []
+        if not str(self.access_token_secret or "").strip() or self.access_token_secret == "change-me-access":
+            errors.append("ACCESS_TOKEN_SECRET must be set")
+        if not str(self.refresh_token_secret or "").strip() or self.refresh_token_secret == "change-me-refresh":
+            errors.append("REFRESH_TOKEN_SECRET must be set")
+        if self.event_allow_unauthenticated:
+            errors.append("EVENT_ALLOW_UNAUTHENTICATED must be false")
+        if not str(self.event_ingest_key or "").strip():
+            errors.append("EVENT_INGEST_KEY must be set")
+
+        if errors:
+            raise RuntimeError("Unsafe production configuration: " + "; ".join(errors))
+
 
 settings = Settings()

@@ -207,7 +207,7 @@ Exit conditions (all set kill_switch = 1 or 2):
 
 kill_switch = 1: Orders placed, enter monitoring phase
   → Returned when both entry orders successfully placed
-  → Signals main_execution to call close_all_positions()
+  → Signals main_execution to call close_all_positions_and_confirm()
 
 kill_switch = 2: Final stop, close everything
   → Hard stop triggered (Z > ±2.5): regime break detected
@@ -229,7 +229,7 @@ from func_execution_calls import (
     _fetch_instrument_info,
     _adjust_quantity_to_lot_size,
 )
-from func_close_positions import close_all_positions, get_position_info, place_market_close_order
+from func_close_positions import close_all_positions_and_confirm, get_position_info, place_market_close_order
 from func_order_review import check_order
 from func_fill_logging import log_order_fills
 from func_event_emitter import emit_event
@@ -243,6 +243,22 @@ from strategy_router import resolve_strategy_policy_overrides
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
+
+
+def _close_result_detail(result):
+    if not isinstance(result, dict):
+        return "close confirmation failed"
+    items = result.get("errors") or result.get("blockers") or []
+    detail = "; ".join(str(item) for item in items if str(item).strip())
+    return detail or "close confirmation failed"
+
+
+def _emergency_close_pair(reason, kill_switch=0):
+    result = close_all_positions_and_confirm(kill_switch)
+    if not result.get("ok"):
+        logger.error("Emergency close not confirmed (%s): %s", reason, _close_result_detail(result))
+        return 2
+    return int(result.get("kill_switch", 0) or 0)
 
 # Advanced trade manager for dynamic exit logic
 trade_manager = AdvancedTradeManager(
@@ -2347,7 +2363,7 @@ def manage_new_trades(
                     order_long_id = _resolve_entry_id(result_long)
                     if not order_long_id:
                         _log_missing_entry_id("Long", result_long)
-                        close_all_positions(0)
+                        kill_switch = _emergency_close_pair("missing_long_entry_id", 0)
                         return kill_switch, signal_detected, trade_placed
                     order_status_long = "placed"
                     count_long = 1
@@ -2409,7 +2425,7 @@ def manage_new_trades(
                     order_short_id = _resolve_entry_id(result_short)
                     if not order_short_id:
                         _log_missing_entry_id("Short", result_short)
-                        close_all_positions(0)
+                        kill_switch = _emergency_close_pair("missing_short_entry_id", 0)
                         return kill_switch, signal_detected, trade_placed
                     order_status_short = "placed"
                     count_short = 1
@@ -2452,7 +2468,9 @@ def manage_new_trades(
                         response=str(result_short),
                     )
                     should_switch = _handle_compliance_restriction(result_short, short_ticker)
-                    close_all_positions(0)
+                    kill_switch = _emergency_close_pair("short_entry_failed", 0)
+                    if kill_switch == 2:
+                        return kill_switch, signal_detected, trade_placed
                     if should_switch:
                         return 3, signal_detected, trade_placed
                     return kill_switch, signal_detected, trade_placed
@@ -2720,6 +2738,15 @@ def monitor_exit(
         entry_notional_val = None
 
     account_state = get_account_state()
+    if not isinstance(account_state, dict) or not bool(account_state.get("ok", True)):
+        detail = ""
+        if isinstance(account_state, dict):
+            detail = "; ".join(str(item) for item in account_state.get("errors", []) if str(item).strip())
+        logger.warning(
+            "Skipping monitor_exit PnL state update because account state is untrusted: %s",
+            detail or "invalid state",
+        )
+        return kill_switch
     positions = account_state.get("positions", []) if isinstance(account_state, dict) else []
 
     total_unrealized_pnl = 0.0

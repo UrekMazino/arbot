@@ -114,7 +114,7 @@ def _write_log_line(message: str) -> None:
 
 
 def _pair_supply_interval_seconds() -> int:
-    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=0)
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=5)
 
 
 def _handle_stop(signum, _frame):
@@ -181,9 +181,6 @@ def main() -> int:
         first_run = False
         if STOP_REQUESTED:
             break
-        if interval_seconds <= 0:
-            _write_log_line(f"{datetime.now(timezone.utc).isoformat()} pair_supply no_interval continuing")
-            continue
         _write_log_line(f"{datetime.now(timezone.utc).isoformat()} pair_supply sleeping seconds={interval_seconds}")
         _sleep_interruptibly(interval_seconds)
 

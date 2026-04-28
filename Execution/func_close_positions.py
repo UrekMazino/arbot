@@ -1,8 +1,11 @@
 import logging
 import math
+import os
+import time
 
 from config_execution_api import account_session, trade_session, inst_type, ticker_1, ticker_2, td_mode
 from func_fill_logging import log_order_fills
+from func_position_calls import get_account_state
 
 logger = logging.getLogger(__name__)
 
@@ -43,39 +46,26 @@ def get_position_info(ticker, session=None):
             continue
 
         pos_side = str(position.get("posSide", "")).lower()
-        
-        # Explicit mapping based on OKX posSide field
+
         if pos_side == "long":
             return abs(size), "Buy"
         if pos_side == "short":
             return abs(size), "Sell"
 
-        # Fallback to net position side if posSide is net or missing
         if size > 0:
             return size, "Buy"
-        
+
         return abs(size), "Sell"
 
     return 0.0, ""
 
-# Place market close order
+
 def place_market_close_order(ticker, size, side):
     """
     Close a position using a market order.
-    
-    Args:
-        ticker (str): Instrument ID.
-        size (float): Quantity to close.
-        side (str): Current position side ("Buy" or "Sell").
     """
     try:
-        # Determine the order side to close the position
-        # If we are "Buy" (Long), we must "sell" to close.
-        # If we are "Sell" (Short), we must "buy" to close.
         order_side = "sell" if side == "Buy" else "buy"
-        
-        # Determine the posSide for Hedge Mode (long/short)
-        # OKX needs this to know which side to reduce.
         pos_side = "long" if side == "Buy" else "short"
 
         response = trade_session.place_order(
@@ -85,11 +75,9 @@ def place_market_close_order(ticker, size, side):
             posSide=pos_side,
             ordType="market",
             sz=str(size),
-            reduceOnly=True
+            reduceOnly=True,
         )
 
-        # OKX returns code "0" for successful request handling.
-        # For certainty, we check if 'data' contains an 'ordId'.
         code = response.get("code")
         msg = response.get("msg")
         data_list = response.get("data", [])
@@ -100,14 +88,12 @@ def place_market_close_order(ticker, size, side):
             logger.info(f"Successfully placed market close order for {ticker}: {size} {order_side}. Order ID: {ord_id}")
             log_order_fills(ord_id, ticker)
             return response
-        
-        # Detailed error extraction
+
         s_code = order_data.get("sCode")
         s_msg = order_data.get("sMsg")
-        
         final_msg = s_msg if s_msg else msg
         final_code = s_code if s_code else code
-        
+
         logger.error(f"Market close order failed for {ticker} (Code: {final_code}): {final_msg}")
         return response
 
@@ -137,10 +123,15 @@ def _position_side(pos_side, pos_val):
 
 def close_non_active_positions(active_tickers, state=None, include_orders=True):
     active_set = set(active_tickers or [])
-    from func_position_calls import get_account_state
 
     if state is None:
         state = get_account_state()
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        logger.warning(
+            "Skipping non-active position cleanup because account state is untrusted: %s",
+            "; ".join(state.get("errors", [])) if isinstance(state, dict) else "invalid state",
+        )
+        return 0
 
     if include_orders:
         try:
@@ -184,51 +175,167 @@ def close_non_active_positions(active_tickers, state=None, include_orders=True):
     return closed
 
 
-# Close all positions for both tickers
-def close_all_positions(kill_switch):
+def _env_int(name, default, minimum=None):
+    raw = os.getenv(name)
+    try:
+        value = int(float(raw)) if raw not in (None, "") else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
+
+
+def _active_tickers(tickers=None):
+    source = tickers if tickers is not None else [ticker_1, ticker_2]
+    result = []
+    for ticker in source:
+        text = str(ticker or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _flat_blockers_from_state(state, tickers):
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        errors = state.get("errors", []) if isinstance(state, dict) else []
+        detail = "; ".join(str(item) for item in errors if str(item).strip())
+        return [detail or "account state could not be confirmed"]
+
+    blockers = []
+    active_set = set(tickers or [])
+    for pos in state.get("positions", []):
+        if not isinstance(pos, dict):
+            continue
+        inst_id = pos.get("instId")
+        if inst_id not in active_set:
+            continue
+        pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
+        if pos_val is not None and abs(pos_val) > 0:
+            blockers.append(f"open position remains for {inst_id}: {abs(pos_val):.8f}")
+
+    for order in state.get("orders", []):
+        if not isinstance(order, dict):
+            continue
+        inst_id = order.get("instId")
+        if inst_id in active_set:
+            blockers.append(f"open order remains for {inst_id}: {order.get('ordId') or 'unknown order'}")
+
+    return blockers
+
+
+def account_tickers_are_flat(tickers=None, state=None):
+    active = _active_tickers(tickers)
+    check_state = state if state is not None else get_account_state()
+    blockers = _flat_blockers_from_state(check_state, active)
+    return not blockers, blockers
+
+
+def close_all_positions(kill_switch, tickers=None, return_result=False):
     """
-    Cancel all open orders and close all positions for ticker_1 and ticker_2.
+    Cancel open orders and close positions for the active pair.
+
+    By default this preserves the historical integer return. Call with
+    return_result=True for structured close/cancel diagnostics.
     """
-    # Cancel all active orders for both tickers
-    for ticker in [ticker_1, ticker_2]:
+    active = _active_tickers(tickers)
+    result = {
+        "ok": True,
+        "kill_switch": 0,
+        "tickers": active,
+        "cancelled_orders": 0,
+        "close_orders": 0,
+        "errors": [],
+    }
+
+    for ticker in active:
         try:
-            # Fetch open orders (incomplete orders)
             response = trade_session.get_order_list(instId=ticker)
-            if response.get("code") == "0":
+            if isinstance(response, dict) and response.get("code") == "0":
                 orders = response.get("data", [])
                 if orders:
-                    # Prepare batch cancellation list
                     cancel_reqs = [{"instId": ticker, "ordId": o["ordId"]} for o in orders]
-                    
-                    # OKX cancel_multiple_orders allows up to 20 per request
                     for i in range(0, len(cancel_reqs), 20):
-                        batch = cancel_reqs[i:i+20]
-                        trade_session.cancel_multiple_orders(batch)
-                        logger.info(f"Cancelled {len(batch)} orders for {ticker}")
+                        batch = cancel_reqs[i:i + 20]
+                        cancel_response = trade_session.cancel_multiple_orders(batch)
+                        if isinstance(cancel_response, dict) and cancel_response.get("code") not in (None, "0"):
+                            msg = f"Failed to cancel orders for {ticker}: {cancel_response.get('msg') or cancel_response.get('code')}"
+                            logger.error(msg)
+                            result["errors"].append(msg)
+                        else:
+                            result["cancelled_orders"] += len(batch)
+                            logger.info(f"Cancelled {len(batch)} orders for {ticker}")
                 else:
                     logger.debug(f"No open orders to cancel for {ticker}.")
             else:
-                logger.error(f"Failed to fetch open orders for {ticker}: {response.get('msg')}")
+                msg = f"Failed to fetch open orders for {ticker}: {response.get('msg') if isinstance(response, dict) else 'invalid response'}"
+                logger.error(msg)
+                result["errors"].append(msg)
         except Exception as exc:
-            logger.error(f"Error cancelling orders for {ticker}: {exc}")
+            msg = f"Error cancelling orders for {ticker}: {exc}"
+            logger.error(msg)
+            result["errors"].append(msg)
 
-    # Get position information
-    size_1, side_1 = get_position_info(ticker_1)
-    size_2, side_2 = get_position_info(ticker_2)
+    for ticker in active:
+        size, side = get_position_info(ticker)
+        if size > 0:
+            logger.info(f"Closing position for {ticker}: {size} {side}")
+            close_response = place_market_close_order(ticker, size, side)
+            if isinstance(close_response, dict) and close_response.get("code") == "0":
+                result["close_orders"] += 1
+            else:
+                msg = f"Failed to place close order for {ticker}: {close_response}"
+                logger.error(msg)
+                result["errors"].append(msg)
 
-    if size_1 > 0:
-        logger.info(f"Closing position for {ticker_1}: {size_1} {side_1}")
-        place_market_close_order(ticker_1, size_1, side_1)
-
-    if size_2 > 0:
-        logger.info(f"Closing position for {ticker_2}: {size_2} {side_2}")
-        place_market_close_order(ticker_2, size_2, side_2)
-
-    # Clear entry tracking after closing positions
     from func_pair_state import clear_entry_tracking
     clear_entry_tracking()
-    logger.info("🧹 Entry Z-score tracking cleared")
+    logger.info("Entry Z-score tracking cleared")
 
-    # Output result
-    kill_switch = 0
-    return kill_switch
+    if result["errors"]:
+        result["ok"] = False
+    return result if return_result else 0
+
+
+def close_all_positions_and_confirm(kill_switch=0, tickers=None, timeout_seconds=None, poll_seconds=None):
+    active = _active_tickers(tickers)
+    timeout = timeout_seconds if timeout_seconds is not None else _env_int(
+        "STATBOT_CLOSE_CONFIRM_TIMEOUT_SECONDS",
+        30,
+        minimum=5,
+    )
+    poll = poll_seconds if poll_seconds is not None else _env_int(
+        "STATBOT_CLOSE_CONFIRM_POLL_SECONDS",
+        2,
+        minimum=1,
+    )
+    result = close_all_positions(kill_switch, tickers=active, return_result=True)
+    deadline = time.time() + timeout
+    last_blockers = []
+
+    while True:
+        flat, blockers = account_tickers_are_flat(active)
+        if flat:
+            result["ok"] = True
+            result["confirmed_flat"] = True
+            result["blockers"] = []
+            result["kill_switch"] = 0
+            return result
+
+        last_blockers = blockers
+        if time.time() >= deadline:
+            break
+        time.sleep(poll)
+
+    result["ok"] = False
+    result["confirmed_flat"] = False
+    result["blockers"] = last_blockers
+    result["errors"] = list(dict.fromkeys([*result.get("errors", []), *last_blockers]))
+    result["kill_switch"] = kill_switch
+    logger.error(
+        "Close confirmation failed for %s within %ss: %s",
+        "/".join(active),
+        timeout,
+        "; ".join(last_blockers),
+    )
+    return result

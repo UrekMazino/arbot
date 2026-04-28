@@ -3,28 +3,49 @@ import math
 from config_execution_api import account_session, inst_type, trade_session
 from func_api_retry import call_with_retries, is_disconnect_error, log_disconnect_once
 
+
+def _response_error_message(response):
+    if isinstance(response, dict):
+        return response.get("msg") or response.get("code") or "request failed"
+    return "invalid response"
+
+
 def get_account_state(inst_type_value=None, session_acc=None, session_trade=None):
     """
     Fetch all open positions and open orders for the account.
     Returns:
-        dict: {
-            "positions": [list of position dicts],
-            "orders": [list of order dicts]
-        }
+        dict with positions/orders plus ok/errors metadata. Any fetch failure
+        sets ok=False so callers can fail closed instead of treating missing
+        data as a flat account.
     """
     acc_session = session_acc or account_session
     tr_session = session_trade or trade_session
     it_value = inst_type_value or inst_type
 
-    state = {"positions": [], "orders": []}
+    state = {
+        "positions": [],
+        "orders": [],
+        "ok": True,
+        "positions_ok": False,
+        "orders_ok": False,
+        "errors": [],
+    }
 
     try:
         # Fetch all positions for the instrument type
         pos_res = call_with_retries(lambda: acc_session.get_positions(instType=it_value))
-        if pos_res.get("code") == "0":
+        if isinstance(pos_res, dict) and pos_res.get("code") == "0":
             state["positions"] = pos_res.get("data", [])
+            state["positions_ok"] = True
+        else:
+            msg = f"ERROR: Failed to fetch all positions: {_response_error_message(pos_res)}"
+            state["ok"] = False
+            state["errors"].append(msg)
+            print(msg)
     except Exception as e:
         msg = f"ERROR: Failed to fetch all positions: {e}"
+        state["ok"] = False
+        state["errors"].append(msg)
         if is_disconnect_error(e):
             log_disconnect_once("positions_all", msg)
         else:
@@ -33,10 +54,18 @@ def get_account_state(inst_type_value=None, session_acc=None, session_trade=None
     try:
         # Fetch all open orders for the instrument type
         ord_res = call_with_retries(lambda: tr_session.get_order_list(instType=it_value))
-        if ord_res.get("code") == "0":
+        if isinstance(ord_res, dict) and ord_res.get("code") == "0":
             state["orders"] = ord_res.get("data", [])
+            state["orders_ok"] = True
+        else:
+            msg = f"ERROR: Failed to fetch all open orders: {_response_error_message(ord_res)}"
+            state["ok"] = False
+            state["errors"].append(msg)
+            print(msg)
     except Exception as e:
         msg = f"ERROR: Failed to fetch all open orders: {e}"
+        state["ok"] = False
+        state["errors"].append(msg)
         if is_disconnect_error(e):
             log_disconnect_once("orders_all", msg)
         else:
@@ -52,6 +81,9 @@ def check_inst_status(state, inst_id):
     """
     has_pos = False
     has_ords = False
+
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        return True, True
 
     for pos in state.get("positions", []):
         if pos.get("instId") == inst_id:

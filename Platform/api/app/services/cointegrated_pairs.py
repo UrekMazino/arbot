@@ -444,7 +444,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _pair_supply_interval_seconds() -> int:
-    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=0)
+    return _env_int("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", 300, minimum=5)
 
 
 def _pair_doctor_ui_refresh_seconds() -> int:
@@ -516,7 +516,7 @@ def _start_pair_supply_local(requested_by: str | None = None) -> dict[str, Any]:
     rotate_log_file_if_needed(PAIR_SUPPLY_LOG, env_file=EXECUTION_ENV_FILE)
     env = _merged_child_env()
     env["PYTHONUNBUFFERED"] = "1"
-    env.setdefault("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", str(interval_seconds))
+    env["STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS"] = str(interval_seconds)
     env.setdefault("STATBOT_PAIR_SUPPLY_RUN_IMMEDIATELY", "1")
     env["STATBOT_PAIR_SUPPLY_LOG_PATH"] = str(PAIR_SUPPLY_LOG)
     command = [sys.executable, str(entrypoint)]
@@ -934,12 +934,18 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
     }
 
 
+def _curator_pair_is_selectable(pair_data: dict[str, Any]) -> bool:
+    status = str(pair_data.get("status") or "").strip().lower()
+    recommendation = str(pair_data.get("recommendation") or "").strip().lower()
+    return status == "healthy" or recommendation == "promote"
+
+
 def get_healthiest_pair_from_curator() -> dict[str, Any] | None:
     """Find the healthiest pair (Rank #1) from the curator report.
 
     Returns:
         dict with ticker_1, ticker_2, pair, priority_rank, score, status
-        or None if no curator report or no healthy pairs found.
+        or None if no curator report or no healthy/promote pairs found.
     """
     curator_report = _load_curator_report()
     curator_pairs = _curator_pairs_by_key(curator_report)
@@ -947,37 +953,34 @@ def get_healthiest_pair_from_curator() -> dict[str, Any] | None:
     if not curator_pairs:
         return None
 
-    # Find the pair with priority_rank = 1 (healthiest)
+    selectable_pairs: list[dict[str, Any]] = []
     for pair_key, pair_data in curator_pairs.items():
         if not isinstance(pair_data, dict):
+            continue
+        if not _curator_pair_is_selectable(pair_data):
             continue
         priority_rank = _safe_int(pair_data.get("priority_rank"))
-        if priority_rank == 1:
-            return {
-                "ticker_1": pair_data.get("sym_1"),
-                "ticker_2": pair_data.get("sym_2"),
-                "pair": pair_data.get("pair"),
-                "priority_rank": priority_rank,
-                "score": pair_data.get("score"),
-                "status": pair_data.get("status"),
-            }
-
-    # Fallback: find by highest score
-    best_pair = None
-    best_score = -1.0
-    for pair_key, pair_data in curator_pairs.items():
-        if not isinstance(pair_data, dict):
-            continue
         score = _safe_float(pair_data.get("score")) or 0.0
-        if score > best_score:
-            best_score = score
-            best_pair = {
+        selectable_pairs.append(
+            {
                 "ticker_1": pair_data.get("sym_1"),
                 "ticker_2": pair_data.get("sym_2"),
-                "pair": pair_data.get("pair"),
-                "priority_rank": _safe_int(pair_data.get("priority_rank")),
+                "pair": pair_data.get("pair") or pair_key,
+                "priority_rank": priority_rank,
                 "score": score,
                 "status": pair_data.get("status"),
+                "recommendation": pair_data.get("recommendation"),
             }
+        )
 
-    return best_pair
+    if not selectable_pairs:
+        return None
+
+    ranked_pairs = [
+        pair for pair in selectable_pairs
+        if pair.get("priority_rank") is not None and int(pair.get("priority_rank") or 0) > 0
+    ]
+    if ranked_pairs:
+        return min(ranked_pairs, key=lambda pair: int(pair.get("priority_rank") or 999999))
+
+    return max(selectable_pairs, key=lambda pair: float(pair.get("score") or 0.0))

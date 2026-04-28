@@ -11,10 +11,10 @@ if str(STRATEGY_ROOT) not in sys.path:
 import pair_supply_daemon as daemon
 
 
-def test_pair_supply_daemon_interval_allows_zero(monkeypatch):
+def test_pair_supply_daemon_interval_enforces_minimum(monkeypatch):
     monkeypatch.setenv("STATBOT_PAIR_SUPPLY_INTERVAL_SECONDS", "0")
 
-    assert daemon._pair_supply_interval_seconds() == 0
+    assert daemon._pair_supply_interval_seconds() == 5
 
 
 def test_pair_supply_daemon_loads_interval_from_execution_env(monkeypatch, tmp_path):
@@ -29,7 +29,7 @@ def test_pair_supply_daemon_loads_interval_from_execution_env(monkeypatch, tmp_p
 
     daemon._load_execution_env()
 
-    assert daemon._pair_supply_interval_seconds() == 0
+    assert daemon._pair_supply_interval_seconds() == 5
 
 
 def test_pair_supply_daemon_execution_env_interval_overrides_process_default(monkeypatch, tmp_path):
@@ -44,7 +44,7 @@ def test_pair_supply_daemon_execution_env_interval_overrides_process_default(mon
 
     daemon._load_execution_env()
 
-    assert daemon._pair_supply_interval_seconds() == 0
+    assert daemon._pair_supply_interval_seconds() == 5
 
 
 def test_pair_supply_daemon_rotates_scheduler_log(monkeypatch, tmp_path):

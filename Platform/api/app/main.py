@@ -110,5 +110,6 @@ def bootstrap_identity() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
+    settings.validate_runtime_safety()
     Base.metadata.create_all(bind=engine)
     bootstrap_identity()

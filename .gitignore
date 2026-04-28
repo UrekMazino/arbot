@@ -50,8 +50,8 @@ Simulation/output/
 
 *.pdf
 status.json
-Execution/state/regime_state.json
-Execution/state/*.json
+Execution/state/*
+!Execution/state/
 !Execution/state/graveyard_tickers.json
 Execution/state/event_spool/
 

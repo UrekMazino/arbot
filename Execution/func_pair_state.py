@@ -81,6 +81,12 @@ def _env_float(name, default):
         return default
 
 
+PERSISTENCE_HISTORY_MAX_AGE_SECONDS = max(
+    _env_int("STATBOT_ENTRY_PERSISTENCE_HISTORY_MAX_AGE_SECONDS", 900),
+    60,
+)
+PERSISTENCE_HISTORY_MAX_LEN = max(_env_int("STATBOT_ENTRY_PERSISTENCE_HISTORY_MAX_LEN", 240), 5)
+
 PAIR_HISTORY_MIN_TRADES = _env_int("STATBOT_HISTORY_MIN_TRADES", DEFAULT_HISTORY_MIN_TRADES)
 PAIR_HISTORY_MIN_WIN_RATE = _env_float("STATBOT_HISTORY_MIN_WIN_RATE", DEFAULT_HISTORY_MIN_WIN_RATE)
 PAIR_HISTORY_REQUIRE_PROFIT = _env_flag("STATBOT_HISTORY_REQUIRE_PROFIT", DEFAULT_HISTORY_REQUIRE_PROFIT)
@@ -1225,16 +1231,47 @@ def can_reenter(cooldown_minutes=5):
     return time_since_exit >= cooldown_minutes
 
 def add_to_persistence_history(z_score):
-    """Add current z-score to persistence history (last 5 values)."""
+    """Add current z-score to persistence history with a timestamp."""
     state = load_pair_state()
-    if "persistence_history" not in state:
-        state["persistence_history"] = []
+    history = state.get("persistence_history", [])
+    if not isinstance(history, list):
+        history = []
 
-    state["persistence_history"].append(z_score)
-    # Keep only last 5 values
-    if len(state["persistence_history"]) > 5:
-        state["persistence_history"] = state["persistence_history"][-5:]
+    try:
+        z_val = float(z_score)
+    except (TypeError, ValueError):
+        return
 
+    now = time.time()
+    normalized = []
+    for entry in history:
+        if isinstance(entry, dict):
+            try:
+                item_z = float(entry.get("z"))
+                item_ts = float(entry.get("ts"))
+            except (TypeError, ValueError):
+                continue
+            normalized.append({"ts": item_ts, "z": item_z})
+            continue
+        try:
+            item_z = float(entry)
+        except (TypeError, ValueError):
+            continue
+        normalized.append({"ts": now, "z": item_z})
+
+    normalized.append({"ts": now, "z": z_val})
+
+    cutoff = now - PERSISTENCE_HISTORY_MAX_AGE_SECONDS
+    normalized = [
+        entry
+        for entry in normalized
+        if isinstance(entry, dict) and entry.get("ts", 0) >= cutoff
+    ]
+
+    if len(normalized) > PERSISTENCE_HISTORY_MAX_LEN:
+        normalized = normalized[-PERSISTENCE_HISTORY_MAX_LEN:]
+
+    state["persistence_history"] = normalized
     save_pair_state(state)
 
 def add_to_z_history(z_score):

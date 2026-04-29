@@ -196,7 +196,7 @@ def _active_tickers(tickers=None):
     return result
 
 
-def _flat_blockers_from_state(state, tickers):
+def _flat_blockers_from_state(state, tickers, *, all_tickers=False):
     if not isinstance(state, dict) or not bool(state.get("ok", True)):
         errors = state.get("errors", []) if isinstance(state, dict) else []
         detail = "; ".join(str(item) for item in errors if str(item).strip())
@@ -204,11 +204,12 @@ def _flat_blockers_from_state(state, tickers):
 
     blockers = []
     active_set = set(tickers or [])
+    check_all = bool(all_tickers)
     for pos in state.get("positions", []):
         if not isinstance(pos, dict):
             continue
         inst_id = pos.get("instId")
-        if inst_id not in active_set:
+        if not check_all and inst_id not in active_set:
             continue
         pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
         if pos_val is not None and abs(pos_val) > 0:
@@ -218,16 +219,48 @@ def _flat_blockers_from_state(state, tickers):
         if not isinstance(order, dict):
             continue
         inst_id = order.get("instId")
-        if inst_id in active_set:
+        if check_all or inst_id in active_set:
             blockers.append(f"open order remains for {inst_id}: {order.get('ordId') or 'unknown order'}")
 
     return blockers
+
+
+def exposure_tickers_from_state(state):
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        return []
+
+    tickers = []
+
+    def _add_ticker(inst_id):
+        text = str(inst_id or "").strip()
+        if text and text not in tickers:
+            tickers.append(text)
+
+    for pos in state.get("positions", []):
+        if not isinstance(pos, dict):
+            continue
+        pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
+        if pos_val is not None and abs(pos_val) > 0:
+            _add_ticker(pos.get("instId"))
+
+    for order in state.get("orders", []):
+        if not isinstance(order, dict):
+            continue
+        _add_ticker(order.get("instId"))
+
+    return tickers
 
 
 def account_tickers_are_flat(tickers=None, state=None):
     active = _active_tickers(tickers)
     check_state = state if state is not None else get_account_state()
     blockers = _flat_blockers_from_state(check_state, active)
+    return not blockers, blockers
+
+
+def account_is_flat(state=None):
+    check_state = state if state is not None else get_account_state()
+    blockers = _flat_blockers_from_state(check_state, [], all_tickers=True)
     return not blockers, blockers
 
 
@@ -338,4 +371,51 @@ def close_all_positions_and_confirm(kill_switch=0, tickers=None, timeout_seconds
         timeout,
         "; ".join(last_blockers),
     )
+    return result
+
+
+def close_account_positions_and_confirm(kill_switch=0, timeout_seconds=None, poll_seconds=None):
+    state = get_account_state()
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        errors = state.get("errors", []) if isinstance(state, dict) else []
+        detail = "; ".join(str(item) for item in errors if str(item).strip())
+        return {
+            "ok": False,
+            "confirmed_flat": False,
+            "tickers": [],
+            "errors": [detail or "account state could not be confirmed"],
+            "blockers": [detail or "account state could not be confirmed"],
+            "kill_switch": kill_switch,
+        }
+
+    tickers = exposure_tickers_from_state(state)
+    if not tickers:
+        return {
+            "ok": True,
+            "confirmed_flat": True,
+            "tickers": [],
+            "errors": [],
+            "blockers": [],
+            "kill_switch": 0,
+        }
+
+    result = close_all_positions_and_confirm(
+        kill_switch,
+        tickers=tickers,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    flat, blockers = account_is_flat()
+    if flat:
+        result["ok"] = True
+        result["confirmed_flat"] = True
+        result["blockers"] = []
+        result["kill_switch"] = 0
+        return result
+
+    result["ok"] = False
+    result["confirmed_flat"] = False
+    result["blockers"] = blockers
+    result["errors"] = list(dict.fromkeys([*result.get("errors", []), *blockers]))
+    result["kill_switch"] = kill_switch
     return result

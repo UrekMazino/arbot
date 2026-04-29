@@ -24,6 +24,7 @@ from config_execution_api import (
     ENTRY_Z_TOLERANCE,
     ENTRY_MIN_QUALIFIED_BARS,
     ENTRY_EXTREME_CLEAN_BARS,
+    ENTRY_MIN_CONTINUOUS_SECONDS,
     EXIT_Z,
     P_VALUE_CRITICAL,
     ZERO_CROSSINGS_MIN,
@@ -67,10 +68,16 @@ from func_price_calls import (
     get_price_klines,
     normalize_candlesticks,
 )
-from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT
+from func_trade_management import manage_new_trades, monitor_exit, RISK_PER_TRADE_PCT, check_pair_health
 from func_get_zscore import get_latest_zscore
 from func_execution_calls import set_leverage, get_min_capital_requirements
-from func_close_positions import close_all_positions_and_confirm, get_position_info, close_non_active_positions
+from func_close_positions import (
+    account_is_flat,
+    close_account_positions_and_confirm,
+    close_all_positions_and_confirm,
+    close_non_active_positions,
+    get_position_info,
+)
 from func_event_emitter import emit_event, flush_events, get_event_context
 from func_save_status import save_status
 from regime_router import RegimeInput, RegimeRouter, should_block_new_entries as should_block_regime_entries
@@ -81,6 +88,7 @@ from strategy_router import (
 )
 from func_strategy_state import record_strategy_trade_result
 from cointegration_health import (
+    COINT_HEALTH_VALID,
     COINT_HEALTH_WATCH,
     classify_cointegration_health,
     get_cointegration_health_settings,
@@ -104,6 +112,7 @@ from func_pair_state import (
     drain_ready_hospital_pairs,
     normalize_pair_key,
     get_last_health_score,
+    set_last_health_score,
     get_last_switch_reason,
     set_last_switch_reason,
     get_min_capital_cooldown,
@@ -184,6 +193,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "entry_z_tolerance": ENTRY_Z_TOLERANCE,
             "entry_min_qualified_bars": ENTRY_MIN_QUALIFIED_BARS,
             "entry_extreme_clean_bars": ENTRY_EXTREME_CLEAN_BARS,
+            "entry_min_continuous_seconds": ENTRY_MIN_CONTINUOUS_SECONDS,
             "exit_z": EXIT_Z,
             "p_value_critical": P_VALUE_CRITICAL,
             "coint_watch_p_value": _env_text("STATBOT_COINT_WATCH_P_VALUE", "0.25"),
@@ -272,6 +282,12 @@ _COINT_GATE_THRESHOLD = 2  # Trigger switch after N consecutive coint_gate decis
 _COINT_WATCH_STREAK = 0  # Track softer watch-band cointegration misses separately
 _COINT_WATCH_GATE_THRESHOLD = 6  # Watch-band misses get a longer grace window
 FORCED_SWITCH_EXIT_REASONS = {
+    "health",
+    "cointegration_lost",
+    "cointegration_watch_timeout",
+    "orderbook_dead",
+    "pair_loss_limit",
+    "idle_timeout",
     "exit_tier_1_stop_loss",
     "exit_tier_15_riskoff_coint_loss",
     "exit_tier_2_coint_losing",
@@ -281,6 +297,7 @@ FORCED_SWITCH_EXIT_REASONS = {
 PAIR_SUPPLY_STATE_FILE = Path(__file__).resolve().parent / "state" / "pair_supply_control.json"
 PAIR_SUPPLY_LOG_FILE = Path(__file__).resolve().parent.parent / "Logs" / "v1" / "pair_supply_scheduler.log"
 MANUAL_PAIR_SWITCH_FILE = Path(__file__).resolve().parent / "state" / "manual_pair_switch.json"
+PAIR_CURATOR_REPORT_FILE = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "pair_universe_curator.json"
 
 
 def _should_log_pnl(total_pnl):
@@ -408,6 +425,23 @@ def _get_switch_precheck_window():
     if value < 20:
         value = 20
     return value
+
+
+def _get_switch_precheck_min_health_score():
+    raw = os.getenv("STATBOT_SWITCH_PRECHECK_MIN_HEALTH_SCORE", "70")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 70.0
+    return max(0.0, min(value, 100.0))
+
+
+def _get_switch_close_timeout_seconds():
+    return _env_int("STATBOT_SWITCH_CLOSE_TIMEOUT_SECONDS", 30, minimum=5)
+
+
+def _get_switch_close_poll_seconds():
+    return _env_int("STATBOT_SWITCH_CLOSE_POLL_SECONDS", 2, minimum=1)
 
 
 def _env_float(name, default):
@@ -1471,6 +1505,48 @@ def _force_close_current_pair_for_manual_switch(current_pair, active_tickers):
     return False, blockers
 
 
+def _account_flat_switch_blockers(state=None):
+    flat, blockers = account_is_flat(state=state)
+    if flat:
+        return []
+    return [str(item).strip() for item in blockers if str(item).strip()]
+
+
+def _force_close_account_for_pair_switch(reason):
+    timeout_seconds = _get_switch_close_timeout_seconds()
+    poll_seconds = _get_switch_close_poll_seconds()
+    logger.warning("Pair switch reason=%s requires account flat; closing all account exposure.", reason)
+    result = close_account_positions_and_confirm(
+        0,
+        timeout_seconds=timeout_seconds,
+        poll_seconds=poll_seconds,
+    )
+    if result.get("ok"):
+        logger.info("Confirmed account is flat before pair switch (reason=%s).", reason)
+        return True, []
+
+    blockers = result.get("blockers") or result.get("errors") or ["account exposure did not confirm flat"]
+    blockers = [str(item).strip() for item in blockers if str(item).strip()]
+    logger.error("Pair switch blocked; account not flat after close attempt: %s", "; ".join(blockers))
+    return False, blockers
+
+
+def _emit_pair_switch_blocked(reason, blockers, health_score=None, target_pair=None):
+    emit_event(
+        "pair_switch",
+        payload={
+            "from_pair": f"{ticker_1}/{ticker_2}",
+            "to_pair": target_pair,
+            "reason": reason,
+            "status": SWITCH_RESULT_BLOCKED,
+            "health_score": health_score,
+            "blockers": list(blockers or []),
+        },
+        severity="warn",
+        logger=logger,
+    )
+
+
 def _apply_manual_pair_switch_request(request, in_position_or_orders):
     next_t1 = str(request.get("ticker_1") or "").strip().upper()
     next_t2 = str(request.get("ticker_2") or "").strip().upper()
@@ -1484,7 +1560,7 @@ def _apply_manual_pair_switch_request(request, in_position_or_orders):
     if lock_on_pair:
         blockers.append("lock_on_pair is enabled")
     if in_position_or_orders and not force_switch:
-        blockers.append("active position or order is present")
+        blockers.append("account position or order is present")
     if is_restricted_ticker(next_t1):
         blockers.append(f"{next_t1} is ticker-restricted: {get_restricted_ticker_reason(next_t1) or 'restricted'}")
     if is_restricted_ticker(next_t2):
@@ -1502,12 +1578,9 @@ def _apply_manual_pair_switch_request(request, in_position_or_orders):
         _mark_manual_pair_switch_request(request, "already_active", detail)
         return SWITCH_RESULT_BLOCKED
 
-    # Force switch: close any existing positions before switching
+    # Force switch: close any existing account exposure before switching.
     if force_switch and in_position_or_orders:
-        closed, close_blockers = _force_close_current_pair_for_manual_switch(
-            current_pair,
-            [curr_t1, curr_t2],
-        )
+        closed, close_blockers = _force_close_account_for_pair_switch("manual_switch")
         if not closed:
             _reject_manual_pair_switch(request, close_blockers)
             return SWITCH_RESULT_BLOCKED
@@ -1605,6 +1678,42 @@ def _should_trust_pair_universe_candidates(csv_path=None):
     if csv_path is not None and not _csv_has_pair_rows(csv_path):
         return False
     return True
+
+
+def _switch_requires_curator_health():
+    return _env_flag("STATBOT_SWITCH_REQUIRE_CURATOR_HEALTHY", True)
+
+
+def _read_pair_curator_index():
+    try:
+        if not PAIR_CURATOR_REPORT_FILE.exists():
+            return {}
+        report = json.loads(PAIR_CURATOR_REPORT_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Could not read Pair Universe curator report: %s", exc)
+        return {}
+    if not isinstance(report, dict):
+        return {}
+    pairs = report.get("pairs")
+    if not isinstance(pairs, dict):
+        return {}
+
+    indexed = {}
+    for key, item in pairs.items():
+        if not isinstance(item, dict):
+            continue
+        pair_key = normalize_pair_key(item.get("sym_1"), item.get("sym_2")) or str(key or "").strip()
+        if pair_key:
+            indexed[pair_key] = item
+    return indexed
+
+
+def _curator_pair_is_switch_eligible(curator_row):
+    if not isinstance(curator_row, dict):
+        return False
+    status = str(curator_row.get("status") or "").strip().lower()
+    recommendation = str(curator_row.get("recommendation") or "").strip().lower()
+    return status == "healthy" or recommendation == "promote"
 
 
 def _wait_for_pair_supply_csv(csv_path):
@@ -1907,6 +2016,16 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         )
         return SWITCH_RESULT_BLOCKED
 
+    flat_blockers = _account_flat_switch_blockers()
+    if flat_blockers:
+        logger.warning(
+            "Pair switch blocked (reason=%s): account must be flat before changing active pair: %s",
+            switch_reason,
+            "; ".join(flat_blockers),
+        )
+        _emit_pair_switch_blocked(switch_reason, flat_blockers, health_score=health_score)
+        return SWITCH_RESULT_BLOCKED
+
     # Log if emergency override was used
     if elapsed < 24:
         is_emergency_reason = str(switch_reason or "").strip().lower() in ("health", "orderbook_dead")
@@ -1932,25 +2051,19 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
     precheck_fail_open = _get_switch_precheck_fail_open()
     precheck_limit = _get_switch_precheck_limit()
     precheck_window = _get_switch_precheck_window()
+    precheck_min_health = _get_switch_precheck_min_health_score()
     precheck_cache = {}
-    trust_pair_supply = _should_trust_pair_universe_candidates(csv_path)
     if precheck_coint_enabled:
-        if trust_pair_supply:
-            logger.info(
-                "Pair Universe has supplied candidates; trusting supplied rows and skipping extra switch coint pre-check."
-            )
-        else:
-            logger.info(
-                "Pair switch pre-check enabled (coint, limit=%d, window=%d, fail_open=%d).",
-                precheck_limit,
-                precheck_window,
-                int(precheck_fail_open),
-            )
+        logger.info(
+            "Pair switch live pre-check enabled (limit=%d, window=%d, min_health=%.1f, fail_open=%d).",
+            precheck_limit,
+            precheck_window,
+            precheck_min_health,
+            int(precheck_fail_open),
+        )
 
     def _pair_passes_switch_precheck(t1, t2):
         if not precheck_coint_enabled:
-            return True
-        if trust_pair_supply:
             return True
 
         pair_key = normalize_pair_key(t1, t2) or f"{t1}/{t2}"
@@ -1959,7 +2072,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             return bool(cached)
 
         try:
-            _zs, _sign, metrics = get_latest_zscore(
+            zscores, _sign, metrics = get_latest_zscore(
                 inst_id_1=t1,
                 inst_id_2=t2,
                 limit=precheck_limit,
@@ -1967,15 +2080,37 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 use_orderbook=False,
             )
             coint_flag = int(metrics.get("coint_flag", 0))
-            passed = coint_flag == 1
+            latest_precheck_z = 0.0
+            for value in reversed(zscores or []):
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    latest_precheck_z = float(value)
+                    break
+            coint_health = classify_cointegration_health(metrics, strict_pvalue=P_VALUE_CRITICAL)
+            should_switch, live_health_score, live_recommendation = check_pair_health(
+                metrics,
+                latest_precheck_z,
+                silent=True,
+                pair_tickers=(t1, t2),
+                persist_health_score=False,
+            )
+            passed = (
+                coint_flag == 1
+                and coint_health.get("state") == COINT_HEALTH_VALID
+                and not should_switch
+                and float(live_health_score) >= precheck_min_health
+            )
             if not passed:
                 logger.info(
-                    "Skipping pair %s/%s: switch pre-check failed (coint=%d p=%.4f corr=%.3f).",
+                    "Skipping pair %s/%s: live switch pre-check failed "
+                    "(coint=%d coint_health=%s p=%.4f corr=%.3f health=%.1f recommendation=%s).",
                     t1,
                     t2,
                     coint_flag,
+                    coint_health.get("state"),
                     float(metrics.get("p_value", 1.0) or 1.0),
                     float(metrics.get("correlation", 0.0) or 0.0),
+                    float(live_health_score),
+                    live_recommendation,
                 )
             precheck_cache[pair_key] = bool(passed)
             return bool(passed)
@@ -2018,11 +2153,34 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             logger.error("CSV missing sym_1 or sym_2 columns. Columns found: %s", df.columns.tolist())
             return []
 
+        curator_index = _read_pair_curator_index()
+        require_curator_health = _switch_requires_curator_health()
+        if require_curator_health and not curator_index:
+            logger.warning(
+                "Pair switch requires curator status healthy/promote, but no curator report is available at %s.",
+                PAIR_CURATOR_REPORT_FILE,
+            )
+
         pairs = []
         for _, row in df.iterrows():
             sym_1 = row.get("sym_1")
             sym_2 = row.get("sym_2")
             if not sym_1 or not sym_2:
+                continue
+            pair_key = normalize_pair_key(sym_1, sym_2)
+
+            curator_row = curator_index.get(pair_key) if pair_key else None
+            if require_curator_health and not _curator_pair_is_switch_eligible(curator_row):
+                status = str((curator_row or {}).get("status") or "missing")
+                recommendation = str((curator_row or {}).get("recommendation") or "missing")
+                logger.info(
+                    "Skipping pair %s/%s: curator status not eligible for switch "
+                    "(status=%s recommendation=%s; require healthy/promote).",
+                    sym_1,
+                    sym_2,
+                    status,
+                    recommendation,
+                )
                 continue
 
             # Skip restricted tickers from persistent ticker graveyard/state.
@@ -2059,13 +2217,15 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                 continue
 
             min_equity = _parse_min_equity(row.get("min_equity_recommended"))
-            pair_key = normalize_pair_key(sym_1, sym_2)
             pairs.append(
                 {
                     "sym_1": sym_1,
                     "sym_2": sym_2,
                     "pair_key": pair_key,
                     "min_equity": min_equity,
+                    "curator_status": (curator_row or {}).get("status"),
+                    "curator_recommendation": (curator_row or {}).get("recommendation"),
+                    "curator_score": (curator_row or {}).get("score"),
                 }
             )
         logger.info("Found %d pairs in CSV.", len(pairs))
@@ -2835,12 +2995,14 @@ if __name__ == "__main__":
             is_manage_new_trades = not any(checks_all)
             in_position_now = bool(is_p_open or is_n_open)
             in_position_or_orders = not is_manage_new_trades
+            account_flat, account_flat_blockers = account_is_flat(state=acc_state)
+            account_has_exposure = not account_flat
 
             manual_switch_request = _read_manual_pair_switch_request()
             if manual_switch_request:
                 switch_result = _apply_manual_pair_switch_request(
                     manual_switch_request,
-                    in_position_or_orders=in_position_or_orders,
+                    in_position_or_orders=account_has_exposure,
                 )
                 if switch_result == SWITCH_RESULT_SWITCHED:
                     status_dict["message"] = "Manual pair switch applied; restarting..."
@@ -2927,17 +3089,25 @@ if __name__ == "__main__":
 
                     health_score = 0  # Force emergency override
                     set_last_switch_reason("orderbook_dead")
-                    switch_result = _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead")
-                    if switch_result == SWITCH_RESULT_SWITCHED:
-                        logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-                        print("Restarting to apply new pair...")
-                        sys.exit(3)
-                    if switch_result == SWITCH_RESULT_HARD_STOP:
-                        status_dict["message"] = "Hard stop: no replacement pairs available"
-                        save_status(status_dict)
-                        logger.critical("No replacement pairs available after orderbook dead. Hard stop.")
-                        sys.exit(1)
-                    logger.error("Pair switch blocked. Will retry next cycle.")
+                    if account_has_exposure:
+                        set_last_health_score(0)
+                        kill_switch = 2
+                        logger.warning(
+                            "Orderbook-dead switch deferred until account exposure is closed: %s",
+                            "; ".join(account_flat_blockers) or "account not flat",
+                        )
+                    else:
+                        switch_result = _switch_to_next_pair(health_score=health_score, switch_reason="orderbook_dead")
+                        if switch_result == SWITCH_RESULT_SWITCHED:
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            sys.exit(3)
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after orderbook dead. Hard stop.")
+                            sys.exit(1)
+                        logger.error("Pair switch blocked. Will retry next cycle.")
 
             # 3. CIRCUIT BREAKER: Check cumulative P&L
             total_pnl, pnl_pct, pnl_info = _calculate_cumulative_pnl(
@@ -3248,14 +3418,23 @@ if __name__ == "__main__":
                                     coint_state,
                                     switch_reason_for_coint,
                                 )
-                                switch_result = _switch_to_next_pair(
-                                    health_score=0,
-                                    switch_reason=switch_reason_for_coint,
-                                )
-                                logger.info(
-                                    "Pair switch triggered due to cointegration health: result=%s",
-                                    switch_result,
-                                )
+                                if account_has_exposure:
+                                    set_last_switch_reason(switch_reason_for_coint)
+                                    set_last_health_score(0)
+                                    kill_switch = 2
+                                    logger.warning(
+                                        "Deferring cointegration pair switch until account exposure is closed: %s",
+                                        "; ".join(account_flat_blockers) or "account not flat",
+                                    )
+                                else:
+                                    switch_result = _switch_to_next_pair(
+                                        health_score=0,
+                                        switch_reason=switch_reason_for_coint,
+                                    )
+                                    logger.info(
+                                        "Pair switch triggered due to cointegration health: result=%s",
+                                        switch_result,
+                                    )
                                 _COINT_GATE_STREAK = 0  # Reset after switch attempt
                                 _COINT_WATCH_STREAK = 0
                         else:
@@ -3499,7 +3678,7 @@ if __name__ == "__main__":
                     )
                     status_dict["message"] = "Session circuit breaker triggered - closing all positions"
                     save_status(status_dict)
-                    close_result = close_all_positions_and_confirm(0)
+                    close_result = close_account_positions_and_confirm(0)
                     if not close_result.get("ok"):
                         detail = "; ".join(
                             str(item)
@@ -3537,7 +3716,7 @@ if __name__ == "__main__":
                 )
                 status_dict["message"] = "Pair circuit breaker triggered - closing all positions"
                 save_status(status_dict)
-                close_result = close_all_positions_and_confirm(0)
+                close_result = close_account_positions_and_confirm(0)
                 if not close_result.get("ok"):
                     detail = "; ".join(
                         str(item)
@@ -3575,20 +3754,28 @@ if __name__ == "__main__":
                         status_dict["message"] = "Idle timeout; switching pair..."
                         save_status(status_dict)
                         set_last_switch_reason("idle_timeout")
-                        switch_result = _switch_to_next_pair(
-                            health_score=0,
-                            switch_reason="idle_timeout",
-                        )
-                        if switch_result == SWITCH_RESULT_SWITCHED:
-                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-                            print("Restarting to apply new pair...")
-                            sys.exit(3)
-                        if switch_result == SWITCH_RESULT_HARD_STOP:
-                            status_dict["message"] = "Hard stop: no replacement pairs available"
-                            save_status(status_dict)
-                            logger.critical("No replacement pairs available after idle timeout. Hard stop.")
-                            sys.exit(1)
-                        logger.error("Pair switch blocked. Will retry next cycle.")
+                        if account_has_exposure:
+                            set_last_health_score(0)
+                            kill_switch = 2
+                            logger.warning(
+                                "Idle-timeout switch deferred until account exposure is closed: %s",
+                                "; ".join(account_flat_blockers) or "account not flat",
+                            )
+                        else:
+                            switch_result = _switch_to_next_pair(
+                                health_score=0,
+                                switch_reason="idle_timeout",
+                            )
+                            if switch_result == SWITCH_RESULT_SWITCHED:
+                                logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                                print("Restarting to apply new pair...")
+                                sys.exit(3)
+                            if switch_result == SWITCH_RESULT_HARD_STOP:
+                                status_dict["message"] = "Hard stop: no replacement pairs available"
+                                save_status(status_dict)
+                                logger.critical("No replacement pairs available after idle timeout. Hard stop.")
+                                sys.exit(1)
+                            logger.error("Pair switch blocked. Will retry next cycle.")
 
             # 4. Check for signal and place new trades
             if is_manage_new_trades and kill_switch == 0:
@@ -3738,24 +3925,35 @@ if __name__ == "__main__":
                     health_score = get_last_health_score()
                     switch_reason = get_last_switch_reason() or "health"
 
-                    switch_result = _switch_to_next_pair(
-                        health_score=health_score,
-                        switch_reason=switch_reason,
-                    )
-                    if switch_result == SWITCH_RESULT_SWITCHED:
-                        logger.info("Restarting process via Subprocess Manager (exit code 3)...")
-                        print("Restarting to apply new pair...")
-                        # Exit with code 3 to signal the manager to restart
-                        sys.exit(3)
-                    if switch_result == SWITCH_RESULT_HARD_STOP:
-                        status_dict["message"] = "Hard stop: no replacement pairs available"
+                    if account_has_exposure:
+                        set_last_switch_reason(switch_reason)
+                        set_last_health_score(health_score if health_score is not None else 0)
+                        status_dict["message"] = "Health switch requested; closing exposure before switching"
                         save_status(status_dict)
-                        logger.critical("No replacement pairs available after health switch. Hard stop.")
-                        sys.exit(1)
-                    logger.error("Pair switch blocked. Resetting kill_switch to 0.")
-                    # If switch failed, reset kill_switch and wait before trying again
-                    kill_switch = 0
-                    time.sleep(10)
+                        logger.warning(
+                            "Health switch deferred until account exposure is closed: %s",
+                            "; ".join(account_flat_blockers) or "account not flat",
+                        )
+                        kill_switch = 2
+                    else:
+                        switch_result = _switch_to_next_pair(
+                            health_score=health_score,
+                            switch_reason=switch_reason,
+                        )
+                        if switch_result == SWITCH_RESULT_SWITCHED:
+                            logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                            print("Restarting to apply new pair...")
+                            # Exit with code 3 to signal the manager to restart
+                            sys.exit(3)
+                        if switch_result == SWITCH_RESULT_HARD_STOP:
+                            status_dict["message"] = "Hard stop: no replacement pairs available"
+                            save_status(status_dict)
+                            logger.critical("No replacement pairs available after health switch. Hard stop.")
+                            sys.exit(1)
+                        logger.error("Pair switch blocked. Resetting kill_switch to 0.")
+                        # If switch failed, reset kill_switch and wait before trying again
+                        kill_switch = 0
+                        time.sleep(10)
 
 
             # Close all active orders and positions
@@ -3833,7 +4031,7 @@ if __name__ == "__main__":
                             pre_close_diff,
                         )
 
-                close_result = close_all_positions_and_confirm(kill_switch)
+                close_result = close_account_positions_and_confirm(kill_switch)
                 if not close_result.get("ok"):
                     detail = "; ".join(
                         str(item)

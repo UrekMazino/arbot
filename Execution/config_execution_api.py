@@ -315,6 +315,7 @@ MIN_PERSIST_BARS = 4  # Require signal to persist for 4 bars before entering (4 
 ENTRY_Z_TOLERANCE = 0.05  # Treat tiny near-threshold misses (for example 1.98 vs 2.00) as valid.
 ENTRY_MIN_QUALIFIED_BARS = 0  # 0 = adaptive default of MIN_PERSIST_BARS - 1.
 ENTRY_EXTREME_CLEAN_BARS = 2  # Clean in-band checks required after returning from ENTRY_Z_MAX breach.
+ENTRY_MIN_CONTINUOUS_SECONDS = 60  # Require the entry side to remain qualified continuously before entry.
 MAX_CONSECUTIVE_LOSSES = 2  # Move pair to graveyard after 2 consecutive losses
                             # Prevents repeated losses on deteriorating pairs
 EXIT_Z = _env_float("STATBOT_EXIT_Z", EXIT_Z, minimum=0.0)
@@ -322,6 +323,11 @@ MIN_PERSIST_BARS = _env_int("STATBOT_MIN_PERSIST_BARS", MIN_PERSIST_BARS, minimu
 ENTRY_Z_TOLERANCE = _env_float("STATBOT_ENTRY_Z_TOLERANCE", ENTRY_Z_TOLERANCE, minimum=0.0)
 ENTRY_MIN_QUALIFIED_BARS = _env_int("STATBOT_ENTRY_MIN_QUALIFIED_BARS", ENTRY_MIN_QUALIFIED_BARS, minimum=0)
 ENTRY_EXTREME_CLEAN_BARS = _env_int("STATBOT_ENTRY_EXTREME_CLEAN_BARS", ENTRY_EXTREME_CLEAN_BARS, minimum=0)
+ENTRY_MIN_CONTINUOUS_SECONDS = _env_int(
+    "STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS",
+    ENTRY_MIN_CONTINUOUS_SECONDS,
+    minimum=0,
+)
 MAX_CONSECUTIVE_LOSSES = _env_int("STATBOT_MAX_CONSECUTIVE_LOSSES", MAX_CONSECUTIVE_LOSSES, minimum=1)
 
 # PAIR HEALTH & MONITORING (conintegration_pair_switching.txt recommendations)

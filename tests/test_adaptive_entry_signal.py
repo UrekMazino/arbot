@@ -72,6 +72,28 @@ def _run_signal(monkeypatch, persistence_history):
     )
 
 
+def _run_timestamped_signal(monkeypatch, persistence_history, min_continuous_seconds=60):
+    monkeypatch.setattr(ftm, "ENTRY_MIN_QUALIFIED_BARS", 0)
+    monkeypatch.setattr(ftm, "ENTRY_Z_TOLERANCE", 0.05)
+    monkeypatch.setattr(ftm, "ENTRY_EXTREME_CLEAN_BARS", 2)
+    monkeypatch.setattr(ftm, "ENTRY_MIN_CONTINUOUS_SECONDS", min_continuous_seconds)
+
+    import func_pair_state
+
+    monkeypatch.setattr(func_pair_state, "can_reenter", lambda cooldown_minutes=5: True)
+    monkeypatch.setattr(func_pair_state, "add_to_persistence_history", lambda _z: None)
+    monkeypatch.setattr(func_pair_state, "get_persistence_history", lambda: list(persistence_history))
+
+    return ftm.generate_signal(
+        [persistence_history[-1]["z"]],
+        cointegration_ok=1,
+        in_position=False,
+        entry_z=2.0,
+        entry_z_max=3.0,
+        min_persist_bars=4,
+    )
+
+
 def test_adaptive_persistence_accepts_three_of_four_with_tolerance(monkeypatch):
     signal, reason = _run_signal(monkeypatch, [-1.84, -1.98, -2.10, -2.33])
 
@@ -118,3 +140,36 @@ def test_adaptive_persistence_still_blocks_current_too_extreme(monkeypatch):
 
     assert signal is None
     assert "too extreme for short entry" in reason
+
+
+def test_continuous_interval_blocks_fresh_entry_cluster(monkeypatch):
+    signal, reason = _run_timestamped_signal(
+        monkeypatch,
+        [
+            {"ts": 100.0, "z": -2.08},
+            {"ts": 115.0, "z": -2.12},
+            {"ts": 130.0, "z": -2.20},
+            {"ts": 145.0, "z": -2.31},
+        ],
+        min_continuous_seconds=60,
+    )
+
+    assert signal is None
+    assert "continuous interval not satisfied" in reason
+    assert "continuous=45s" in reason
+
+
+def test_continuous_interval_allows_mature_entry_cluster(monkeypatch):
+    signal, reason = _run_timestamped_signal(
+        monkeypatch,
+        [
+            {"ts": 100.0, "z": -2.08},
+            {"ts": 125.0, "z": -2.12},
+            {"ts": 150.0, "z": -2.20},
+            {"ts": 175.0, "z": -2.31},
+        ],
+        min_continuous_seconds=60,
+    )
+
+    assert signal == "BUY_SPREAD"
+    assert "adaptive persistence" in reason

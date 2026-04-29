@@ -102,6 +102,8 @@ class AdvancedTradeManager:
             
             # Mean-reversion target (legacy key name kept for compatibility)
             'take_profit_z': 0.5,  # Exit at |Z| < 0.5
+            'net_profit_guard_enabled': True,
+            'net_profit_guard_require_pnl': True,
             
             # Stall detection
             'stall_z_threshold': 1.5,  # Exit if Z > 1.5 and stalled
@@ -144,7 +146,12 @@ class AdvancedTradeManager:
         )
     
     
-    def update(self, current_z: float) -> Dict:
+    def update(
+        self,
+        current_z: float,
+        floating_pnl_usdt: Optional[float] = None,
+        min_profit_usdt: float = 0.0,
+    ) -> Dict:
         """Update trade state and check all exit conditions"""
         
         if self.trade_state is None:
@@ -188,15 +195,33 @@ class AdvancedTradeManager:
         # 3. TRAILING STOP
         trailing_result = self._check_trailing_stop(current_z)
         if trailing_result['action'] == 'EXIT':
+            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+                return self._net_profit_guard_hold(
+                    ExitReason.TRAILING_STOP,
+                    floating_pnl_usdt,
+                    min_profit_usdt,
+                )
             return trailing_result
         
         # 4. PARTIAL EXIT
         partial_result = self._check_partial_exit(current_z)
         if partial_result['action'] == 'PARTIAL_EXIT':
+            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+                return self._net_profit_guard_hold(
+                    ExitReason.PARTIAL_PROFIT,
+                    floating_pnl_usdt,
+                    min_profit_usdt,
+                )
             return partial_result
         
         # 5. MEAN-REVERSION TARGET HIT (full exit)
         if abs(current_z) < self.config['take_profit_z']:
+            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+                return self._net_profit_guard_hold(
+                    ExitReason.TAKE_PROFIT,
+                    floating_pnl_usdt,
+                    min_profit_usdt,
+                )
             return self._create_exit_result(
                 action='EXIT',
                 reason=ExitReason.TAKE_PROFIT,
@@ -226,6 +251,51 @@ class AdvancedTradeManager:
             }
         }
     
+
+    def _profit_exit_allowed(self, floating_pnl_usdt: Optional[float], min_profit_usdt: float) -> bool:
+        if not self.config.get('net_profit_guard_enabled', True):
+            return True
+        try:
+            required = max(float(min_profit_usdt or 0.0), 0.0)
+        except (TypeError, ValueError):
+            required = 0.0
+        if floating_pnl_usdt is None:
+            return not bool(self.config.get('net_profit_guard_require_pnl', True))
+        try:
+            pnl = float(floating_pnl_usdt)
+        except (TypeError, ValueError):
+            return not bool(self.config.get('net_profit_guard_require_pnl', True))
+        return pnl >= required
+
+
+    def _net_profit_guard_hold(
+        self,
+        reason: ExitReason,
+        floating_pnl_usdt: Optional[float],
+        min_profit_usdt: float,
+    ) -> Dict:
+        try:
+            required = max(float(min_profit_usdt or 0.0), 0.0)
+        except (TypeError, ValueError):
+            required = 0.0
+        if floating_pnl_usdt is None:
+            pnl_text = "unknown"
+        else:
+            try:
+                pnl_text = f"{float(floating_pnl_usdt):.4f}"
+            except (TypeError, ValueError):
+                pnl_text = "unknown"
+        return {
+            'action': 'HOLD',
+            'reason': (
+                f"Net profit guard blocked {reason.value}: "
+                f"floating_pnl={pnl_text} < required={required:.4f} USDT"
+            ),
+            'blocked_exit_reason': reason.value,
+            'floating_pnl_usdt': floating_pnl_usdt,
+            'min_profit_usdt': required,
+        }
+
     
     def _check_max_hold_time(self) -> Dict:
         """Check if maximum hold time exceeded"""

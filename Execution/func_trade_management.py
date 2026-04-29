@@ -12,6 +12,7 @@ from config_execution_api import (
     ENTRY_Z_TOLERANCE,
     ENTRY_MIN_QUALIFIED_BARS,
     ENTRY_EXTREME_CLEAN_BARS,
+    ENTRY_MIN_CONTINUOUS_SECONDS,
     tradeable_capital_usdt,
     limit_order_basis,
     stop_loss_fail_safe,
@@ -134,6 +135,34 @@ def _env_flag(name, default=False):
     return default
 
 
+def _resolve_net_profit_exit_floor_usdt(entry_notional):
+    if not _env_flag("STATBOT_ATM_NET_PROFIT_GUARD", True):
+        return 0.0
+
+    try:
+        notional = float(entry_notional or 0.0)
+    except (TypeError, ValueError):
+        notional = 0.0
+    if notional < 0:
+        notional = 0.0
+
+    fee_rate = _env_float("STATBOT_ATM_NET_PROFIT_EXIT_FEE_RATE", 0.0005)
+    if fee_rate is None or fee_rate < 0:
+        fee_rate = 0.0005
+    slippage_rate = _env_float("STATBOT_ATM_NET_PROFIT_EXIT_SLIPPAGE_RATE", 0.0002)
+    if slippage_rate is None or slippage_rate < 0:
+        slippage_rate = 0.0002
+    buffer_usdt = _env_float("STATBOT_ATM_NET_PROFIT_BUFFER_USDT", 0.10)
+    if buffer_usdt is None or buffer_usdt < 0:
+        buffer_usdt = 0.10
+    buffer_pct = _env_float("STATBOT_ATM_NET_PROFIT_BUFFER_PCT_NOTIONAL", 0.0001)
+    if buffer_pct is None or buffer_pct < 0:
+        buffer_pct = 0.0001
+
+    estimated_exit_cost = notional * (fee_rate + slippage_rate)
+    return estimated_exit_cost + max(buffer_usdt, notional * buffer_pct)
+
+
 def _resolve_entry_persistence_settings(min_persist_bars):
     try:
         persist = int(float(min_persist_bars))
@@ -165,6 +194,59 @@ def _resolve_entry_persistence_settings(min_persist_bars):
 
 def _entry_band_floor(entry_z, tolerance):
     return max(float(entry_z) - float(tolerance), 0.0)
+
+
+def _resolve_entry_min_continuous_seconds():
+    try:
+        return max(float(ENTRY_MIN_CONTINUOUS_SECONDS), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _normalize_persistence_entries(history):
+    entries = []
+    for item in history or []:
+        has_ts = False
+        ts_value = None
+        raw_z = item
+        if isinstance(item, dict):
+            raw_z = item.get("z")
+            try:
+                ts_value = float(item.get("ts"))
+                has_ts = True
+            except (TypeError, ValueError):
+                ts_value = None
+        try:
+            z_value = float(raw_z)
+        except (TypeError, ValueError):
+            continue
+        entries.append({"z": z_value, "ts": ts_value, "has_ts": has_ts})
+    return entries
+
+
+def _continuous_entry_duration(entries, side, entry_floor, entry_z_max):
+    if not entries:
+        return 0.0, False
+
+    def _qualified(z_value):
+        if side == "long":
+            return z_value <= -entry_floor and z_value >= -entry_z_max
+        return z_value >= entry_floor and z_value <= entry_z_max
+
+    latest = entries[-1]
+    if not latest.get("has_ts"):
+        return 0.0, False
+
+    latest_ts = float(latest["ts"])
+    start_ts = latest_ts
+    for entry in reversed(entries):
+        if not _qualified(float(entry["z"])):
+            break
+        if not entry.get("has_ts"):
+            return 0.0, False
+        start_ts = float(entry["ts"])
+
+    return max(latest_ts - start_ts, 0.0), True
 
 
 def _env_str(name, default=""):
@@ -283,6 +365,7 @@ def _resolve_regime_name(regime_decision):
 
 
 def _strategy_atm_profiles():
+    net_profit_guard_enabled = _env_flag("STATBOT_ATM_NET_PROFIT_GUARD", True)
     base_max_hold = _env_float("STATBOT_ATM_MR_MAX_HOLD_HOURS", _TM_BASE_CONFIG.get("max_hold_hours", 6))
     if base_max_hold is None or base_max_hold <= 0:
         base_max_hold = 6.0
@@ -327,6 +410,7 @@ def _strategy_atm_profiles():
             or 0.5
         ),
         "take_profit_z": float(_env_float("STATBOT_ATM_MR_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
+        "net_profit_guard_enabled": net_profit_guard_enabled,
     }
 
     trend_max_hold = _env_float("STATBOT_ATM_TREND_MAX_HOLD_HOURS", 2.0)
@@ -354,6 +438,7 @@ def _strategy_atm_profiles():
             _env_float("STATBOT_ATM_TREND_TRAILING_LOOSE_DISTANCE", 0.45) or 0.45
         ),
         "take_profit_z": float(_env_float("STATBOT_ATM_TREND_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
+        "net_profit_guard_enabled": net_profit_guard_enabled,
     }
     return {"mr": mr_profile, "trend": trend_profile}
 
@@ -1008,14 +1093,17 @@ def generate_signal(
 
         # Get last N cycles from persistent state
         persistence_history = get_persistence_history()
+        persistence_entries = _normalize_persistence_entries(persistence_history)
 
-        if len(persistence_history) >= effective_min_persist_bars:
-            recent_zscores = [float(z) for z in persistence_history[-effective_min_persist_bars:]]
+        if len(persistence_entries) >= effective_min_persist_bars:
+            recent_entries = persistence_entries[-effective_min_persist_bars:]
+            recent_zscores = [float(entry["z"]) for entry in recent_entries]
             rounded_history = [round(z, 2) for z in recent_zscores]
             min_qualified, clean_bars, tolerance = _resolve_entry_persistence_settings(
                 effective_min_persist_bars
             )
             entry_floor = _entry_band_floor(effective_entry_z, tolerance)
+            min_continuous_seconds = _resolve_entry_min_continuous_seconds()
 
             def _long_qualified(z_value):
                 return z_value <= -entry_floor and z_value >= -effective_entry_z_max
@@ -1041,22 +1129,54 @@ def generate_signal(
                 and long_count >= min_qualified
                 and recent_long_clean
             ):
+                if min_continuous_seconds > 0:
+                    duration, duration_known = _continuous_entry_duration(
+                        persistence_entries,
+                        "long",
+                        entry_floor,
+                        effective_entry_z_max,
+                    )
+                    if duration_known and duration < min_continuous_seconds:
+                        return (
+                            None,
+                            f"No entry - continuous interval not satisfied for long entry "
+                            f"(continuous={duration:.0f}s, need={min_continuous_seconds:.0f}s, "
+                            f"qualified={long_count}/{effective_min_persist_bars}, "
+                            f"history: {rounded_history})",
+                        )
                 return (
                     "BUY_SPREAD",
                     f"Entry signal: Z={current_z:.4f} adaptive persistence at -{effective_entry_z:.2f} "
                     f"(oversold, qualified={long_count}/{effective_min_persist_bars}, "
-                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f})",
+                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f}, "
+                    f"continuous={min_continuous_seconds:.0f}s)",
                 )
             if (
                 _short_qualified(float(current_z))
                 and short_count >= min_qualified
                 and recent_short_clean
             ):
+                if min_continuous_seconds > 0:
+                    duration, duration_known = _continuous_entry_duration(
+                        persistence_entries,
+                        "short",
+                        entry_floor,
+                        effective_entry_z_max,
+                    )
+                    if duration_known and duration < min_continuous_seconds:
+                        return (
+                            None,
+                            f"No entry - continuous interval not satisfied for short entry "
+                            f"(continuous={duration:.0f}s, need={min_continuous_seconds:.0f}s, "
+                            f"qualified={short_count}/{effective_min_persist_bars}, "
+                            f"history: {rounded_history})",
+                        )
                 return (
                     "SELL_SPREAD",
                     f"Entry signal: Z={current_z:.4f} adaptive persistence at +{effective_entry_z:.2f} "
                     f"(overbought, qualified={short_count}/{effective_min_persist_bars}, "
-                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f})",
+                    f"need={min_qualified}, clean={clean_bars}, tolerance={tolerance:.2f}, "
+                    f"continuous={min_continuous_seconds:.0f}s)",
                 )
 
             if float(current_z) < -effective_entry_z_max:
@@ -1112,7 +1232,7 @@ def generate_signal(
             )
         else:
             return None, (
-                f"Insufficient history: {len(persistence_history)} cycles < "
+                f"Insufficient history: {len(persistence_entries)} cycles < "
                 f"{effective_min_persist_bars} required"
             )
     
@@ -1169,7 +1289,15 @@ def _resolve_coint_health_state(metrics):
         return "broken"
 
 
-def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=False, trade_pnl_pct=0.0):
+def check_pair_health(
+    metrics,
+    latest_zscore,
+    silent=False,
+    in_active_trade=False,
+    trade_pnl_pct=0.0,
+    pair_tickers=None,
+    persist_health_score=True,
+):
     """
     Evaluate pair health based on statistical metrics.
     Returns (should_switch, health_score, recommendation)
@@ -1180,6 +1308,8 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         silent: If True, suppress logging
         in_active_trade: If True, currently holding a position
         trade_pnl_pct: Current trade PnL as percentage (e.g., 0.5 for +0.5%)
+        pair_tickers: Optional (ticker_1, ticker_2) override for candidate-pair history checks.
+        persist_health_score: Store score for the active pair's emergency override checks.
     """
     health_score = 100
     critical_issues = []
@@ -1270,7 +1400,11 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         health_score -= int(15 * health_penalty_modifier)
 
     # 7. Recent Trading Performance
-    pair_stats = get_pair_history_stats(signal_positive_ticker, signal_negative_ticker)
+    if pair_tickers and len(pair_tickers) >= 2:
+        history_ticker_1, history_ticker_2 = pair_tickers[0], pair_tickers[1]
+    else:
+        history_ticker_1, history_ticker_2 = signal_positive_ticker, signal_negative_ticker
+    pair_stats = get_pair_history_stats(history_ticker_1, history_ticker_2)
     losses = int((pair_stats or {}).get("consecutive_losses", 0) or 0)
     if losses >= 3:
         warnings_list.append(f"Pair Consecutive Losses ({losses})")
@@ -1291,8 +1425,9 @@ def check_pair_health(metrics, latest_zscore, silent=False, in_active_trade=Fals
         recommendation = "STOP_AND_SWITCH" if should_switch else ("MONITOR_CLOSELY" if health_score < 70 else "PAIR_IS_HEALTHY")
 
     # Store health score for emergency override checks
-    from func_pair_state import set_last_health_score
-    set_last_health_score(health_score)
+    if persist_health_score:
+        from func_pair_state import set_last_health_score
+        set_last_health_score(health_score)
 
     if not silent:
         logger.info("━━━ PERIODIC HEALTH CHECK ━━━")
@@ -2970,7 +3105,12 @@ def monitor_exit(
     if entry_z is not None:
         _apply_trade_manager_profile(entry_strategy)
         _ensure_trade_manager_state(entry_z, entry_time)
-        tm_result = trade_manager.update(latest_zscore)
+        min_profit_exit_usdt = _resolve_net_profit_exit_floor_usdt(entry_notional_val)
+        tm_result = trade_manager.update(
+            latest_zscore,
+            floating_pnl_usdt=floating_pnl_usdt,
+            min_profit_usdt=min_profit_exit_usdt,
+        )
 
         if tm_result.get("action") == "EXIT":
             msg = "KILL-SWITCH TRIGGERED: " + str(tm_result.get("message", tm_result.get("reason")))
@@ -2992,6 +3132,8 @@ def monitor_exit(
 
         if tm_result.get("action") == "WARNING":
             logger.warning(tm_result.get("reason", "Trade manager warning"))
+        if tm_result.get("blocked_exit_reason"):
+            logger.debug(tm_result.get("reason", "Net profit guard blocked exit"))
     else:
         _close_trade_manager()
         logger.warning("No entry Z-score tracked (restart scenario). Current Z=%.2f", latest_zscore)

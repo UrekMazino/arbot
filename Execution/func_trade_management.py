@@ -355,6 +355,7 @@ from func_log_setup import get_logger
 import datetime
 from regime_router import resolve_regime_policy_overrides
 from strategy_router import resolve_strategy_policy_overrides
+from trade_quality_gate import evaluate_trade_quality
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
@@ -721,6 +722,31 @@ def _format_fill_summary(summary):
         fee=summary.get("fee") or 0.0,
         pnl=summary.get("pnl") or 0.0,
     )
+
+
+def _emit_trade_quality_gate(
+    decision,
+    *,
+    pair=None,
+    strategy=None,
+    regime=None,
+    signal=None,
+    long_ticker=None,
+    short_ticker=None,
+):
+    payload = decision.to_payload()
+    payload.update(
+        {
+            "pair": pair or _active_pair_key(),
+            "strategy": strategy,
+            "regime": regime,
+            "signal": signal,
+            "long_ticker": long_ticker,
+            "short_ticker": short_ticker,
+        }
+    )
+    severity = "info" if decision.passed or decision.mode == "shadow" else "warn"
+    emit_event("trade_quality_gate", payload=payload, severity=severity, logger=logger)
 
 
 def _log_entry_fills(
@@ -2397,6 +2423,83 @@ def manage_new_trades(
             strategy=strategy_name,
             regime=regime_name,
         )
+
+        try:
+            pair_stats = get_pair_history_stats(signal_positive_ticker, signal_negative_ticker)
+        except Exception as exc:
+            logger.debug("Pair history unavailable for Trade Quality Gate: %s", exc)
+            pair_stats = None
+        quality_decision = evaluate_trade_quality(
+            signal=signal,
+            metrics=metrics,
+            zscores=valid_zscores,
+            pair_stats=pair_stats,
+            entry_z=effective_entry_z,
+            entry_z_max=effective_entry_z_max,
+            entry_z_tolerance=ENTRY_Z_TOLERANCE,
+            exit_z=EXIT_Z,
+            ratio_long=ratio_long,
+            ratio_short=ratio_short,
+            min_liquidity_ratio=min_liquidity_ratio,
+            target_usdt=initial_capital_usdt,
+            liquidity_long_usdt=liquidity_long_usdt,
+            liquidity_short_usdt=liquidity_short_usdt,
+            p_value_critical=P_VALUE_CRITICAL,
+            zero_crossings_min=ZERO_CROSSINGS_MIN,
+            correlation_min=CORRELATION_MIN,
+            trend_critical=TREND_CRITICAL,
+        )
+        _emit_trade_quality_gate(
+            quality_decision,
+            pair=_active_pair_key(),
+            strategy=strategy_name,
+            regime=regime_name,
+            signal=signal,
+            long_ticker=long_ticker,
+            short_ticker=short_ticker,
+        )
+        if quality_decision.passed:
+            logger.info(
+                "TRADE_QUALITY_GATE_PASS: score=%.2f min=%.2f reason=%s components=%s",
+                quality_decision.score,
+                quality_decision.min_score,
+                quality_decision.reason,
+                quality_decision.components,
+            )
+        elif quality_decision.mode == "shadow":
+            logger.warning(
+                "TRADE_QUALITY_GATE_SHADOW_FAIL: score=%.2f min=%.2f reason=%s hard=%s reasons=%s",
+                quality_decision.score,
+                quality_decision.min_score,
+                quality_decision.reason,
+                quality_decision.hard_reasons,
+                quality_decision.reasons,
+            )
+        elif not quality_decision.allow:
+            logger.warning(
+                "TRADE_QUALITY_GATE_BLOCK: score=%.2f min=%.2f reason=%s hard=%s reasons=%s components=%s",
+                quality_decision.score,
+                quality_decision.min_score,
+                quality_decision.reason,
+                quality_decision.hard_reasons,
+                quality_decision.reasons,
+                quality_decision.components,
+            )
+            _emit_entry_reject(
+                "trade_quality_gate",
+                quality_decision.reason,
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                signal=signal,
+                score=quality_decision.score,
+                min_score=quality_decision.min_score,
+                hard_reasons=quality_decision.hard_reasons,
+                reasons=quality_decision.reasons,
+                components=quality_decision.components,
+                diagnostics=quality_decision.diagnostics,
+            )
+            return kill_switch, signal_detected, trade_placed
 
         # Preflight both legs to avoid one-sided entries on invalid trade details
         preflight_long = preview_entry_details(

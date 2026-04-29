@@ -24,6 +24,7 @@ _KNOWN_EVENT_TYPES = {
     "report_status",
     "entry_reject",
     "liquidity_check",
+    "trade_quality_gate",
     "fill_summary",
     "reconciliation_check",
     "gate_enforced",

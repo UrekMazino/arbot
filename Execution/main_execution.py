@@ -213,6 +213,9 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "correlation_min": CORRELATION_MIN,
             "trend_critical": TREND_CRITICAL,
             "z_score_critical": Z_SCORE_CRITICAL,
+            "trade_quality_gate": _env_text("STATBOT_TRADE_QUALITY_GATE", "1"),
+            "trade_quality_gate_mode": _env_text("STATBOT_TRADE_QUALITY_GATE_MODE", "active"),
+            "trade_quality_min_score": _env_text("STATBOT_TQG_MIN_SCORE", "72"),
         },
         "routers": {
             "regime_mode": regime_mode,

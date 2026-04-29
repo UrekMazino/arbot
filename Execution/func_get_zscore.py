@@ -40,10 +40,50 @@ def _env_float(name, default):
         return default
 
 
+def _env_int(name, default, minimum=None):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if minimum is not None and value < minimum:
+        value = int(minimum)
+    return value
+
+
+def _env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return bool(default)
+
+
 _ORDERBOOK_BACKOFF_UNTIL = {}
 _ORDERBOOK_BACKOFF_SECONDS = _env_float("STATBOT_ORDERBOOK_BACKOFF_SECONDS", 45.0)
 _ORDERBOOK_BACKOFF_RETRIES = int(_env_float("STATBOT_ORDERBOOK_BACKOFF_RETRIES", 2))
 _ORDERBOOK_BACKOFF_RETRY_SLEEP = _env_float("STATBOT_ORDERBOOK_BACKOFF_RETRY_SLEEP", 0.25)
+
+
+def _get_live_coint_limit():
+    default_limit = _env_int("STATBOT_SWITCH_PRECHECK_LIMIT", 300, minimum=60)
+    return _env_int("STATBOT_LIVE_COINT_LIMIT", default_limit, minimum=60)
+
+
+def _get_live_coint_window():
+    default_window = _env_int("STATBOT_SWITCH_PRECHECK_WINDOW", 60, minimum=20)
+    return _env_int("STATBOT_LIVE_COINT_WINDOW", default_window, minimum=20)
+
+
+def _use_stable_coint_metrics():
+    return _env_flag("STATBOT_LIVE_COINT_USE_KLINE_ONLY", True)
 
 
 def _backoff_active(inst_id):
@@ -206,7 +246,110 @@ def _replace_last(values, new_value):
     return updated
 
 
-def get_latest_zscore(
+def _safe_float(value, default=0.0):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(parsed):
+        return float(default)
+    return parsed
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _prepare_series_pair(series_1, series_2, sample_limit=None):
+    min_len = min(len(series_1 or []), len(series_2 or []))
+    if sample_limit is not None:
+        try:
+            sample_len = min(min_len, int(sample_limit))
+        except (TypeError, ValueError):
+            sample_len = min_len
+    else:
+        sample_len = min_len
+
+    if sample_len < 2:
+        return None, None
+
+    arr_1 = np.array(list(series_1)[-sample_len:], dtype=float)
+    arr_2 = np.array(list(series_2)[-sample_len:], dtype=float)
+    if not np.all(np.isfinite(arr_1)) or not np.all(np.isfinite(arr_2)):
+        return None, None
+    if np.any(arr_1 <= 0) or np.any(arr_2 <= 0):
+        return None, None
+    return arr_1, arr_2
+
+
+def _normalize_coint_metrics(coint_metrics):
+    coint_metrics = coint_metrics or {}
+    return {
+        "coint_flag": _safe_int(coint_metrics.get("coint_flag", 0), 0),
+        "p_value": _safe_float(coint_metrics.get("p_value", 1.0), 1.0),
+        "adf_stat": _safe_float(coint_metrics.get("adf_stat", 0.0), 0.0),
+        "critical_value": _safe_float(coint_metrics.get("critical_value", 0.0), 0.0),
+        "zero_crossings": _safe_int(coint_metrics.get("zero_crossings", 0), 0),
+        "spread_trend": _safe_float(coint_metrics.get("spread_trend", 0.0), 0.0),
+        "correlation": _safe_float(coint_metrics.get("correlation", 0.0), 0.0),
+        "returns_correlation": _safe_float(coint_metrics.get("returns_correlation", 0.0), 0.0),
+        "hedge_ratio": _safe_float(coint_metrics.get("hedge_ratio", 0.0), 0.0),
+    }
+
+
+def _classify_metrics(coint_metrics):
+    normalized = _normalize_coint_metrics(coint_metrics)
+    coint_health = classify_cointegration_health(normalized, strict_pvalue=P_VALUE_CRITICAL)
+    normalized.update(
+        {
+            "coint_health": coint_health["state"],
+            "coint_health_reason": coint_health["reason"],
+            "coint_watch": bool(coint_health["is_watch"]),
+            "coint_broken": bool(coint_health["is_broken"]),
+            "coint_adf_gap": float(coint_health["adf_gap"]),
+            "coint_adf_margin": float(coint_health["adf_margin"]),
+            "coint_watch_p_value": float(coint_health["watch_pvalue"]),
+            "coint_fail_p_value": float(coint_health["fail_pvalue"]),
+        }
+    )
+    return normalized
+
+
+def _entry_coint_diagnostics(metrics):
+    return {
+        "entry_coint_flag": int(metrics.get("coint_flag", 0) or 0),
+        "entry_p_value": float(metrics.get("p_value", 1.0) or 1.0),
+        "entry_adf_gap": float(metrics.get("coint_adf_gap", 0.0) or 0.0),
+        "entry_coint_health": str(metrics.get("coint_health") or ""),
+        "entry_coint_health_reason": str(metrics.get("coint_health_reason") or ""),
+    }
+
+
+def _evaluate_cointegration_safe(series_1, series_2, window_val, inst_1, inst_2, basis_label):
+    try:
+        return evaluate_cointegration(
+            series_1,
+            series_2,
+            window=window_val,
+            pvalue_threshold=P_VALUE_CRITICAL,
+            zero_cross_threshold_ratio=COINT_ZERO_CROSS_THRESHOLD_RATIO,
+            already_logged=False,
+        )
+    except Exception as e:
+        logger.warning(
+            "Cointegration evaluation failed (%s vs %s, basis=%s): %s",
+            inst_1,
+            inst_2,
+            basis_label,
+            e,
+        )
+        return None
+
+
+def _get_latest_zscore_legacy(
     inst_id_1=None,
     inst_id_2=None,
     bar=None,
@@ -352,4 +495,190 @@ def get_latest_zscore(
         latest = _latest_finite(zscore_list)
     if latest is None:
         return [], False, metrics
+    return zscore_list, latest > 0, metrics
+
+
+def get_latest_zscore(
+    inst_id_1=None,
+    inst_id_2=None,
+    bar=None,
+    limit=None,
+    window=None,
+    use_orderbook=True,
+    depth_levels=depth,
+    session=None,
+):
+    """
+    Return entry z-scores plus live cointegration diagnostics.
+
+    Entry z-score and latest prices can use orderbook mids. Live cointegration
+    health defaults to a separate kline-only pass so the entry feed cannot
+    briefly invalidate an otherwise healthy Pair Doctor / switch-precheck pair.
+    """
+    metrics = {
+        "coint_flag": 0,
+        "p_value": 1.0,
+        "adf_stat": 0.0,
+        "critical_value": 0.0,
+        "zero_crossings": 0,
+        "spread_trend": 0.0,
+        "correlation": 0.0,
+        "price_1": 0.0,
+        "price_2": 0.0,
+        "orderbook_dead": False,
+        "entry_basis": "kline",
+        "entry_window": 0,
+        "entry_sample_size": 0,
+        "coint_basis": "kline_only",
+        "coint_window": 0,
+        "coint_config_limit": 0,
+        "coint_sample_size": 0,
+    }
+
+    inst_1 = inst_id_1 or ticker_1
+    inst_2 = inst_id_2 or ticker_2
+    if not inst_1 or not inst_2:
+        return [], False, metrics
+
+    window_val = z_score_window if window is None else window
+    try:
+        window_val = int(window_val)
+    except (TypeError, ValueError):
+        window_val = z_score_window
+    if window_val <= 1:
+        return [], False, metrics
+
+    logger.debug("get_latest_zscore: fetching klines for %s and %s", inst_1, inst_2)
+    base_series_1, base_series_2 = get_latest_klines(
+        inst_id_1=inst_1,
+        inst_id_2=inst_2,
+        bar=bar,
+        limit=limit,
+        session=session,
+        ascending=True,
+    )
+    if not base_series_1 or not base_series_2:
+        logger.warning("get_latest_zscore: failed to fetch klines")
+        return [], False, metrics
+
+    entry_series_1 = list(base_series_1)
+    entry_series_2 = list(base_series_2)
+    entry_basis = "kline"
+    if use_orderbook:
+        logger.debug("get_latest_zscore: fetching mid prices for %s and %s", inst_1, inst_2)
+        mid_1 = _fetch_mid_price(inst_1, depth_levels=depth_levels, session=session)
+        mid_2 = _fetch_mid_price(inst_2, depth_levels=depth_levels, session=session)
+        if mid_1 is not None and mid_2 is not None:
+            entry_series_1 = _replace_last(entry_series_1, mid_1)
+            entry_series_2 = _replace_last(entry_series_2, mid_2)
+            entry_basis = "orderbook_mid"
+            from func_pair_state import reset_price_fetch_failures
+            reset_price_fetch_failures()
+        else:
+            entry_basis = "kline_last_close"
+            if _backoff_active(inst_1) or _backoff_active(inst_2):
+                logger.info("get_latest_zscore: orderbook backoff active, using last kline prices")
+            else:
+                logger.warning("get_latest_zscore: failed to fetch mid prices")
+                from func_pair_state import increment_price_fetch_failures
+                failures = increment_price_fetch_failures()
+                if failures >= 5:
+                    logger.error("Price fetch failed %d times - tickers may be delisted/illiquid", failures)
+                    metrics["orderbook_dead"] = True
+
+    entry_arr_1, entry_arr_2 = _prepare_series_pair(entry_series_1, entry_series_2)
+    if entry_arr_1 is None or entry_arr_2 is None:
+        return [], False, metrics
+
+    metrics["price_1"] = float(entry_arr_1[-1])
+    metrics["price_2"] = float(entry_arr_2[-1])
+    metrics["entry_basis"] = entry_basis
+    metrics["entry_window"] = int(window_val)
+    metrics["entry_sample_size"] = int(len(entry_arr_1))
+
+    entry_coint_metrics = _evaluate_cointegration_safe(
+        entry_arr_1,
+        entry_arr_2,
+        window_val,
+        inst_1,
+        inst_2,
+        entry_basis,
+    )
+    if entry_coint_metrics is None:
+        return [], False, metrics
+
+    entry_classified = _classify_metrics(entry_coint_metrics)
+    metrics.update(entry_classified)
+    metrics.update(_entry_coint_diagnostics(entry_classified))
+    metrics.update(
+        {
+            "coint_basis": "kline_only" if entry_basis == "kline" else entry_basis,
+            "coint_window": int(window_val),
+            "coint_config_limit": _safe_int(limit, len(entry_arr_1)) or int(len(entry_arr_1)),
+            "coint_sample_size": int(len(entry_arr_1)),
+        }
+    )
+
+    if use_orderbook and _use_stable_coint_metrics():
+        stable_limit = _get_live_coint_limit()
+        stable_window = _get_live_coint_window()
+        stable_series_1 = base_series_1
+        stable_series_2 = base_series_2
+        base_sample_size = min(len(base_series_1 or []), len(base_series_2 or []))
+        if base_sample_size < stable_limit:
+            fetched_1, fetched_2 = get_latest_klines(
+                inst_id_1=inst_1,
+                inst_id_2=inst_2,
+                bar=bar,
+                limit=stable_limit,
+                session=session,
+                ascending=True,
+            )
+            if fetched_1 and fetched_2:
+                stable_series_1 = fetched_1
+                stable_series_2 = fetched_2
+            else:
+                logger.warning(
+                    "get_latest_zscore: stable kline-only cointegration fetch failed; using existing kline sample"
+                )
+
+        stable_arr_1, stable_arr_2 = _prepare_series_pair(
+            stable_series_1,
+            stable_series_2,
+            sample_limit=stable_limit,
+        )
+        if stable_arr_1 is not None and stable_arr_2 is not None:
+            stable_coint_metrics = _evaluate_cointegration_safe(
+                stable_arr_1,
+                stable_arr_2,
+                stable_window,
+                inst_1,
+                inst_2,
+                "kline_only",
+            )
+            if stable_coint_metrics is not None:
+                metrics.update(_classify_metrics(stable_coint_metrics))
+                metrics.update(
+                    {
+                        "coint_basis": "kline_only",
+                        "coint_window": int(stable_window),
+                        "coint_config_limit": int(stable_limit),
+                        "coint_sample_size": int(len(stable_arr_1)),
+                    }
+                )
+        else:
+            logger.warning("get_latest_zscore: stable kline-only cointegration sample is invalid")
+
+    zscore_values = entry_coint_metrics.get("zscore_values")
+    if isinstance(zscore_values, np.ndarray):
+        zscore_list = zscore_values.tolist()
+    else:
+        zscore_list = list(zscore_values or [])
+
+    latest = entry_coint_metrics.get("latest_zscore")
+    if latest is None:
+        latest = _latest_finite(zscore_list)
+    if latest is None:
+        return [], False, metrics
+    metrics["latest_zscore"] = float(latest)
     return zscore_list, latest > 0, metrics

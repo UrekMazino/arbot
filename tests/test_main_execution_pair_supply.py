@@ -203,3 +203,112 @@ def test_execution_does_not_defer_to_stale_pair_supply_request(monkeypatch, tmp_
 
     assert status["running"] is False
     assert status["defer_to_supply"] is False
+
+
+def test_active_pair_universe_block_detects_pruned_pair(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        "CCC-USDT-SWAP,DDD-USDT-SWAP,10000,10000,10000\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(me, "ticker_1", "AAA-USDT-SWAP")
+    monkeypatch.setattr(me, "ticker_2", "BBB-USDT-SWAP")
+
+    reason, detail = me._get_active_pair_universe_block(csv_path, require_curator=False)
+
+    assert reason == "pair_universe_pruned"
+    assert "not in the supplied Pair Universe" in detail
+
+
+def test_active_pair_universe_block_detects_unhealthy_curator_status(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        "AAA-USDT-SWAP,BBB-USDT-SWAP,10000,10000,10000\n",
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "pair_universe_curator.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "status": "watch",
+                        "recommendation": "watch",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(me, "PAIR_CURATOR_REPORT_FILE", report_path)
+    monkeypatch.setattr(me, "ticker_1", "AAA-USDT-SWAP")
+    monkeypatch.setattr(me, "ticker_2", "BBB-USDT-SWAP")
+
+    reason, detail = me._get_active_pair_universe_block(csv_path, require_curator=True)
+
+    assert reason == "pair_universe_pruned"
+    assert "status=watch recommendation=watch" in detail
+
+
+def test_pruned_active_pair_switches_only_when_flat(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        "CCC-USDT-SWAP,DDD-USDT-SWAP,10000,10000,10000\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    monkeypatch.setattr(me, "ticker_1", "AAA-USDT-SWAP")
+    monkeypatch.setattr(me, "ticker_2", "BBB-USDT-SWAP")
+    monkeypatch.setattr(me, "lock_on_pair", False)
+    monkeypatch.setattr(me, "set_last_switch_reason", lambda reason: calls.append(("reason", reason)))
+    monkeypatch.setattr(
+        me,
+        "_switch_to_next_pair",
+        lambda health_score=None, switch_reason="health": calls.append((health_score, switch_reason))
+        or me.SWITCH_RESULT_SWITCHED,
+    )
+
+    result = me._maybe_switch_pruned_active_pair(
+        csv_path,
+        is_manage_new_trades=True,
+        account_flat=True,
+        account_flat_blockers=[],
+    )
+
+    assert result == me.SWITCH_RESULT_SWITCHED
+    assert ("reason", "pair_universe_pruned") in calls
+    assert (0, "pair_universe_pruned") in calls
+
+
+def test_pruned_active_pair_defers_when_not_flat(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        "CCC-USDT-SWAP,DDD-USDT-SWAP,10000,10000,10000\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(me, "ticker_1", "AAA-USDT-SWAP")
+    monkeypatch.setattr(me, "ticker_2", "BBB-USDT-SWAP")
+    monkeypatch.setattr(me, "lock_on_pair", False)
+    monkeypatch.setattr(me, "_emit_pair_switch_blocked", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        me,
+        "_switch_to_next_pair",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not switch")),
+    )
+
+    result = me._maybe_switch_pruned_active_pair(
+        csv_path,
+        is_manage_new_trades=False,
+        account_flat=False,
+        account_flat_blockers=["open order exists"],
+    )
+
+    assert result == me.SWITCH_RESULT_BLOCKED

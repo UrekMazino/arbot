@@ -188,6 +188,15 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
         },
         "signals": {
             "z_score_window": z_score_window,
+            "live_coint_use_kline_only": _env_text("STATBOT_LIVE_COINT_USE_KLINE_ONLY", "1"),
+            "live_coint_limit": _env_text(
+                "STATBOT_LIVE_COINT_LIMIT",
+                _env_text("STATBOT_SWITCH_PRECHECK_LIMIT", "300"),
+            ),
+            "live_coint_window": _env_text(
+                "STATBOT_LIVE_COINT_WINDOW",
+                _env_text("STATBOT_SWITCH_PRECHECK_WINDOW", "60"),
+            ),
             "entry_z": ENTRY_Z,
             "entry_z_max": ENTRY_Z_MAX,
             "entry_z_tolerance": ENTRY_Z_TOLERANCE,
@@ -406,7 +415,7 @@ def _get_switch_precheck_fail_open():
 
 
 def _get_switch_precheck_limit():
-    raw = os.getenv("STATBOT_SWITCH_PRECHECK_LIMIT", "120")
+    raw = os.getenv("STATBOT_SWITCH_PRECHECK_LIMIT", "300")
     try:
         value = int(float(raw))
     except (TypeError, ValueError):
@@ -1684,6 +1693,10 @@ def _switch_requires_curator_health():
     return _env_flag("STATBOT_SWITCH_REQUIRE_CURATOR_HEALTHY", True)
 
 
+def _active_pair_requires_pair_universe_health():
+    return _env_flag("STATBOT_ACTIVE_PAIR_REQUIRE_PAIR_UNIVERSE_HEALTHY", True)
+
+
 def _read_pair_curator_index():
     try:
         if not PAIR_CURATOR_REPORT_FILE.exists():
@@ -1744,21 +1757,92 @@ def _candidate_pair_indices(current_index, pair_count):
 
 
 def _active_pair_in_pair_universe(csv_path):
+    reason, _detail = _get_active_pair_universe_block(csv_path, require_curator=False)
+    return not bool(reason)
+
+
+def _get_active_pair_universe_block(csv_path, require_curator=None):
     current_key = normalize_pair_key(ticker_1, ticker_2)
-    if not current_key or not _csv_has_pair_rows(csv_path):
-        return True
+    if not current_key:
+        return "", ""
+
+    found_in_csv = False
     rows_seen = 0
-    try:
-        with csv_path.open("r", encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
-                rows_seen += 1
-                pair_key = normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
-                if pair_key == current_key:
-                    return True
-    except Exception as exc:
-        logger.warning("Could not inspect Pair Universe CSV for active pair: %s", exc)
-        return True
-    return rows_seen == 0
+    if csv_path is not None:
+        try:
+            if csv_path.exists():
+                with csv_path.open("r", encoding="utf-8", newline="") as handle:
+                    for row in csv.DictReader(handle):
+                        rows_seen += 1
+                        pair_key = normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+                        if pair_key == current_key:
+                            found_in_csv = True
+                            break
+        except Exception as exc:
+            logger.warning("Could not inspect Pair Universe CSV for active pair: %s", exc)
+            return "", ""
+
+    if rows_seen > 0 and not found_in_csv:
+        return (
+            "pair_universe_pruned",
+            f"active pair {ticker_1}/{ticker_2} is not in the supplied Pair Universe",
+        )
+
+    if require_curator is None:
+        require_curator = _switch_requires_curator_health()
+    if require_curator:
+        curator_index = _read_pair_curator_index()
+        if curator_index:
+            curator_row = curator_index.get(current_key)
+            if not _curator_pair_is_switch_eligible(curator_row):
+                status = str((curator_row or {}).get("status") or "missing")
+                recommendation = str((curator_row or {}).get("recommendation") or "missing")
+                return (
+                    "pair_universe_pruned",
+                    (
+                        f"active pair {ticker_1}/{ticker_2} curator status is not eligible "
+                        f"(status={status} recommendation={recommendation}; require healthy/promote)"
+                    ),
+                )
+
+    return "", ""
+
+
+def _maybe_switch_pruned_active_pair(csv_path, is_manage_new_trades, account_flat, account_flat_blockers):
+    if not _active_pair_requires_pair_universe_health():
+        return None
+
+    switch_reason, detail = _get_active_pair_universe_block(csv_path)
+    if not switch_reason:
+        return None
+
+    blockers = []
+    if not bool(is_manage_new_trades):
+        blockers.append("active position or order is present")
+    if not bool(account_flat):
+        blockers.extend(str(item).strip() for item in account_flat_blockers or [] if str(item).strip())
+    if lock_on_pair:
+        blockers.append("lock_on_pair is enabled")
+
+    if blockers:
+        logger.warning(
+            "Active pair %s/%s is no longer Pair Doctor eligible, but switch is deferred: %s (%s).",
+            ticker_1,
+            ticker_2,
+            "; ".join(blockers),
+            detail,
+        )
+        _emit_pair_switch_blocked(switch_reason, blockers, health_score=0)
+        return SWITCH_RESULT_BLOCKED
+
+    logger.warning(
+        "Active pair %s/%s is no longer Pair Doctor eligible: %s. Switching to a healthy supplied pair.",
+        ticker_1,
+        ticker_2,
+        detail,
+    )
+    set_last_switch_reason(switch_reason)
+    return _switch_to_next_pair(health_score=0, switch_reason=switch_reason)
 
 
 def _run_strategy_refresh():
@@ -1970,6 +2054,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             "compliance_restricted",
             "startup_invalid_pair",
             "pair_supply_available",
+            "pair_universe_pruned",
         }
 
     bypass_switch_limits = _bypass_switch_limits(switch_reason)
@@ -2047,8 +2132,9 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
     per_leg_capital = _get_per_leg_allocation()
     logger.info("Per-leg allocation for min-capital filter: %.8f", per_leg_capital)
-    precheck_coint_enabled = _get_switch_precheck_coint_enabled()
-    precheck_fail_open = _get_switch_precheck_fail_open()
+    force_live_precheck = str(switch_reason or "").strip().lower() == "pair_universe_pruned"
+    precheck_coint_enabled = bool(force_live_precheck or _get_switch_precheck_coint_enabled())
+    precheck_fail_open = False if force_live_precheck else _get_switch_precheck_fail_open()
     precheck_limit = _get_switch_precheck_limit()
     precheck_window = _get_switch_precheck_window()
     precheck_min_health = _get_switch_precheck_min_health_score()
@@ -2102,11 +2188,15 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             if not passed:
                 logger.info(
                     "Skipping pair %s/%s: live switch pre-check failed "
-                    "(coint=%d coint_health=%s p=%.4f corr=%.3f health=%.1f recommendation=%s).",
+                    "(coint=%d coint_health=%s basis=%s sample=%s window=%s p=%.4f corr=%.3f "
+                    "legacy_health=%.1f legacy_recommendation=%s).",
                     t1,
                     t2,
                     coint_flag,
                     coint_health.get("state"),
+                    str(metrics.get("coint_basis") or "unknown"),
+                    str(metrics.get("coint_sample_size") or "unknown"),
+                    str(metrics.get("coint_window") or precheck_window),
                     float(metrics.get("p_value", 1.0) or 1.0),
                     float(metrics.get("correlation", 0.0) or 0.0),
                     float(live_health_score),
@@ -2367,7 +2457,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         curr_t1 = ticker_1
         curr_t2 = ticker_2
         # Commit graveyard only after a replacement is found.
-        if switch_reason not in ("min_capital", "pair_supply_available"):
+        if switch_reason not in ("min_capital", "pair_supply_available", "pair_universe_pruned"):
             if switch_reason in ("health", "cointegration_lost", "cointegration_watch_timeout", "idle_timeout"):
                 stats = get_pair_history_stats(curr_t1, curr_t2)
                 if stats and stats.get("trades", 0) == 0:
@@ -2747,21 +2837,30 @@ if __name__ == "__main__":
         logger.critical("No suitable replacement pair found for startup-invalid active pair.")
         sys.exit(1)
 
-    if _should_defer_to_pair_supply() and not _active_pair_in_pair_universe(csv_path):
+    startup_universe_reason = ""
+    startup_universe_detail = ""
+    if _active_pair_requires_pair_universe_health() and (
+        _should_defer_to_pair_supply() or _should_trust_pair_universe_candidates(csv_path)
+    ):
+        startup_universe_reason, startup_universe_detail = _get_active_pair_universe_block(csv_path)
+
+    if startup_universe_reason:
         if lock_on_pair:
             logger.warning(
-                "Active pair %s/%s is not in the supplied Pair Universe, but lock_on_pair is enabled.",
+                "Active pair %s/%s is not Pair Doctor eligible, but lock_on_pair is enabled: %s.",
                 ticker_1,
                 ticker_2,
+                startup_universe_detail,
             )
         else:
             logger.warning(
-                "Active pair %s/%s is not in the supplied Pair Universe. Switching to supplied candidate.",
+                "Active pair %s/%s is not Pair Doctor eligible. Switching to supplied candidate: %s.",
                 ticker_1,
                 ticker_2,
+                startup_universe_detail,
             )
-            set_last_switch_reason("pair_supply_available")
-            switch_result = _switch_to_next_pair(health_score=0, switch_reason="pair_supply_available")
+            set_last_switch_reason(startup_universe_reason)
+            switch_result = _switch_to_next_pair(health_score=0, switch_reason=startup_universe_reason)
             if switch_result == SWITCH_RESULT_SWITCHED:
                 logger.info("Restarting process via Subprocess Manager (exit code 3)...")
                 print("Restarting to apply supplied pair...")
@@ -3052,6 +3151,24 @@ if __name__ == "__main__":
                             "Restricted ticker in active pair, but positions/orders are open. "
                             "Deferring switch."
                         )
+
+            pruned_switch_result = _maybe_switch_pruned_active_pair(
+                csv_path,
+                is_manage_new_trades=is_manage_new_trades,
+                account_flat=account_flat,
+                account_flat_blockers=account_flat_blockers,
+            )
+            if pruned_switch_result == SWITCH_RESULT_SWITCHED:
+                status_dict["message"] = "Active pair removed by Pair Doctor; restarting..."
+                save_status(status_dict)
+                logger.info("Restarting process via Subprocess Manager after Pair Doctor switch (exit code 3).")
+                print("Restarting to apply Pair Doctor pair switch...")
+                sys.exit(3)
+            if pruned_switch_result == SWITCH_RESULT_HARD_STOP:
+                status_dict["message"] = "Hard stop: no Pair Doctor eligible replacement"
+                save_status(status_dict)
+                logger.critical("No replacement pair available after active pair was removed by Pair Doctor.")
+                sys.exit(1)
 
             if kill_switch == 1 and is_manage_new_trades:
                 manual_close_clear_count += 1
@@ -3374,13 +3491,21 @@ if __name__ == "__main__":
                             coint_state = coint_health["state"]
                             coint_reason = coint_health["reason"]
                             logger.info(
-                                "COINT_GATE: strategy=%s coint_flag=0 allow_new=0 mode=%s health=%s reason=%s p=%.4f adf_gap=%.4f",
+                                "COINT_GATE: strategy=%s coint_flag=0 allow_new=0 mode=%s "
+                                "health=%s reason=%s p=%.4f adf_gap=%.4f basis=%s sample=%s window=%s "
+                                "entry_basis=%s entry_coint=%s entry_health=%s",
                                 strategy_decision.active_strategy,
                                 strategy_mode,
                                 coint_state,
                                 coint_reason,
                                 coint_health["p_value"],
                                 coint_health["adf_gap"],
+                                str(metrics.get("coint_basis") or "unknown"),
+                                str(metrics.get("coint_sample_size") or "unknown"),
+                                str(metrics.get("coint_window") or "unknown"),
+                                str(metrics.get("entry_basis") or "unknown"),
+                                str(metrics.get("entry_coint_flag", metrics.get("coint_flag", "unknown"))),
+                                str(metrics.get("entry_coint_health") or "unknown"),
                             )
                             if coint_state == COINT_HEALTH_WATCH:
                                 _COINT_WATCH_STREAK += 1
@@ -3391,9 +3516,13 @@ if __name__ == "__main__":
                                     )
                                     _COINT_GATE_STREAK = 0
                                 logger.warning(
-                                    "Cointegration watch streak: %d/%d (near band, entries paused, switch delayed)",
+                                    "Cointegration watch streak: %d/%d "
+                                    "(near band, entries paused, switch delayed, basis=%s sample=%s window=%s)",
                                     _COINT_WATCH_STREAK,
                                     _COINT_WATCH_GATE_THRESHOLD,
+                                    str(metrics.get("coint_basis") or "unknown"),
+                                    str(metrics.get("coint_sample_size") or "unknown"),
+                                    str(metrics.get("coint_window") or "unknown"),
                                 )
                                 should_switch_for_coint = _COINT_WATCH_STREAK >= _COINT_WATCH_GATE_THRESHOLD
                                 switch_reason_for_coint = "cointegration_watch_timeout"

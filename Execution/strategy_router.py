@@ -162,6 +162,7 @@ class StrategyRouter:
             min_win_rate = min_win_rate / 100.0
         self.config["score_min_win_rate"] = max(min(min_win_rate, 1.0), 0.0)
         self._last_strategy_cooldowns = {}
+        self._last_cooldown_released_signatures = {}
 
     def _load_state(self):
         if self._state_store and hasattr(self._state_store, "load"):
@@ -203,27 +204,69 @@ class StrategyRouter:
             until_ts = _safe_float(value.get("until_ts"), 0.0) or 0.0
             reason = str(value.get("reason") or "").strip().lower() or "unknown"
             if until_ts > 0:
-                cooldowns[strategy] = {"until_ts": float(until_ts), "reason": reason}
+                entry = {"until_ts": float(until_ts), "reason": reason}
+                source_signature = str(value.get("source_signature") or "").strip()
+                if source_signature:
+                    entry["source_signature"] = source_signature
+                cooldowns[strategy] = entry
         return cooldowns
+
+    @staticmethod
+    def _sanitize_signature_map(raw):
+        signatures = {}
+        if not isinstance(raw, dict):
+            return signatures
+        for key, value in raw.items():
+            strategy = str(key or "").strip().upper()
+            if strategy not in ("STATARB_MR", "TREND_SPREAD"):
+                continue
+            signature = str(value or "").strip()
+            if signature:
+                signatures[strategy] = signature
+        return signatures
+
+    @staticmethod
+    def _performance_signature(strategy, rolling_count, rolling_win_rate, rolling_pnl, stats):
+        rolling_wins = ""
+        last_trade_ts = ""
+        if isinstance(stats, dict):
+            rolling_wins_raw = stats.get("rolling_wins")
+            if rolling_wins_raw is not None:
+                rolling_wins = str(int(_safe_float(rolling_wins_raw, 0) or 0))
+            last_trade_raw = _safe_float(stats.get("last_trade_ts"), None)
+            if last_trade_raw is not None:
+                last_trade_ts = f"{float(last_trade_raw):.3f}"
+        win_rate = "none" if rolling_win_rate is None else f"{float(rolling_win_rate):.6f}"
+        return (
+            f"{strategy}|count={int(rolling_count)}|wins={rolling_wins}|"
+            f"wr={win_rate}|pnl={float(rolling_pnl):.6f}|last={last_trade_ts}"
+        )
 
     @staticmethod
     def _extract_performance_stats(state, strategy):
         perf = state.get("strategy_performance")
         if not isinstance(perf, dict):
-            return 0, None, 0.0
+            return 0, None, 0.0, StrategyRouter._performance_signature(strategy, 0, None, 0.0, None)
         stats_map = perf.get("stats")
         if not isinstance(stats_map, dict):
-            return 0, None, 0.0
+            return 0, None, 0.0, StrategyRouter._performance_signature(strategy, 0, None, 0.0, None)
         stats = stats_map.get(strategy)
         if not isinstance(stats, dict):
-            return 0, None, 0.0
+            return 0, None, 0.0, StrategyRouter._performance_signature(strategy, 0, None, 0.0, None)
         rolling_count = int(_safe_float(stats.get("rolling_count"), 0) or 0)
         rolling_win_rate_pct = _safe_float(stats.get("rolling_win_rate_pct"), None)
         rolling_win_rate = None
         if rolling_win_rate_pct is not None:
             rolling_win_rate = max(min(float(rolling_win_rate_pct) / 100.0, 1.0), 0.0)
         rolling_pnl = _safe_float(stats.get("rolling_pnl_usdt"), 0.0) or 0.0
-        return rolling_count, rolling_win_rate, float(rolling_pnl)
+        signature = StrategyRouter._performance_signature(
+            strategy,
+            rolling_count,
+            rolling_win_rate,
+            float(rolling_pnl),
+            stats,
+        )
+        return rolling_count, rolling_win_rate, float(rolling_pnl), signature
 
     @staticmethod
     def _map_strategy(regime):
@@ -315,6 +358,9 @@ class StrategyRouter:
         pending_count = int(_safe_float(state.get("pending_count", 0), 0))
         changed = False
         cooldowns = self._sanitize_cooldowns(state.get("strategy_cooldowns"))
+        released_signatures = self._sanitize_signature_map(
+            state.get("strategy_cooldown_released_signatures")
+        )
 
         since_ts = _safe_float(state.get("since_ts", ts), ts)
         if since_ts <= 0:
@@ -352,9 +398,13 @@ class StrategyRouter:
         reason_codes = []
         cooldown_triggered = False
         cooldown_cleared = False
+        cooldown_suppressed_stale_stats = False
         cooldown_until_ts = 0.0
         cooldown_reason = ""
-        rolling_count, rolling_win_rate, rolling_pnl = self._extract_performance_stats(state, active_strategy)
+        rolling_count, rolling_win_rate, rolling_pnl, performance_signature = self._extract_performance_stats(
+            state,
+            active_strategy,
+        )
         diagnostics = {
             "regime": regime,
             "regime_confidence": regime_confidence,
@@ -367,6 +417,7 @@ class StrategyRouter:
             "cooldown_min_trades": int(self.config["score_min_trades"]),
             "cooldown_min_win_rate": float(self.config["score_min_win_rate"]),
             "cooldown_max_rolling_loss_usdt": float(self.config["score_max_rolling_loss_usdt"]),
+            "cooldown_performance_signature": performance_signature,
         }
 
         # Performance-driven strategy cooldown (entry block only; no forced switch/close).
@@ -390,6 +441,9 @@ class StrategyRouter:
 
             current_cd = cooldowns.get(active_strategy)
             if current_cd and float(current_cd.get("until_ts", 0.0) or 0.0) <= ts:
+                released_signatures[active_strategy] = str(
+                    current_cd.get("source_signature") or performance_signature
+                )
                 cooldowns.pop(active_strategy, None)
                 current_cd = None
                 cooldown_cleared = True
@@ -405,13 +459,31 @@ class StrategyRouter:
                     current_cd["until_ts"] = max_allowed_until
                     cooldowns[active_strategy] = current_cd
 
-            if current_cd is None and configured_cooldown_seconds > 0 and cooldown_qualifies:
+            if not cooldown_qualifies:
+                released_signatures.pop(active_strategy, None)
+
+            if (
+                current_cd is None
+                and configured_cooldown_seconds > 0
+                and cooldown_qualifies
+                and released_signatures.get(active_strategy) == performance_signature
+            ):
+                cooldown_suppressed_stale_stats = True
+
+            if (
+                current_cd is None
+                and configured_cooldown_seconds > 0
+                and cooldown_qualifies
+                and not cooldown_suppressed_stale_stats
+            ):
                 cooldown_reason = cooldown_qualifying_reason
                 cooldown_until_ts = float(ts + configured_cooldown_seconds)
                 cooldowns[active_strategy] = {
                     "until_ts": cooldown_until_ts,
                     "reason": cooldown_reason,
+                    "source_signature": performance_signature,
                 }
+                released_signatures.pop(active_strategy, None)
                 current_cd = cooldowns.get(active_strategy)
                 cooldown_triggered = True
 
@@ -427,6 +499,7 @@ class StrategyRouter:
         diagnostics["cooldown_reason"] = cooldown_reason or ""
         diagnostics["cooldown_triggered"] = bool(cooldown_triggered)
         diagnostics["cooldown_cleared"] = bool(cooldown_cleared)
+        diagnostics["cooldown_suppressed_stale_stats"] = bool(cooldown_suppressed_stale_stats)
         diagnostics["cooldown_seconds_remaining"] = max(float(cooldown_until_ts - ts), 0.0)
 
         if regime == "RISK_OFF":
@@ -471,6 +544,7 @@ class StrategyRouter:
         )
 
         self._last_strategy_cooldowns = dict(cooldowns)
+        self._last_cooldown_released_signatures = dict(released_signatures)
         self._persist_state(decision, ts, since_ts)
         return decision
 
@@ -496,6 +570,10 @@ class StrategyRouter:
         state["diagnostics"] = dict(decision.diagnostics)
         if isinstance(self._last_strategy_cooldowns, dict):
             state["strategy_cooldowns"] = dict(self._last_strategy_cooldowns)
+        if isinstance(self._last_cooldown_released_signatures, dict):
+            state["strategy_cooldown_released_signatures"] = dict(
+                self._last_cooldown_released_signatures
+            )
 
         if decision.changed or previous_active != decision.active_strategy:
             state["since_ts"] = float(ts)

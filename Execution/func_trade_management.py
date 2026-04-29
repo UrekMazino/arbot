@@ -1455,7 +1455,7 @@ def check_pair_health(
         if should_switch:
             logger.warning(f"❌ Pair health CRITICAL: {recommendation}")
         else:
-            logger.info(f"✅ Pair is healthy, continuing... ({recommendation})")
+            logger.info(f"✅ Legacy pair health score acceptable; continuing... ({recommendation})")
 
     return should_switch, health_score, recommendation
 

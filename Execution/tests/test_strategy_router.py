@@ -310,6 +310,83 @@ class TestStrategyRouter(unittest.TestCase):
         self.assertNotIn("strategy_cooldown", decision.reason_codes)
         self.assertNotIn("STATARB_MR", store.state.get("strategy_cooldowns", {}))
 
+    def test_strategy_cooldown_does_not_rearm_on_stale_rolling_stats(self):
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_TRADES"] = "3"
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_WIN_RATE"] = "0.60"
+        os.environ["STATBOT_STRATEGY_SCORE_MAX_ROLLING_LOSS_USDT"] = "1.0"
+        os.environ["STATBOT_STRATEGY_COOLDOWN_SECONDS"] = "10"
+
+        store = _MemoryStateStore()
+        store.state["active_strategy"] = "TREND_SPREAD"
+        store.state["since_ts"] = 1000.0
+        store.state["strategy_cooldowns"] = {
+            "TREND_SPREAD": {
+                "until_ts": 1200.0,
+                "reason": "low_win_rate",
+            }
+        }
+        store.state["strategy_performance"] = {
+            "window_trades": 20,
+            "stats": {
+                "TREND_SPREAD": {
+                    "rolling_count": 4,
+                    "rolling_wins": 1,
+                    "rolling_win_rate_pct": 25.0,
+                    "rolling_pnl_usdt": -2.5,
+                    "last_trade_ts": 1100.0,
+                }
+            },
+        }
+        router = StrategyRouter(
+            state_store=store,
+            config={"min_hold_seconds": 0, "confirm_count": 1},
+        )
+
+        decision = router.evaluate(_input(ts=1500.0, regime="TREND", coint_flag=1))
+
+        self.assertTrue(bool(decision.diagnostics.get("cooldown_cleared")))
+        self.assertTrue(bool(decision.diagnostics.get("cooldown_suppressed_stale_stats")))
+        self.assertFalse(bool(decision.diagnostics.get("cooldown_active")))
+        self.assertTrue(decision.allow_new_entries)
+        self.assertNotIn("strategy_cooldown", decision.reason_codes)
+        self.assertIn("TREND_SPREAD", store.state.get("strategy_cooldown_released_signatures", {}))
+
+    def test_strategy_cooldown_rearms_after_performance_changes(self):
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_TRADES"] = "3"
+        os.environ["STATBOT_STRATEGY_SCORE_MIN_WIN_RATE"] = "0.60"
+        os.environ["STATBOT_STRATEGY_SCORE_MAX_ROLLING_LOSS_USDT"] = "1.0"
+        os.environ["STATBOT_STRATEGY_COOLDOWN_SECONDS"] = "10"
+
+        store = _MemoryStateStore()
+        store.state["active_strategy"] = "TREND_SPREAD"
+        store.state["since_ts"] = 1000.0
+        store.state["strategy_cooldown_released_signatures"] = {
+            "TREND_SPREAD": "TREND_SPREAD|count=4|wins=1|wr=0.250000|pnl=-2.500000|last=1100.000"
+        }
+        store.state["strategy_performance"] = {
+            "window_trades": 20,
+            "stats": {
+                "TREND_SPREAD": {
+                    "rolling_count": 5,
+                    "rolling_wins": 1,
+                    "rolling_win_rate_pct": 20.0,
+                    "rolling_pnl_usdt": -3.1,
+                    "last_trade_ts": 1500.0,
+                }
+            },
+        }
+        router = StrategyRouter(
+            state_store=store,
+            config={"min_hold_seconds": 0, "confirm_count": 1},
+        )
+
+        decision = router.evaluate(_input(ts=1510.0, regime="TREND", coint_flag=1))
+
+        self.assertTrue(bool(decision.diagnostics.get("cooldown_triggered")))
+        self.assertTrue(bool(decision.diagnostics.get("cooldown_active")))
+        self.assertFalse(bool(decision.diagnostics.get("cooldown_suppressed_stale_stats")))
+        self.assertIn("strategy_cooldown", decision.reason_codes)
+
 
 if __name__ == "__main__":
     unittest.main()

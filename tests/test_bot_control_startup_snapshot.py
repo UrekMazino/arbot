@@ -613,3 +613,66 @@ def test_manual_switch_blockers_keep_open_trade_without_flat_runtime_evidence():
     finally:
         db.close()
         engine.dispose()
+
+
+def test_remove_pair_from_graveyard_removes_normalized_pair_only(tmp_path, monkeypatch):
+    state_file = tmp_path / "Execution" / "state" / "pair_strategy_state.json"
+    ticker_graveyard_file = tmp_path / "Execution" / "state" / "graveyard_tickers.json"
+    control_log = tmp_path / "Logs" / "v1" / "superadmin_bot_control.log"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "graveyard": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "ts": 123.0,
+                        "reason": "manual",
+                        "ttl_days": None,
+                    },
+                    "ticker::DOGE-USDT-SWAP": {
+                        "ticker": "DOGE-USDT-SWAP",
+                        "reason": "manual_ticker",
+                        "source": "runtime",
+                    },
+                },
+                "hospital": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(bot_control, "PAIR_STRATEGY_STATE_FILE", state_file)
+    monkeypatch.setattr(bot_control, "GRAVEYARD_TICKERS_FILE", ticker_graveyard_file)
+    monkeypatch.setattr(bot_control, "CONTROL_LOG_FILE", control_log)
+    monkeypatch.setattr(bot_control, "ENV_FILE", tmp_path / "Execution" / ".env")
+
+    result = bot_control.remove_pair_from_graveyard(
+        pair="BBB-USDT-SWAP/AAA-USDT-SWAP",
+        requested_by="tester@example.com",
+    )
+
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    assert result["removed"] is True
+    assert result["pair_key"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert "AAA-USDT-SWAP/BBB-USDT-SWAP" not in data["graveyard"]
+    assert "ticker::DOGE-USDT-SWAP" in data["graveyard"]
+    assert result["health"]["graveyard"] == []
+    assert data["graveyard_last_removed_pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+
+
+def test_remove_pair_from_graveyard_returns_not_found_without_creating_state(tmp_path, monkeypatch):
+    state_file = tmp_path / "Execution" / "state" / "pair_strategy_state.json"
+    ticker_graveyard_file = tmp_path / "Execution" / "state" / "graveyard_tickers.json"
+    monkeypatch.setattr(bot_control, "PAIR_STRATEGY_STATE_FILE", state_file)
+    monkeypatch.setattr(bot_control, "GRAVEYARD_TICKERS_FILE", ticker_graveyard_file)
+
+    result = bot_control.remove_pair_from_graveyard(
+        sym_1="AAA-USDT-SWAP",
+        sym_2="BBB-USDT-SWAP",
+        requested_by="tester@example.com",
+    )
+
+    assert result["removed"] is False
+    assert result["status"] == "not_found"
+    assert result["pair_key"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert not state_file.exists()

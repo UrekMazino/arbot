@@ -30,6 +30,7 @@ import {
   getMe,
   isUnauthorizedError,
   isForbiddenError,
+  removePairFromGraveyard,
   startAdminBot,
   stopAdminBot,
 } from "../../../lib/api";
@@ -397,6 +398,7 @@ export default function AdminConsolePage() {
   const [waitingForRun, setWaitingForRun] = useState(false);
   const [lastKnownRunKey, setLastKnownRunKey] = useState<string | null>(null);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<AdminRunRuntime | null>(null);
+  const [graveyardRemoveBusyPair, setGraveyardRemoveBusyPair] = useState("");
   const terminalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const logViewerSearchInputRef = useRef<HTMLInputElement | null>(null);
   const { ConfirmDialogComponent: actionConfirmDialog, confirm: showActionConfirm } = useConfirmDialog();
@@ -488,6 +490,7 @@ export default function AdminConsolePage() {
   const canManageLogsReports = hasPermission(me, "manage_logs_reports");
   const canSwitchActivePair = hasAnyPermission(me, ["switch_active_pair", "manage_bot"]);
   const canViewPairUniverse = hasPermission(me, "view_pair_universe");
+  const canManagePairSupply = hasAnyPermission(me, ["manage_pair_supply", "manage_bot"]);
   const canViewConsole = canAccessAdminPath(me, "/admin/console");
   const botTargetRunning = botStatus?.desired_running ?? botStatus?.running ?? false;
   const botTransitioning = Boolean(
@@ -953,6 +956,48 @@ export default function AdminConsolePage() {
       },
     });
   }, [showActionConfirm, handleClearActivePair]);
+
+  const handleRemoveGraveyardPair = useCallback(async (pair: string) => {
+    if (!canManagePairSupply) return;
+    const targetPair = String(pair || "").trim();
+    if (!targetPair) return;
+    setGraveyardRemoveBusyPair(targetPair);
+    setError("");
+    try {
+      const result = await removePairFromGraveyard(targetPair);
+      setPairsHealth(result.health);
+      setStatus(result.removed ? `Removed ${result.pair_key} from graveyard` : `${result.pair_key} was not in graveyard`);
+    } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearAdminSession("Session expired. Please sign in again.", true);
+        setError("Session expired. Please sign in again.");
+        return;
+      }
+      if (isForbiddenError(err)) {
+        setError("Insufficient permissions to remove graveyard pairs.");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "Remove graveyard pair failed";
+      setError(msg);
+    } finally {
+      setGraveyardRemoveBusyPair("");
+    }
+  }, [canManagePairSupply, clearAdminSession, setError, setPairsHealth, setStatus]);
+
+  const requestRemoveGraveyardPair = useCallback((pair: string) => {
+    const targetPair = String(pair || "").trim();
+    if (!targetPair) return;
+    showActionConfirm({
+      title: "Remove From Graveyard",
+      description: `Remove ${targetPair} from Pair Health graveyard? This only clears the pair-level exclusion from state.`,
+      confirmLabel: "Remove Pair",
+      cancelLabel: "Cancel",
+      variant: "warning",
+      onConfirm: async () => {
+        await handleRemoveGraveyardPair(targetPair);
+      },
+    });
+  }, [showActionConfirm, handleRemoveGraveyardPair]);
 
   useEffect(() => {
     if (artifactRunKeys.length === 0) {
@@ -2344,6 +2389,7 @@ export default function AdminConsolePage() {
                       <th>Reason</th>
                       <th>TTL Days</th>
                       <th>Added</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2355,11 +2401,25 @@ export default function AdminConsolePage() {
                         <td className="text-xs">
                           {entry.added_at ? new Date(entry.added_at * 1000).toLocaleDateString() : "n/a"}
                         </td>
+                        <td className="text-xs">
+                          {canManagePairSupply ? (
+                            <button
+                              type="button"
+                              onClick={() => requestRemoveGraveyardPair(entry.pair)}
+                              disabled={graveyardRemoveBusyPair === entry.pair}
+                              className="inline-flex items-center rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300 dark:hover:bg-amber-950/40"
+                            >
+                              {graveyardRemoveBusyPair === entry.pair ? "Removing..." : "Remove"}
+                            </button>
+                          ) : (
+                            <span className="text-gray-400 dark:text-gray-500">No access</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                     {!pairsHealth?.graveyard?.length ? (
                       <tr>
-                        <td colSpan={4} className="text-sm text-gray-500 dark:text-gray-400">
+                        <td colSpan={5} className="text-sm text-gray-500 dark:text-gray-400">
                           No pairs in graveyard
                         </td>
                       </tr>

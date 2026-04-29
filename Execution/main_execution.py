@@ -175,6 +175,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "td_mode": td_mode,
             "pos_mode": pos_mode,
             "dry_run": bool(dry_run),
+            "disable_open_orders": _env_text("STATBOT_DISABLE_OPEN_ORDERS", "0"),
             "execution_timeframe": _env_text("STATBOT_EXECUTION_TIMEFRAME", "1m"),
             "execution_kline_limit": _env_text("STATBOT_EXECUTION_KLINE_LIMIT", "200"),
             "default_leverage": default_leverage,

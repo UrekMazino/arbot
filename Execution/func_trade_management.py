@@ -135,6 +135,39 @@ def _env_flag(name, default=False):
     return default
 
 
+def _parse_flag_value(raw, default=False):
+    value = str(raw or "").strip().strip('"').strip("'").lower()
+    if value in ("1", "true", "yes", "y", "on"):
+        return True
+    if value in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+def _env_file_flag(name):
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() == name:
+                    return _parse_flag_value(value, False)
+    except OSError:
+        return None
+    return None
+
+
+def _open_orders_disabled():
+    file_value = _env_file_flag("STATBOT_DISABLE_OPEN_ORDERS")
+    if file_value is not None:
+        return bool(file_value)
+    return _env_flag("STATBOT_DISABLE_OPEN_ORDERS", False)
+
+
+
 def _resolve_net_profit_exit_floor_usdt(entry_notional):
     if not _env_flag("STATBOT_ATM_NET_PROFIT_GUARD", True):
         return 0.0
@@ -1732,6 +1765,24 @@ def manage_new_trades(
         print(msg)
         logger.info(msg)
         logger.info(f"Reason: {reason}")
+        if _open_orders_disabled():
+            logger.warning(
+                "ENTRY_ORDERS_DISABLED: signal=%s strategy=%s pair=%s action=skip_open_orders",
+                signal,
+                signal_strategy,
+                _active_pair_key(),
+            )
+            _emit_entry_reject(
+                "entry_orders_disabled",
+                "STATBOT_DISABLE_OPEN_ORDERS=1",
+                pair=_active_pair_key(),
+                strategy=signal_strategy,
+                regime=regime_name,
+                entry_z=latest_zscore,
+                required_entry_z=effective_entry_z,
+                coint_flag=int(coint_flag),
+            )
+            return kill_switch, signal_detected, False
         global _ENTRY_BALANCE_SNAPSHOT_LOGGED
         if not _ENTRY_BALANCE_SNAPSHOT_LOGGED:
             try:

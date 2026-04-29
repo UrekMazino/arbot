@@ -19,6 +19,7 @@ from ..services.bot_control import (
     get_report_run_file,
     get_report_run_summary,
     manual_switch_active_pair,
+    remove_pair_from_graveyard,
     resolve_live_stream_target,
     list_log_runs,
     list_report_runs,
@@ -290,6 +291,24 @@ def admin_pairs_health(
     _: User = Depends(require_permissions("view_pair_universe", "view_logs", "manage_bot", "switch_active_pair")),
 ):
     return get_pair_health_data()
+
+
+@router.delete("/pairs/health/graveyard")
+def admin_remove_pair_from_graveyard(
+    payload: dict = Body(default_factory=dict),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
+):
+    try:
+        return remove_pair_from_graveyard(
+            pair=payload.get("pair") or "",
+            sym_1=payload.get("sym_1") or payload.get("ticker_1") or "",
+            sym_2=payload.get("sym_2") or payload.get("ticker_2") or "",
+            requested_by=user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("/cointegrated-pairs")

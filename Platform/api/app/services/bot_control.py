@@ -2022,6 +2022,32 @@ def _pair_key(ticker_1: str | None, ticker_2: str | None) -> str | None:
     return f"{t1}/{t2}"
 
 
+def _normalized_pair_key(ticker_1: object, ticker_2: object) -> str:
+    t1 = _normalize_ticker_id(ticker_1)
+    t2 = _normalize_ticker_id(ticker_2)
+    if t1 == t2:
+        raise ValueError("Pair symbols must be different.")
+    return "/".join(sorted([t1, t2]))
+
+
+def _graveyard_pair_keys_from_payload(pair: object = "", sym_1: object = "", sym_2: object = "") -> tuple[str, set[str]]:
+    pair_text = str(pair or "").strip().upper()
+    if pair_text:
+        parts = [part.strip() for part in pair_text.split("/") if part.strip()]
+        if len(parts) != 2:
+            raise ValueError("Pair must use TICKER_1/TICKER_2 format.")
+        t1 = _normalize_ticker_id(parts[0])
+        t2 = _normalize_ticker_id(parts[1])
+    else:
+        t1 = _normalize_ticker_id(sym_1)
+        t2 = _normalize_ticker_id(sym_2)
+
+    normalized_key = _normalized_pair_key(t1, t2)
+    direct_key = f"{t1}/{t2}"
+    reverse_key = f"{t2}/{t1}"
+    return normalized_key, {normalized_key, direct_key, reverse_key}
+
+
 def _read_active_pair() -> dict | None:
     active = _read_json_object(ACTIVE_PAIR_FILE)
     t1 = str(active.get("ticker_1") or "").strip().upper()
@@ -2607,3 +2633,48 @@ def get_pair_health_data() -> dict:
             pass
 
     return result
+
+
+def remove_pair_from_graveyard(
+    pair: object = "",
+    sym_1: object = "",
+    sym_2: object = "",
+    requested_by: str | None = None,
+) -> dict:
+    """Remove a pair-level graveyard entry from pair strategy state."""
+    pair_key, candidate_keys = _graveyard_pair_keys_from_payload(pair=pair, sym_1=sym_1, sym_2=sym_2)
+    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+    graveyard = data.get("graveyard", {})
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+
+    removed_entries: dict[str, dict] = {}
+    for candidate_key in list(candidate_keys):
+        if _is_ticker_graveyard_key(candidate_key):
+            continue
+        entry = graveyard.get(candidate_key)
+        if isinstance(entry, dict):
+            removed_entries[candidate_key] = entry
+            graveyard.pop(candidate_key, None)
+
+    removed = bool(removed_entries)
+    if removed:
+        data["graveyard"] = graveyard
+        data["graveyard_last_removed_pair"] = pair_key
+        data["graveyard_last_removed_at"] = _utc_iso_now()
+        data["graveyard_last_removed_by"] = requested_by or ""
+        _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
+        _append_control_log(
+            "INFO",
+            f"Removed pair from Pair Health graveyard: pair={pair_key} by={requested_by or 'unknown'}",
+        )
+
+    return {
+        "ok": True,
+        "removed": removed,
+        "pair_key": pair_key,
+        "removed_keys": sorted(removed_entries.keys()),
+        "status": "removed" if removed else "not_found",
+        "requested_by": requested_by or "",
+        "health": get_pair_health_data(),
+    }

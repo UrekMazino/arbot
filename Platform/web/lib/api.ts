@@ -405,6 +405,16 @@ export type AdminPairsHealth = {
   active_pair: Record<string, unknown> | null;
 };
 
+export type RemovePairGraveyardResult = {
+  ok: boolean;
+  removed: boolean;
+  pair_key: string;
+  removed_keys: string[];
+  status: string;
+  requested_by: string;
+  health: AdminPairsHealth;
+};
+
 export type ManualPairSwitchResult = {
   ok: boolean;
   allowed: boolean;
@@ -858,6 +868,13 @@ export async function updateAdminEnvSetting(key: string, value: string): Promise
 
 export async function getAdminPairsHealth(): Promise<AdminPairsHealth> {
   return apiRequest<AdminPairsHealth>("/admin/pairs/health", { method: "GET" });
+}
+
+export async function removePairFromGraveyard(pair: string): Promise<RemovePairGraveyardResult> {
+  return apiRequest<RemovePairGraveyardResult>("/admin/pairs/health/graveyard", {
+    method: "DELETE",
+    body: JSON.stringify({ pair }),
+  });
 }
 
 export async function getCointegratedPairs(limit = 500): Promise<CointegratedPairsResponse> {

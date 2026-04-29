@@ -45,7 +45,6 @@ PAIR_SUPPLY_LOG = LOGS_ROOT / "pair_supply_scheduler.log"
 PAIR_STRATEGY_STATE = EXECUTION_STATE_ROOT / "pair_strategy_state.json"
 PAIR_CURATOR_REPORT = STRATEGY_OUTPUT_ROOT / "pair_universe_curator.json"
 PAIR_CURATOR_STATE = EXECUTION_STATE_ROOT / "pair_universe_curator_control.json"
-MANUAL_GRAVEYARD_TTL_DAYS = 7
 
 
 def _safe_float(value: Any) -> float | None:
@@ -636,6 +635,20 @@ def _count_csv_rows(path: Path) -> int:
         return 0
 
 
+def _current_pair_universe_keys() -> set[str]:
+    try:
+        df = _read_pairs_frame()
+    except Exception:
+        return set()
+    if df.empty or "sym_1" not in df.columns or "sym_2" not in df.columns:
+        return set()
+    return {
+        _row_pair_key(row)
+        for _, row in df.iterrows()
+        if _row_pair_key(row)
+    }
+
+
 def _pair_id(sym_1: str, sym_2: str) -> str:
     return f"{sym_1}__{sym_2}"
 
@@ -755,28 +768,35 @@ def _update_pair_status_after_manual_remove(removed_count: int, pair_key: str, r
         _write_supply_state(supply_state)
 
 
-def _move_pair_to_manual_graveyard(sym_1: str, sym_2: str, requested_by: str | None) -> None:
-    pair_key = _normalize_pair_key(sym_1, sym_2)
-    if not pair_key:
-        raise ValueError("sym_1 and sym_2 are required.")
-    state = _read_json_object(PAIR_STRATEGY_STATE)
-    graveyard = state.get("graveyard")
-    if not isinstance(graveyard, dict):
-        graveyard = {}
-    hospital = state.get("hospital")
-    if not isinstance(hospital, dict):
-        hospital = {}
+def _remove_pair_from_curator_report(pair_key: str, requested_by: str | None = None) -> None:
+    report = _load_curator_report()
+    if not report:
+        return
+    pairs = report.get("pairs")
+    if not isinstance(pairs, dict) or pair_key not in pairs:
+        return
 
-    graveyard[pair_key] = {
-        "ts": _unix_now(),
-        "reason": "manual",
-        "ttl_days": MANUAL_GRAVEYARD_TTL_DAYS,
-        "requested_by": requested_by or "",
-    }
-    hospital.pop(pair_key, None)
-    state["graveyard"] = graveyard
-    state["hospital"] = hospital
-    _write_json_object(PAIR_STRATEGY_STATE, state)
+    pairs.pop(pair_key, None)
+    remaining_pairs = [item for item in pairs.values() if isinstance(item, dict)]
+    status_counts: dict[str, int] = {}
+    for item in remaining_pairs:
+        status = str(item.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    top_pairs = report.get("top_pairs")
+    if isinstance(top_pairs, list):
+        report["top_pairs"] = [
+            item
+            for item in top_pairs
+            if not (isinstance(item, dict) and str(item.get("pair_key") or "") == pair_key)
+        ]
+    report["pairs"] = pairs
+    report["pair_count"] = len(remaining_pairs)
+    report["active_pair_count"] = _count_csv_rows(COINT_CSV)
+    report["status_counts"] = status_counts
+    report["manual_removed_pair"] = pair_key
+    report["manual_removed_at"] = _utc_iso_now()
+    report["manual_removed_by"] = requested_by or ""
+    _write_json_object(PAIR_CURATOR_REPORT, report)
 
 
 def remove_cointegrated_pair(sym_1: str, sym_2: str, requested_by: str | None = None) -> dict[str, Any]:
@@ -790,8 +810,6 @@ def remove_cointegrated_pair(sym_1: str, sym_2: str, requested_by: str | None = 
     if "sym_1" not in df.columns or "sym_2" not in df.columns:
         raise RuntimeError("Cointegrated pairs CSV is missing sym_1/sym_2 columns.")
 
-    _move_pair_to_manual_graveyard(sym_1, sym_2, requested_by=requested_by)
-
     working = df.copy()
     working["_pair_key"] = working.apply(_row_pair_key, axis=1)
     before = len(working)
@@ -799,6 +817,7 @@ def remove_cointegrated_pair(sym_1: str, sym_2: str, requested_by: str | None = 
     removed_count = int(before - len(remaining))
     if removed_count:
         _write_pairs_frame(remaining)
+        _remove_pair_from_curator_report(pair_key, requested_by=requested_by)
     _update_pair_status_after_manual_remove(removed_count, pair_key, requested_by)
 
     return {
@@ -806,9 +825,8 @@ def remove_cointegrated_pair(sym_1: str, sym_2: str, requested_by: str | None = 
         "removed": removed_count > 0,
         "removed_rows": removed_count,
         "pair_key": pair_key,
-        "status": "graveyard",
-        "reason": "manual",
-        "ttl_days": MANUAL_GRAVEYARD_TTL_DAYS,
+        "status": "removed",
+        "reason": "manual_remove",
         "pair_count": _count_csv_rows(COINT_CSV),
         "requested_by": requested_by or "",
     }
@@ -953,9 +971,19 @@ def get_healthiest_pair_from_curator() -> dict[str, Any] | None:
     if not curator_pairs:
         return None
 
+    active_universe_keys = _current_pair_universe_keys()
+    if not active_universe_keys:
+        return None
+
     selectable_pairs: list[dict[str, Any]] = []
     for pair_key, pair_data in curator_pairs.items():
         if not isinstance(pair_data, dict):
+            continue
+        normalized_key = _normalize_pair_key_text(pair_key) or _normalize_pair_key(
+            pair_data.get("sym_1"),
+            pair_data.get("sym_2"),
+        )
+        if normalized_key not in active_universe_keys:
             continue
         if not _curator_pair_is_selectable(pair_data):
             continue

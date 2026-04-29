@@ -26,6 +26,14 @@ def test_pair_supply_interval_reads_execution_env(monkeypatch, tmp_path):
 
 def test_healthiest_pair_from_curator_requires_healthy_or_promote(monkeypatch, tmp_path):
     report_path = tmp_path / "pair_universe_curator.json"
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    pd.DataFrame(
+        [
+            {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP"},
+            {"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP"},
+            {"sym_1": "EEE-USDT-SWAP", "sym_2": "FFF-USDT-SWAP"},
+        ]
+    ).to_csv(coint_csv, index=False)
     report_path.write_text(
         json.dumps(
             {
@@ -64,12 +72,15 @@ def test_healthiest_pair_from_curator_requires_healthy_or_promote(monkeypatch, t
     )
 
     monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
 
     assert cp.get_healthiest_pair_from_curator()["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
 
 
 def test_healthiest_pair_from_curator_returns_none_without_selectable_pair(monkeypatch, tmp_path):
     report_path = tmp_path / "pair_universe_curator.json"
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    pd.DataFrame([{"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP"}]).to_csv(coint_csv, index=False)
     report_path.write_text(
         json.dumps(
             {
@@ -89,8 +100,47 @@ def test_healthiest_pair_from_curator_returns_none_without_selectable_pair(monke
     )
 
     monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
 
     assert cp.get_healthiest_pair_from_curator() is None
+
+
+def test_healthiest_pair_from_curator_ignores_pairs_removed_from_universe(monkeypatch, tmp_path):
+    report_path = tmp_path / "pair_universe_curator.json"
+    coint_csv = tmp_path / "2_cointegrated_pairs.csv"
+    pd.DataFrame([{"sym_1": "CCC-USDT-SWAP", "sym_2": "DDD-USDT-SWAP"}]).to_csv(coint_csv, index=False)
+    report_path.write_text(
+        json.dumps(
+            {
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                        "priority_rank": 1,
+                        "score": 99,
+                        "status": "healthy",
+                        "recommendation": "promote",
+                    },
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "sym_1": "CCC-USDT-SWAP",
+                        "sym_2": "DDD-USDT-SWAP",
+                        "pair": "CCC-USDT-SWAP/DDD-USDT-SWAP",
+                        "priority_rank": 2,
+                        "score": 90,
+                        "status": "healthy",
+                        "recommendation": "promote",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
+    monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
+
+    assert cp.get_healthiest_pair_from_curator()["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
 
 
 def test_pair_doctor_ui_refresh_seconds_defaults_to_twenty(monkeypatch):
@@ -272,11 +322,12 @@ def test_cointegrated_pair_catalog_filters_missing_liquidity_rows(monkeypatch, t
     assert catalog["pairs"][0]["pair"] == "CCC-USDT-SWAP/DDD-USDT-SWAP"
 
 
-def test_remove_cointegrated_pair_moves_pair_to_manual_graveyard(monkeypatch, tmp_path):
+def test_remove_cointegrated_pair_only_removes_pair_from_universe(monkeypatch, tmp_path):
     coint_csv = tmp_path / "2_cointegrated_pairs.csv"
     status_json = tmp_path / "2_cointegrated_pairs_status.json"
     pair_state = tmp_path / "pair_strategy_state.json"
     supply_state = tmp_path / "pair_supply_control.json"
+    report_path = tmp_path / "pair_universe_curator.json"
     pd.DataFrame(
         [
             {"sym_1": "AAA-USDT-SWAP", "sym_2": "BBB-USDT-SWAP", "zero_crossing": 9},
@@ -285,24 +336,49 @@ def test_remove_cointegrated_pair_moves_pair_to_manual_graveyard(monkeypatch, tm
     ).to_csv(coint_csv, index=False)
     status_json.write_text(json.dumps({"canonical_rows": 2}), encoding="utf-8")
     supply_state.write_text(json.dumps({"status": {"canonical_rows": 2}}), encoding="utf-8")
+    report_path.write_text(
+        json.dumps(
+            {
+                "pair_count": 2,
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "pair_key": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                        "status": "healthy",
+                    },
+                    "CCC-USDT-SWAP/DDD-USDT-SWAP": {
+                        "pair_key": "CCC-USDT-SWAP/DDD-USDT-SWAP",
+                        "status": "healthy",
+                    },
+                },
+                "top_pairs": [
+                    {"pair_key": "AAA-USDT-SWAP/BBB-USDT-SWAP", "status": "healthy"},
+                    {"pair_key": "CCC-USDT-SWAP/DDD-USDT-SWAP", "status": "healthy"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(cp, "COINT_CSV", coint_csv)
     monkeypatch.setattr(cp, "STATUS_JSON", status_json)
     monkeypatch.setattr(cp, "PAIR_STRATEGY_STATE", pair_state)
     monkeypatch.setattr(cp, "PAIR_SUPPLY_STATE", supply_state)
+    monkeypatch.setattr(cp, "PAIR_CURATOR_REPORT", report_path)
 
     result = cp.remove_cointegrated_pair("BBB-USDT-SWAP", "AAA-USDT-SWAP", requested_by="tester@example.com")
     canonical = pd.read_csv(coint_csv)
-    state = json.loads(pair_state.read_text(encoding="utf-8"))
     status = json.loads(status_json.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert result["removed"] is True
     assert result["removed_rows"] == 1
     assert result["pair_key"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert result["status"] == "removed"
     assert list(canonical["sym_1"]) == ["CCC-USDT-SWAP"]
-    assert state["graveyard"]["AAA-USDT-SWAP/BBB-USDT-SWAP"]["reason"] == "manual"
-    assert state["graveyard"]["AAA-USDT-SWAP/BBB-USDT-SWAP"]["requested_by"] == "tester@example.com"
+    assert not pair_state.exists()
     assert status["canonical_rows"] == 1
+    assert "AAA-USDT-SWAP/BBB-USDT-SWAP" not in report["pairs"]
+    assert report["pair_count"] == 1
 
 
 def test_pair_supply_status_marks_zombie_or_reaped_pid_stopped(monkeypatch, tmp_path):

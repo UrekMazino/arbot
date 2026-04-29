@@ -673,7 +673,7 @@ export default function CointegratedPairPage() {
   async function handleRemovePair(pair: CointegratedPair) {
     if (!canManageSupply || removeBusyPairId || switchBusyPairId || activeKey === pair.pair) return;
     const confirmed = window.confirm(
-      `Remove ${pair.pair} from Pair Universe and place it in manual graveyard?`,
+      `Remove ${pair.pair} from Pair Universe? This will not add it to hospital or graveyard.`,
     );
     if (!confirmed) return;
 

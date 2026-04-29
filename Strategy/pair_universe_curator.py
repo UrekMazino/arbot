@@ -1,10 +1,11 @@
 """
 Continuously curate the Pair Universe without placing trades.
 
-The curator is an advisory process: it reads the canonical pair supply and
-Strategy price history, scores current pair health, and writes recommendations
-for the API/UI. It does not move pairs into hospital/graveyard or switch active
-pairs; execution remains the authority for trade lifecycle decisions.
+The curator reads the canonical pair supply and Strategy price history, scores
+current pair health, writes recommendations for the API/UI, and can prune
+unhealthy rows from the active Pair Universe. It does not move pairs into
+hospital/graveyard or switch active pairs; execution remains the authority for
+trade lifecycle decisions.
 """
 
 from __future__ import annotations
@@ -37,8 +38,10 @@ LOGS_ROOT = ROOT_DIR / "Logs" / "v1"
 
 COINT_CSV = STRATEGY_OUTPUT_ROOT / "2_cointegrated_pairs.csv"
 PRICE_JSON = STRATEGY_OUTPUT_ROOT / "1_price_list.json"
+STATUS_JSON = STRATEGY_OUTPUT_ROOT / "2_cointegrated_pairs_status.json"
 CURATOR_REPORT_JSON = STRATEGY_OUTPUT_ROOT / "pair_universe_curator.json"
 CURATOR_STATE_JSON = EXECUTION_STATE_ROOT / "pair_universe_curator_control.json"
+PAIR_SUPPLY_STATE_JSON = EXECUTION_STATE_ROOT / "pair_supply_control.json"
 CURATOR_LOG = LOGS_ROOT / "pair_universe_curator.log"
 
 STOP_REQUESTED = False
@@ -150,6 +153,10 @@ def _normalize_pair_key_text(pair_key: Any) -> str:
     return _normalize_pair_key(parts[0], parts[1])
 
 
+def _row_pair_key(row: pd.Series) -> str:
+    return _normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+
+
 def _read_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -165,6 +172,15 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     temp = path.with_name(f".{path.name}.tmp")
     temp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     temp.replace(path)
+
+
+def _count_csv_rows(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        return int(len(pd.read_csv(path)))
+    except Exception:
+        return 0
 
 
 def _rotate_log_if_needed(path: Path) -> None:
@@ -272,6 +288,96 @@ def _score_capacity(capacity: float | None) -> float:
     if capacity is None or capacity <= 0:
         return 0.0
     return min(10.0, max(0.0, math.log10(max(capacity, 1.0)) / 5.0 * 10.0))
+
+
+def _curator_prune_enabled() -> bool:
+    return _env_flag("STATBOT_PAIR_CURATOR_PRUNE_UNHEALTHY", True)
+
+
+def _pair_is_universe_eligible(pair_data: dict[str, Any]) -> bool:
+    status = str(pair_data.get("status") or "").strip().lower()
+    recommendation = str(pair_data.get("recommendation") or "").strip().lower()
+    return status == "healthy" or recommendation == "promote"
+
+
+def _write_pairs_frame(df: pd.DataFrame) -> None:
+    COINT_CSV.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = COINT_CSV.with_name(f".{COINT_CSV.stem}.curator_prune.tmp{COINT_CSV.suffix}")
+    df.to_csv(temp_path, index=False)
+    temp_path.replace(COINT_CSV)
+
+
+def _update_pair_supply_after_prune(pruned_pairs: list[dict[str, Any]]) -> None:
+    if not pruned_pairs:
+        return
+
+    rows = _count_csv_rows(COINT_CSV)
+    now = _utc_iso_now()
+    status = _read_json_object(STATUS_JSON)
+    status.update(
+        {
+            "updated_at": now,
+            "canonical_path": str(COINT_CSV),
+            "canonical_rows": rows,
+            "canonical_pairs_rows": rows,
+            "curator_pruned_rows": len(pruned_pairs),
+            "curator_pruned_at": now,
+            "curator_pruned_pairs": pruned_pairs,
+        }
+    )
+    _write_json_atomic(STATUS_JSON, status)
+
+    supply_state = _read_json_object(PAIR_SUPPLY_STATE_JSON)
+    supply_status = supply_state.get("status")
+    if isinstance(supply_status, dict):
+        supply_status["canonical_rows"] = rows
+        supply_status["canonical_pairs_rows"] = rows
+        supply_status["curator_pruned_rows"] = len(pruned_pairs)
+        supply_status["curator_pruned_at"] = now
+        supply_status["curator_pruned_pairs"] = pruned_pairs
+        supply_state["status"] = supply_status
+        _write_json_atomic(PAIR_SUPPLY_STATE_JSON, supply_state)
+
+
+def _prune_unhealthy_pair_universe(df: pd.DataFrame, pair_entries: dict[str, Any]) -> list[dict[str, Any]]:
+    if df.empty or not _curator_prune_enabled():
+        return []
+
+    eligible_keys = {
+        pair_key
+        for pair_key, item in pair_entries.items()
+        if isinstance(item, dict) and _pair_is_universe_eligible(item)
+    }
+    working = df.copy()
+    working["_pair_key"] = working.apply(_row_pair_key, axis=1)
+    before = len(working)
+    remaining = working[working["_pair_key"].isin(eligible_keys)].drop(columns=["_pair_key"], errors="ignore").copy()
+    if len(remaining) == before:
+        return []
+
+    removed_rows = working[~working["_pair_key"].isin(eligible_keys)].copy()
+    pruned_pairs: list[dict[str, Any]] = []
+    for _, row in removed_rows.iterrows():
+        pair_key = str(row.get("_pair_key") or "")
+        meta = pair_entries.get(pair_key, {}) if pair_key else {}
+        pruned_pairs.append(
+            {
+                "pair_key": pair_key,
+                "pair": f"{row.get('sym_1')}/{row.get('sym_2')}",
+                "status": meta.get("status") if isinstance(meta, dict) else None,
+                "recommendation": meta.get("recommendation") if isinstance(meta, dict) else None,
+                "reasons": meta.get("reasons") if isinstance(meta, dict) else [],
+            }
+        )
+
+    _write_pairs_frame(remaining)
+    _update_pair_supply_after_prune(pruned_pairs)
+    _log(
+        "pruned_unhealthy_pairs "
+        f"removed={len(pruned_pairs)} remaining={len(remaining)} "
+        f"pairs={json.dumps([item.get('pair') for item in pruned_pairs])}"
+    )
+    return pruned_pairs
 
 
 def _classify_pair(
@@ -455,6 +561,7 @@ def run_curator_once() -> dict[str, Any]:
         "min_liquidity": _env_float("STATBOT_PAIR_CURATOR_MIN_LIQUIDITY_USDT", 1000.0, minimum=0.0),
         "cross_threshold_ratio": _env_float("STATBOT_COINT_ZERO_CROSS_THRESHOLD_RATIO", 0.1, minimum=0.0),
         "stale_seconds": _env_int("STATBOT_PAIR_CURATOR_STALE_SECONDS", 3600, minimum=60),
+        "prune_unhealthy": _curator_prune_enabled(),
     }
 
     pair_entries: dict[str, Any] = {}
@@ -480,13 +587,18 @@ def run_curator_once() -> dict[str, Any]:
     for idx, item in enumerate(ranked_pairs, start=1):
         item["priority_rank"] = idx
 
+    pruned_pairs = _prune_unhealthy_pair_universe(df, pair_entries)
+
     report = {
         "version": 1,
         "updated_at": _utc_iso_now(),
         "source_path": str(COINT_CSV),
         "price_path": str(PRICE_JSON),
         "pair_count": len(pair_entries),
+        "active_pair_count": _count_csv_rows(COINT_CSV),
         "status_counts": status_counts,
+        "pruned_count": len(pruned_pairs),
+        "pruned_pairs": pruned_pairs,
         "settings": settings,
         "top_pairs": ranked_pairs[:10],
         "pairs": {str(item["pair_key"]): item for item in ranked_pairs},
@@ -496,7 +608,9 @@ def run_curator_once() -> dict[str, Any]:
         running=not STOP_REQUESTED,
         last_run_at=report["updated_at"],
         pair_count=len(pair_entries),
+        active_pair_count=report["active_pair_count"],
         status_counts=status_counts,
+        pruned_count=len(pruned_pairs),
         report_file=str(CURATOR_REPORT_JSON),
         detail="ok",
     )

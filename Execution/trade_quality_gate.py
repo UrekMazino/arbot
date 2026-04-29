@@ -275,6 +275,11 @@ def _score_pair_history(pair_stats: dict[str, Any] | None, settings: TradeQualit
         reasons.append("pair_profit_factor_below_one")
     if consecutive_losses > 0:
         reasons.append("pair_recent_losses")
+    if (
+        settings.max_pair_consecutive_losses > 0
+        and consecutive_losses >= settings.max_pair_consecutive_losses
+    ):
+        reasons.append("pair_consecutive_losses_at_limit")
 
     win_score = min(5.0, (win_rate / max(settings.min_pair_win_rate, 1e-9)) * 5.0)
     if loss_usdt <= 0:
@@ -282,7 +287,13 @@ def _score_pair_history(pair_stats: dict[str, Any] | None, settings: TradeQualit
     else:
         profit_score = min(3.0, (win_usdt / loss_usdt) * 3.0)
     recent_loss_score = max(0.0, 2.0 - float(consecutive_losses))
-    return max(0.0, min(10.0, win_score + profit_score + recent_loss_score)), reasons
+    score = max(0.0, min(10.0, win_score + profit_score + recent_loss_score))
+    if (
+        settings.max_pair_consecutive_losses > 0
+        and consecutive_losses >= settings.max_pair_consecutive_losses
+    ):
+        score = min(score, 2.0)
+    return score, reasons
 
 
 def evaluate_trade_quality(
@@ -382,15 +393,6 @@ def evaluate_trade_quality(
         and abs(spread_trend) > settings.hard_max_spread_trend
     ):
         hard_reasons.append("spread_trend_above_hard_limit")
-
-    pair_trades = _safe_int((pair_stats or {}).get("trades"), 0) if isinstance(pair_stats, dict) else 0
-    pair_consecutive_losses = _safe_int((pair_stats or {}).get("consecutive_losses"), 0) if isinstance(pair_stats, dict) else 0
-    if (
-        settings.max_pair_consecutive_losses > 0
-        and pair_trades >= settings.min_pair_trades
-        and pair_consecutive_losses >= settings.max_pair_consecutive_losses
-    ):
-        hard_reasons.append("pair_consecutive_losses_at_limit")
 
     components: dict[str, float] = {}
     components["cointegration"] = min(

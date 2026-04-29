@@ -152,6 +152,26 @@ class TestTradeQualityGate(unittest.TestCase):
         self.assertTrue(decision.allow)
         self.assertEqual(decision.mode, "shadow")
 
+    def test_pair_consecutive_losses_are_soft_score_penalty_only(self):
+        decision = self._decision(
+            zscores=[2.40, 2.35, 2.32, 2.30],
+            pair_stats=self._pair_stats(
+                trades=8,
+                wins=6,
+                losses=2,
+                win_rate=0.75,
+                win_usdt=30.0,
+                loss_usdt=6.0,
+                consecutive_losses=2,
+            ),
+        )
+
+        self.assertTrue(decision.passed)
+        self.assertTrue(decision.allow)
+        self.assertNotIn("pair_consecutive_losses_at_limit", decision.hard_reasons)
+        self.assertIn("pair_consecutive_losses_at_limit", decision.reasons)
+        self.assertLessEqual(decision.components["pair_history"], 1.4)
+
 
 if __name__ == "__main__":
     unittest.main()

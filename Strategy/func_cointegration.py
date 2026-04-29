@@ -486,6 +486,7 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=N
     latest_attempt_path = output_path.with_name(f"{output_path.stem}_latest_attempt{output_path.suffix}")
     status_path = output_path.with_name(f"{output_path.stem}_status.json")
     temp_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
+    previous_status = _read_json_object(status_path)
 
     attempt_rows = int(len(df_coint))
     df_canonical_attempt, latest_excluded_rows = _filter_excluded_pair_rows(df_coint)
@@ -567,10 +568,23 @@ def _write_cointegrated_pairs_csv(df_coint, output_path, logger=None, max_rows=N
         df_canonical_attempt.to_csv(output_path, index=False)
         canonical_updated = True
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    previous_generation = str(previous_status.get("pair_universe_generation") or "").strip()
+    pair_universe_generation = now_iso if canonical_updated or not previous_generation else previous_generation
+    curator_ready = bool(previous_status.get("curator_ready")) if not canonical_updated else False
+    previous_curator_generation = str(previous_status.get("curator_generation") or "").strip()
+    curator_generation = previous_curator_generation if curator_ready else None
+    if curator_generation and curator_generation != pair_universe_generation:
+        curator_ready = False
+        curator_generation = None
+
     status = {
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": now_iso,
         "canonical_path": str(output_path),
         "latest_attempt_path": str(latest_attempt_path),
+        "pair_universe_generation": pair_universe_generation,
+        "curator_ready": curator_ready,
+        "curator_generation": curator_generation,
         "latest_attempt_rows": attempt_rows,
         "canonical_rows": _count_csv_rows(output_path),
         "canonical_updated": canonical_updated,

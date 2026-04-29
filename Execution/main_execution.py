@@ -307,6 +307,7 @@ FORCED_SWITCH_EXIT_REASONS = {
 PAIR_SUPPLY_STATE_FILE = Path(__file__).resolve().parent / "state" / "pair_supply_control.json"
 PAIR_SUPPLY_LOG_FILE = Path(__file__).resolve().parent.parent / "Logs" / "v1" / "pair_supply_scheduler.log"
 MANUAL_PAIR_SWITCH_FILE = Path(__file__).resolve().parent / "state" / "manual_pair_switch.json"
+PAIR_SUPPLY_STATUS_FILE = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs_status.json"
 PAIR_CURATOR_REPORT_FILE = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "pair_universe_curator.json"
 
 
@@ -1248,6 +1249,8 @@ def _read_pair_supply_scan_progress(status=None, watch_started_at=None):
         progress["current"] = int(current)
         progress["total"] = int(total)
         progress["phase"] = "fetching price history"
+    elif "pair_supply curator_start" in segment:
+        progress["phase"] = "pair doctor confirming"
     elif "Price history saved:" in segment:
         progress["phase"] = "analyzing cointegration"
     else:
@@ -1255,6 +1258,12 @@ def _read_pair_supply_scan_progress(status=None, watch_started_at=None):
 
     if "Price history saved:" in segment and progress["current"] >= progress["total"] > 0:
         progress["phase"] = "analyzing cointegration"
+    if "pair_supply curator_start" in segment:
+        progress["phase"] = "pair doctor confirming"
+    if "pair_supply curator_complete" in segment:
+        progress["phase"] = "pair doctor confirmed"
+    if "pair_supply curator_error" in segment:
+        progress["phase"] = "pair doctor failed"
     if not progress["active"]:
         progress["phase"] = "scan complete"
     return progress
@@ -1310,10 +1319,26 @@ def _read_pair_supply_state():
     return data if isinstance(data, dict) else {}
 
 
-def _pair_supply_canonical_rows(state=None):
+def _read_pair_supply_status_metadata(state=None):
+    status = {}
     if state is None:
         state = _read_pair_supply_state()
-    status = state.get("status") if isinstance(state, dict) else {}
+    nested = state.get("status") if isinstance(state, dict) else {}
+    if isinstance(nested, dict):
+        status.update(nested)
+    try:
+        if PAIR_SUPPLY_STATUS_FILE.exists():
+            direct = json.loads(PAIR_SUPPLY_STATUS_FILE.read_text(encoding="utf-8"))
+            if isinstance(direct, dict):
+                status.update(direct)
+    except Exception:
+        pass
+    return status
+
+
+def _pair_supply_canonical_rows(status=None):
+    if status is None:
+        status = _read_pair_supply_status_metadata()
     if not isinstance(status, dict):
         return 0
     for key in ("canonical_rows", "canonical_pairs_rows"):
@@ -1409,6 +1434,7 @@ def _pair_supply_state_fresh(state):
 
 def _get_pair_supply_runtime_status():
     state = _read_pair_supply_state()
+    status_metadata = _read_pair_supply_status_metadata(state)
     pid = _safe_pid(state.get("pid"))
     desired_running = bool(state.get("desired_running"))
     runner_alive = _pair_supply_runner_alive(state)
@@ -1433,7 +1459,8 @@ def _get_pair_supply_runtime_status():
         "process_mode": state.get("process_mode") or "",
         "process_owner": state.get("process_owner") or "",
         "runner_heartbeat_at": state.get("runner_heartbeat_at") or "",
-        "canonical_rows": _pair_supply_canonical_rows(state),
+        "canonical_rows": _pair_supply_canonical_rows(status_metadata),
+        "status": status_metadata,
     }
 
 
@@ -1654,10 +1681,133 @@ def _should_defer_to_pair_supply():
     return bool(_get_pair_supply_runtime_status().get("defer_to_supply"))
 
 
-def _wait_for_pair_supply(context):
+def _runtime_status_metadata(status):
+    if isinstance(status, dict):
+        nested = status.get("status")
+        if isinstance(nested, dict):
+            return nested
+        return status
+    return {}
+
+
+def _read_pair_curator_report():
+    try:
+        if not PAIR_CURATOR_REPORT_FILE.exists():
+            return {}
+        data = json.loads(PAIR_CURATOR_REPORT_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _pair_universe_csv_keys(csv_path):
+    keys = set()
+    if csv_path is None:
+        return keys
+    try:
+        if not csv_path.exists():
+            return keys
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                pair_key = normalize_pair_key(row.get("sym_1"), row.get("sym_2"))
+                if pair_key:
+                    keys.add(pair_key)
+    except Exception as exc:
+        logger.warning("Could not inspect Pair Universe CSV keys for curator readiness: %s", exc)
+    return keys
+
+
+def _pair_curator_readiness(status=None, csv_path=None):
+    if not _switch_requires_curator_health():
+        return True, "curator health gate disabled"
+
+    metadata = _runtime_status_metadata(status)
+    if not metadata:
+        metadata = _read_pair_supply_status_metadata()
+    generation = str(metadata.get("pair_universe_generation") or "").strip()
+    status_curator_generation = str(metadata.get("curator_generation") or "").strip()
+
+    report = _read_pair_curator_report()
+    if not report:
+        return False, "Pair Doctor curator report is missing"
+    report_generation = str(report.get("source_generation") or "").strip()
+    pairs = report.get("pairs")
+    if not isinstance(pairs, dict) or not pairs:
+        return False, "Pair Doctor curator report has no pairs"
+
+    if generation:
+        if not report_generation:
+            return False, f"Pair Doctor curator report has no source generation for Pair Universe {generation}"
+        if report_generation != generation:
+            return False, (
+                "Pair Doctor curator report is stale "
+                f"(curator_generation={report_generation} pair_universe_generation={generation})"
+            )
+        if status_curator_generation and status_curator_generation != generation:
+            return False, (
+                "Pair Doctor readiness marker is stale "
+                f"(curator_generation={status_curator_generation} pair_universe_generation={generation})"
+            )
+        if metadata.get("curator_ready") is False:
+            return False, f"Pair Doctor curator has not marked Pair Universe {generation} ready"
+
+    csv_keys = _pair_universe_csv_keys(csv_path)
+    if csv_keys:
+        report_keys = set()
+        for raw_key, item in pairs.items():
+            if isinstance(item, dict):
+                pair_key = normalize_pair_key(item.get("sym_1"), item.get("sym_2"))
+            else:
+                pair_key = ""
+            pair_key = pair_key or str(raw_key or "").strip()
+            if pair_key:
+                report_keys.add(pair_key)
+        missing = sorted(csv_keys - report_keys)
+        if missing:
+            sample = ", ".join(missing[:3])
+            extra = "..." if len(missing) > 3 else ""
+            return False, f"Pair Doctor curator report is missing {len(missing)} current pair(s): {sample}{extra}"
+
+    return True, "Pair Doctor curator report matches the supplied Pair Universe"
+
+
+def _pair_supply_wait_context(status, context, csv_path=None):
+    if str(context or "").strip() == "no_switch_candidate" and csv_path is not None and _csv_has_pair_rows(csv_path):
+        ready, detail = _pair_curator_readiness(status, csv_path=csv_path)
+        if not ready:
+            return "curator_pending_or_stale", detail
+    return context, ""
+
+
+def _wait_for_pair_curator_ready(status, context, csv_path=None):
+    if csv_path is not None and not _csv_has_pair_rows(csv_path):
+        return
+    ready, detail = _pair_curator_readiness(status, csv_path=csv_path)
+    if ready:
+        return
+
+    last_detail = ""
+    while _should_defer_to_pair_supply():
+        status = _get_pair_supply_runtime_status()
+        ready, detail = _pair_curator_readiness(status, csv_path=csv_path)
+        if ready:
+            logger.info("Pair Doctor curator confirmed supplied Pair Universe (%s).", context)
+            return
+        if detail != last_detail:
+            logger.info(
+                "Waiting for Pair Doctor curator to confirm supplied Pair Universe (%s): %s.",
+                context,
+                detail,
+            )
+            last_detail = detail
+        time.sleep(PAIR_SUPPLY_WAIT_SECONDS)
+
+
+def _wait_for_pair_supply(context, csv_path=None):
     status = _get_pair_supply_runtime_status()
     if not status.get("defer_to_supply"):
         return False
+    wait_context, readiness_detail = _pair_supply_wait_context(status, context, csv_path=csv_path)
     state_text = "running" if status.get("running") else "requested"
     logger.warning(
         "Pair supply is %s (pid=%s desired=%s detail=%s); waiting for supplied Pair Universe instead of running Strategy refresh (%s).",
@@ -1665,9 +1815,12 @@ def _wait_for_pair_supply(context):
         status.get("pid") or "unknown",
         int(bool(status.get("desired_running"))),
         status.get("detail") or "n/a",
-        context,
+        wait_context,
     )
-    _wait_for_pair_supply_scan(status, context)
+    if readiness_detail:
+        logger.info("Pair Universe handoff is waiting on Pair Doctor: %s.", readiness_detail)
+    _wait_for_pair_supply_scan(status, wait_context)
+    _wait_for_pair_curator_ready(status, wait_context, csv_path=csv_path)
     return True
 
 
@@ -1746,7 +1899,7 @@ def _wait_for_pair_supply_csv(csv_path):
         if not _should_defer_to_pair_supply():
             logger.warning("Pair supply stopped before providing pairs; falling back to startup Strategy discovery.")
             return False
-        _wait_for_pair_supply("startup_waiting_for_pairs")
+        _wait_for_pair_supply("startup_waiting_for_pairs", csv_path=csv_path)
 
 
 def _candidate_pair_indices(current_index, pair_count):
@@ -2416,7 +2569,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         while next_t1 is None:
             pairs = _read_pairs()
             if not pairs:
-                if _wait_for_pair_supply("no_pairs_in_csv"):
+                if _wait_for_pair_supply("no_pairs_in_csv", csv_path=csv_path):
                     continue
                 refreshed = _run_strategy_refresh()
                 if refreshed:
@@ -2437,7 +2590,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
             next_t1, next_t2 = _find_next_pair(pairs)
             if next_t1 is None:
-                if _wait_for_pair_supply("no_switch_candidate"):
+                if _wait_for_pair_supply("no_switch_candidate", csv_path=csv_path):
                     continue
                 refreshed = _run_strategy_refresh()
                 if refreshed:

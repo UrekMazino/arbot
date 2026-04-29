@@ -328,6 +328,9 @@ def test_cointegrated_pairs_writer_accumulates_non_empty_scans(tmp_path):
     assert status["accumulated_pairs_refreshed"] == 1
     assert status["accumulated_pairs_retained"] == 1
     assert status["accumulation_cap_filtered"] == 0
+    assert status["pair_universe_generation"]
+    assert status["curator_ready"] is False
+    assert status["curator_generation"] is None
 
 
 def test_cointegrated_pairs_writer_caps_accumulated_supply(tmp_path):

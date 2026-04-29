@@ -91,6 +91,28 @@ def test_pair_supply_scan_progress_detects_watched_completion_with_next_scan_act
     assert progress["total"] == 122
 
 
+def test_pair_supply_scan_progress_reports_pair_doctor_confirmation(monkeypatch, tmp_path):
+    log_path = tmp_path / "pair_supply_scheduler.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "2026-04-22T01:22:49.227768+00:00 pair_supply scan_start",
+                "[########################] 122/122 HOOD-USDT-SWAP | OK 10080 candles | stored 122/122",
+                "Price history saved: output/1_price_list.json",
+                "2026-04-22T01:40:00.000000+00:00 pair_supply curator_start",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(me, "PAIR_SUPPLY_LOG_FILE", log_path)
+
+    progress = me._read_pair_supply_scan_progress({"log_file": str(log_path)})
+
+    assert progress["active"] is True
+    assert progress["phase"] == "pair doctor confirming"
+
+
 def test_execution_defers_to_fresh_pair_supply_start_request(monkeypatch, tmp_path):
     state_path = tmp_path / "pair_supply_control.json"
     now = datetime.now(timezone.utc).isoformat()
@@ -172,12 +194,135 @@ def test_execution_trusts_existing_supplied_pair_universe_rows_when_runner_stopp
     )
 
     monkeypatch.setattr(me, "PAIR_SUPPLY_STATE_FILE", state_path)
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATUS_FILE", tmp_path / "missing_status.json")
 
     status = me._get_pair_supply_runtime_status()
 
     assert status["defer_to_supply"] is False
     assert status["canonical_rows"] == 8
     assert me._should_trust_pair_universe_candidates(csv_path) is True
+
+
+def test_pair_curator_readiness_requires_matching_generation(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        "AAA-USDT-SWAP,BBB-USDT-SWAP,10000,10000,10000\n",
+        encoding="utf-8",
+    )
+    status_path = tmp_path / "2_cointegrated_pairs_status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "pair_universe_generation": "generation-new",
+                "canonical_rows": 1,
+                "curator_ready": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "pair_universe_curator.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "source_generation": "generation-old",
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "status": "healthy",
+                        "recommendation": "promote",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STATBOT_SWITCH_REQUIRE_CURATOR_HEALTHY", "1")
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATUS_FILE", status_path)
+    monkeypatch.setattr(me, "PAIR_CURATOR_REPORT_FILE", report_path)
+
+    ready, detail = me._pair_curator_readiness(csv_path=csv_path)
+
+    assert ready is False
+    assert "stale" in detail
+
+    status_path.write_text(
+        json.dumps(
+            {
+                "pair_universe_generation": "generation-new",
+                "canonical_rows": 1,
+                "curator_ready": True,
+                "curator_generation": "generation-new",
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path.write_text(
+        json.dumps(
+            {
+                "source_generation": "generation-new",
+                "pairs": {
+                    "AAA-USDT-SWAP/BBB-USDT-SWAP": {
+                        "sym_1": "AAA-USDT-SWAP",
+                        "sym_2": "BBB-USDT-SWAP",
+                        "status": "healthy",
+                        "recommendation": "promote",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ready, detail = me._pair_curator_readiness(csv_path=csv_path)
+
+    assert ready is True
+    assert "matches" in detail
+
+
+def test_no_switch_candidate_wait_context_names_curator_pending(monkeypatch, tmp_path):
+    csv_path = tmp_path / "2_cointegrated_pairs.csv"
+    csv_path.write_text(
+        "sym_1,sym_2,avg_quote_volume_1,avg_quote_volume_2,pair_liquidity_min\n"
+        + "\n".join(
+            [
+                f"AAA{i}-USDT-SWAP,BBB{i}-USDT-SWAP,10000,10000,10000"
+                for i in range(8)
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report_path = tmp_path / "pair_universe_curator.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "source_generation": "generation-old",
+                "pairs": {
+                    "AAA0-USDT-SWAP/BBB0-USDT-SWAP": {
+                        "sym_1": "AAA0-USDT-SWAP",
+                        "sym_2": "BBB0-USDT-SWAP",
+                        "status": "healthy",
+                        "recommendation": "promote",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STATBOT_SWITCH_REQUIRE_CURATOR_HEALTHY", "1")
+    monkeypatch.setattr(me, "PAIR_CURATOR_REPORT_FILE", report_path)
+
+    context, detail = me._pair_supply_wait_context(
+        {"status": {"pair_universe_generation": "generation-new", "curator_ready": False}},
+        "no_switch_candidate",
+        csv_path=csv_path,
+    )
+
+    assert context == "curator_pending_or_stale"
+    assert "stale" in detail
 
 
 def test_execution_does_not_defer_to_stale_pair_supply_request(monkeypatch, tmp_path):

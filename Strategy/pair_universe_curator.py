@@ -183,6 +183,41 @@ def _count_csv_rows(path: Path) -> int:
         return 0
 
 
+def _status_generation(status: dict[str, Any]) -> str:
+    return str((status or {}).get("pair_universe_generation") or "").strip()
+
+
+def _mark_curator_ready(report: dict[str, Any]) -> None:
+    source_generation = str(report.get("source_generation") or "").strip()
+    report_updated_at = str(report.get("updated_at") or "").strip()
+    status = _read_json_object(STATUS_JSON)
+    if source_generation:
+        status["pair_universe_generation"] = status.get("pair_universe_generation") or source_generation
+        status["curator_generation"] = source_generation
+        status["curator_ready"] = True
+    status["curator_report_updated_at"] = report_updated_at
+    status["curator_pair_count"] = report.get("pair_count", 0)
+    status["curator_active_pair_count"] = report.get("active_pair_count", 0)
+    status["curator_status_counts"] = report.get("status_counts", {})
+    status["updated_at"] = _utc_iso_now()
+    _write_json_atomic(STATUS_JSON, status)
+
+    supply_state = _read_json_object(PAIR_SUPPLY_STATE_JSON)
+    supply_status = supply_state.get("status")
+    if not isinstance(supply_status, dict):
+        supply_status = {}
+    if source_generation:
+        supply_status["pair_universe_generation"] = status.get("pair_universe_generation") or source_generation
+        supply_status["curator_generation"] = source_generation
+        supply_status["curator_ready"] = True
+    supply_status["curator_report_updated_at"] = report_updated_at
+    supply_status["curator_pair_count"] = report.get("pair_count", 0)
+    supply_status["curator_active_pair_count"] = report.get("active_pair_count", 0)
+    supply_status["curator_status_counts"] = report.get("status_counts", {})
+    supply_state["status"] = supply_status
+    _write_json_atomic(PAIR_SUPPLY_STATE_JSON, supply_state)
+
+
 def _rotate_log_if_needed(path: Path) -> None:
     max_mb = _env_int("STATBOT_LOG_MAX_MB", 5, minimum=1)
     backups = _env_int("STATBOT_LOG_BACKUPS", 3, minimum=0)
@@ -545,6 +580,8 @@ def run_curator_once() -> dict[str, Any]:
     if not PRICE_JSON.exists():
         raise FileNotFoundError(f"Price history JSON not found: {PRICE_JSON}")
 
+    source_status = _read_json_object(STATUS_JSON)
+    source_generation = _status_generation(source_status)
     df = pd.read_csv(COINT_CSV)
     price_data = _read_json_object(PRICE_JSON)
     previous_report = _read_json_object(CURATOR_REPORT_JSON)
@@ -593,6 +630,9 @@ def run_curator_once() -> dict[str, Any]:
         "version": 1,
         "updated_at": _utc_iso_now(),
         "source_path": str(COINT_CSV),
+        "source_generation": source_generation,
+        "source_status_updated_at": source_status.get("updated_at"),
+        "source_canonical_rows": _count_csv_rows(COINT_CSV),
         "price_path": str(PRICE_JSON),
         "pair_count": len(pair_entries),
         "active_pair_count": _count_csv_rows(COINT_CSV),
@@ -604,6 +644,7 @@ def run_curator_once() -> dict[str, Any]:
         "pairs": {str(item["pair_key"]): item for item in ranked_pairs},
     }
     _write_json_atomic(CURATOR_REPORT_JSON, report)
+    _mark_curator_ready(report)
     _write_state(
         running=not STOP_REQUESTED,
         last_run_at=report["updated_at"],

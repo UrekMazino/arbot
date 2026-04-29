@@ -147,6 +147,24 @@ def _run_strategy_process(strategy_script: Path, strategy_dir: Path, env: dict[s
     return int(proc.wait())
 
 
+def _run_pair_curator_once() -> bool:
+    _write_log_line(f"{datetime.now(timezone.utc).isoformat()} pair_supply curator_start")
+    try:
+        from pair_universe_curator import run_curator_once
+
+        report = run_curator_once()
+    except Exception as exc:
+        _write_log_line(f"{datetime.now(timezone.utc).isoformat()} pair_supply curator_error error={exc}")
+        return False
+
+    _write_log_line(
+        f"{datetime.now(timezone.utc).isoformat()} pair_supply curator_complete "
+        f"generation={report.get('source_generation') or 'unknown'} "
+        f"pairs={report.get('pair_count', 0)} active_pairs={report.get('active_pair_count', 0)}",
+    )
+    return True
+
+
 def main() -> int:
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
@@ -170,6 +188,9 @@ def main() -> int:
                 env = os.environ.copy()
                 env["PYTHONUNBUFFERED"] = "1"
                 ret = _run_strategy_process(strategy_script, strategy_dir, env)
+                if ret == 0 and _env_bool("STATBOT_PAIR_SUPPLY_RUN_CURATOR_AFTER_SCAN", True):
+                    if not _run_pair_curator_once():
+                        ret = 2
             except Exception as exc:
                 ret = 1
                 _write_log_line(f"{datetime.now(timezone.utc).isoformat()} pair_supply scan_error error={exc}")

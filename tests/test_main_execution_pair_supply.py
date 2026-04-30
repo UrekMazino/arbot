@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTION_DIR = ROOT / "Execution"
 if str(EXECUTION_DIR) not in sys.path:
@@ -457,3 +459,51 @@ def test_pruned_active_pair_defers_when_not_flat(monkeypatch, tmp_path):
     )
 
     assert result == me.SWITCH_RESULT_BLOCKED
+
+
+def test_trade_close_result_uses_verified_entry_to_post_close_equity():
+    result = me._select_trade_close_result(
+        entry_equity=100.0,
+        post_close_equity=101.25,
+        pre_close_equity_change=None,
+        starting_equity=99.0,
+        position_pnl=-5.0,
+    )
+
+    assert result["pnl"] == pytest.approx(1.25)
+    assert result["basis"] == "entry_to_post_close_equity"
+    assert result["label"] == "WIN"
+    assert result["verified"] is True
+    assert result["record_history"] is True
+
+
+def test_trade_close_result_quarantines_restart_close_with_session_equity_delta():
+    result = me._select_trade_close_result(
+        entry_equity=None,
+        post_close_equity=2747.85,
+        pre_close_equity_change=None,
+        starting_equity=2748.00,
+        position_pnl=0.82,
+    )
+
+    assert result["pnl"] == pytest.approx(-0.15)
+    assert result["basis"] == "session_equity_delta_unverified"
+    assert result["label"] == "UNVERIFIED"
+    assert result["verified"] is False
+    assert result["record_history"] is False
+
+
+def test_trade_close_result_keeps_position_pnl_unverified_when_equity_missing():
+    result = me._select_trade_close_result(
+        entry_equity=None,
+        post_close_equity=None,
+        pre_close_equity_change=None,
+        starting_equity=None,
+        position_pnl=0.82,
+    )
+
+    assert result["pnl"] == pytest.approx(0.82)
+    assert result["basis"] == "position_pnl_unverified"
+    assert result["label"] == "UNVERIFIED"
+    assert result["verified"] is False
+    assert result["record_history"] is False

@@ -38,6 +38,21 @@ from func_pair_state import (
     record_health_failure,
 )
 
+
+def _log_interval_seconds(name, default, minimum=1):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        value = int(default)
+    else:
+        try:
+            value = int(float(raw))
+        except (TypeError, ValueError):
+            value = int(default)
+    if value < minimum:
+        value = minimum
+    return value
+
+
 # Risk management thresholds
 ZSCORE_HARD_STOP = 2.5  # Hard stop-loss if Z-score exceeds this (regime break detection)
 ZSCORE_EXIT_TARGET = 0.05  # Exit at mean reversion with small buffer for fees (~0.07% round-trip)
@@ -58,9 +73,9 @@ HYBRID_EXIT_COINT_GRACE_SECONDS = 300
 HYBRID_EXIT_DIVERGENCE_DELTA_Z = 1.5
 COMPLIANCE_RESTRICTION_CODE = "51155"
 _ENTRY_BALANCE_SNAPSHOT_LOGGED = False
-_ZSCORE_LOG_INTERVAL_SECONDS = 60
-_WAITING_LOG_INTERVAL_SECONDS = 60
-_HOLD_LOG_INTERVAL_SECONDS = 60
+_ZSCORE_LOG_INTERVAL_SECONDS = _log_interval_seconds("STATBOT_ZSCORE_LOG_INTERVAL_SECONDS", 300)
+_WAITING_LOG_INTERVAL_SECONDS = _log_interval_seconds("STATBOT_WAITING_LOG_INTERVAL_SECONDS", 300)
+_HOLD_LOG_INTERVAL_SECONDS = _log_interval_seconds("STATBOT_HOLD_LOG_INTERVAL_SECONDS", 300)
 _LAST_ZSCORE_STATUS = None
 _LAST_ZSCORE_LOG_TS = 0.0
 _LAST_WAITING_LOG_TS = 0.0

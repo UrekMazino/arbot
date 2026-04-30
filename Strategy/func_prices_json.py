@@ -186,6 +186,8 @@ def store_price_history(symbols):
 
     total_symbols = len(symbols)
     bar_len = 24
+    progress_interval_seconds = max(1, _int_env("STATBOT_STRATEGY_PROGRESS_LOG_INTERVAL_SECONDS", 60))
+    progress_step_pct = max(1, min(100, _int_env("STATBOT_STRATEGY_PROGRESS_LOG_STEP_PCT", 10)))
     cache_enabled = _bool_env("STATBOT_STRATEGY_INTERNAL_CACHE_KLINES", True)
     max_gap_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_MAX_GAP_BARS", 120)
     refresh_bars = _int_env("STATBOT_STRATEGY_INTERNAL_CACHE_REFRESH_BARS", 100)
@@ -229,16 +231,36 @@ def store_price_history(symbols):
             logger.warning("Price history cache load failed: %s", exc)
             cached_data = {}
 
+    last_progress_log_ts = 0.0
+    last_progress_bucket = -1
+
     def _render_progress(idx, symbol_name, status="", stored=None):
-        filled = int(bar_len * idx / max(1, total_symbols))
+        nonlocal last_progress_log_ts, last_progress_bucket
+
+        clamped_idx = max(0, min(idx, total_symbols))
+        percent = int((clamped_idx / max(1, total_symbols)) * 100)
+        bucket = (percent // progress_step_pct) * progress_step_pct
+        now = time.time()
+        should_emit = (
+            idx >= total_symbols
+            or bucket > last_progress_bucket
+            or (now - last_progress_log_ts) >= progress_interval_seconds
+        )
+        if not should_emit:
+            return
+
+        filled = int(bar_len * clamped_idx / max(1, total_symbols))
         bar = "#" * filled + "-" * (bar_len - filled)
         suffix = f" | {status}" if status else ""
         if stored is not None:
             suffix = f"{suffix} | stored {stored}/{total_symbols}"
         sys.stdout.write(f"\r[{bar}] {idx}/{total_symbols} {symbol_name}{suffix}")
         sys.stdout.flush()
+        last_progress_log_ts = now
+        last_progress_bucket = bucket
         if idx >= total_symbols:
             sys.stdout.write("\n")
+            sys.stdout.flush()
 
     cache_hits = 0
     cache_refreshed = 0

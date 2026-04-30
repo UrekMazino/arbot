@@ -24,7 +24,7 @@ PNL_LINE_RE = re.compile(
     r"Session: (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\)"
 )
 TRADE_CLOSED_RE = re.compile(
-    r"PNL_ALERT.*Trade closed (?P<result>WIN|LOSS) \| PnL (?P<pnl>[-+]?\d+\.\d+) USDT \((?P<pnl_pct>[-+]?\d+\.\d+)%\) "
+    r"PNL_ALERT.*Trade closed (?P<result>WIN|LOSS|UNVERIFIED) \| PnL (?P<pnl>[-+]?\d+\.\d+) USDT \((?P<pnl_pct>[-+]?\d+\.\d+)%\) "
     r"\| Equity (?P<equity>\d+\.\d+) USDT \| Session (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\)"
     r"(?: \| Strategy (?P<strategy>[A-Z0-9_]+) \| Regime (?P<regime>[A-Z0-9_]+))?"
 )
@@ -35,7 +35,7 @@ STRATEGY_TRADE_OPEN_RE = re.compile(
 )
 STRATEGY_TRADE_CLOSE_RE = re.compile(
     r"STRATEGY_TRADE_CLOSE: strategy=(?P<strategy>[A-Z0-9_]+) regime=(?P<regime>[A-Z0-9_]+) "
-    r"result=(?P<result>WIN|LOSS) pnl=(?P<pnl>[-+]?\d+\.\d+) hold_min=(?P<hold_min>[^\s]+) "
+    r"result=(?P<result>WIN|LOSS|UNVERIFIED) pnl=(?P<pnl>[-+]?\d+\.\d+) hold_min=(?P<hold_min>[^\s]+) "
     r"exit_reason=(?P<exit_reason>[^\s]+)"
 )
 STRATEGY_CHANGE_RE = re.compile(
@@ -1072,19 +1072,21 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
                         "exit_reason": exit_reason,
                     }
                 )
-                stats_entry = _pair_stats_entry(pair_key)
-                stats_entry["trades"] += 1
                 pnl_val = _safe_float(trade_match.group("pnl")) or 0.0
-                stats_entry["pnl_usdt"] += pnl_val
                 pnl_pct_val = _safe_float(trade_match.group("pnl_pct")) or 0.0
-                stats_entry["pnl_pct"] += pnl_pct_val
-                if trade_match.group("result") == "WIN":
+                trade_result = str(trade_match.group("result") or "").strip().upper()
+                if trade_result in ("WIN", "LOSS"):
+                    stats_entry = _pair_stats_entry(pair_key)
+                    stats_entry["trades"] += 1
+                    stats_entry["pnl_usdt"] += pnl_val
+                    stats_entry["pnl_pct"] += pnl_pct_val
+                if trade_result == "WIN":
                     stats_entry["wins"] += 1
                     stats_entry["pnl_win_usdt"] += pnl_val
-                elif trade_match.group("result") == "LOSS":
+                elif trade_result == "LOSS":
                     stats_entry["losses"] += 1
                     stats_entry["pnl_loss_usdt"] += pnl_val
-                if hold_minutes is not None:
+                if trade_result in ("WIN", "LOSS") and hold_minutes is not None:
                     stats_entry["hold_minutes"].append(hold_minutes)
 
                 if reconciliation_pending:
@@ -1346,8 +1348,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
     win_rate = round((wins / trade_count) * 100, 2) if trade_count else None
     avg_trade_pnl = None
     avg_hold = None
-    trade_pnls = [t.get("pnl_usdt") for t in trades if t.get("pnl_usdt") is not None]
-    hold_times = [t.get("hold_minutes") for t in trades if t.get("hold_minutes") is not None]
+    verified_trades = [t for t in trades if str(t.get("result") or "").strip().upper() in ("WIN", "LOSS")]
+    trade_pnls = [t.get("pnl_usdt") for t in verified_trades if t.get("pnl_usdt") is not None]
+    hold_times = [t.get("hold_minutes") for t in verified_trades if t.get("hold_minutes") is not None]
     if trade_pnls:
         avg_trade_pnl = round(sum(trade_pnls) / len(trade_pnls), 4)
     if hold_times:
@@ -1383,6 +1386,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
 
     strategy_regime_stats = {}
     for trade in trades:
+        result = str(trade.get("result") or "").strip().upper()
+        if result not in ("WIN", "LOSS"):
+            continue
         strategy_key = str(trade.get("entry_strategy") or "UNKNOWN").strip().upper() or "UNKNOWN"
         regime_key = str(trade.get("entry_regime") or "UNKNOWN").strip().upper() or "UNKNOWN"
         key = (strategy_key, regime_key)
@@ -1398,7 +1404,6 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             }
         cell = strategy_regime_stats[key]
         cell["trades"] += 1
-        result = str(trade.get("result") or "").strip().upper()
         if result == "WIN":
             cell["wins"] += 1
         elif result == "LOSS":
@@ -1438,6 +1443,9 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
 
     strategy_perf_stats = {}
     for trade in trades:
+        result = str(trade.get("result") or "").strip().upper()
+        if result not in ("WIN", "LOSS"):
+            continue
         strategy_key = str(trade.get("entry_strategy") or "UNKNOWN").strip().upper() or "UNKNOWN"
         if strategy_key not in strategy_perf_stats:
             strategy_perf_stats[strategy_key] = {
@@ -1451,7 +1459,6 @@ def generate_report(log_path, output_dir, env_path=None, run_id=None, run_sequen
             }
         row = strategy_perf_stats[strategy_key]
         row["trades"] += 1
-        result = str(trade.get("result") or "").strip().upper()
         if result == "WIN":
             row["wins"] += 1
         elif result == "LOSS":

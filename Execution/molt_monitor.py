@@ -45,6 +45,14 @@ RE_PNL_LINE = re.compile(
     r"PnL: (?P<pnl>[-+]?\d+\.\d+) USDT \((?P<pnl_pct>[-+]?\d+\.\d+)%\) \| Equity: (?P<equity>\d+\.\d+) USDT \| Session: (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\)"
 )
 RE_ZSCORE_LINE = re.compile(r"Z-Score: (?P<zscore>[-+]?\d+\.\d+)")
+RE_STATUS_LINE = re.compile(
+    r"STATUS: Uptime: (?P<uptime>.*?) \| Time in pair: (?P<time>[-+]?\d+(?:\.\d+)?) min "
+    r"\| Signals seen: (?P<signals>\d+) \| Trades: (?P<trades>\d+) "
+    r"\| PnL: (?P<pnl>[-+]?\d+\.\d+) USDT \((?P<pnl_pct>[-+]?\d+\.\d+)%\) "
+    r"\| Equity: (?P<equity>[-+]?\d+\.\d+) USDT "
+    r"\| Session: (?P<session>[-+]?\d+\.\d+) USDT \((?P<session_pct>[-+]?\d+\.\d+)%\) "
+    r"\| Z-Score: (?P<zscore>[-+]?\d+\.\d+|n/a)"
+)
 RE_OKX_API_ERROR = re.compile(
     r"OKX API error for (?P<inst>[^:]+): code=(?P<code>[^,]+), msg=(?P<msg>.+)$"
 )
@@ -84,6 +92,22 @@ def _update_state(state, parsed):
         state["avail_eq"] = match.group("avail_eq")
         state["td_mode"] = match.group("td_mode")
         state["pos_mode"] = match.group("pos_mode")
+
+    match = RE_STATUS_LINE.search(clean_msg)
+    if match:
+        state["uptime"] = match.group("uptime")
+        state["time_in_pair"] = match.group("time")
+        state["signals"] = match.group("signals")
+        state["trades"] = match.group("trades")
+        state["pnl"] = match.group("pnl")
+        state["pnl_pct"] = match.group("pnl_pct")
+        state["equity"] = match.group("equity")
+        state["session"] = match.group("session")
+        state["session_pct"] = match.group("session_pct")
+        zscore = match.group("zscore")
+        if zscore != "n/a":
+            state["zscore"] = zscore
+        return
 
     match = RE_UPTIME.search(clean_msg)
     if match:

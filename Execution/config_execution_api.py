@@ -332,7 +332,7 @@ MAX_CONSECUTIVE_LOSSES = _env_int("STATBOT_MAX_CONSECUTIVE_LOSSES", MAX_CONSECUT
 
 # PAIR HEALTH & MONITORING (conintegration_pair_switching.txt recommendations)
 HEALTH_CHECK_INTERVAL = 3600  # Check health every 1 hour (3600 seconds)
-STATUS_UPDATE_INTERVAL = 60   # Trading status update every 1 minute (60 seconds)
+STATUS_UPDATE_INTERVAL = 300  # Trading status update every 5 minutes (300 seconds)
 P_VALUE_CRITICAL = 0.15        # More realistic statistical threshold for switching
 ZERO_CROSSINGS_MIN = 15       # Minimum zero crossings to consider a pair healthy
 CORRELATION_MIN = 0.60        # Minimum price correlation

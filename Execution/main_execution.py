@@ -278,8 +278,26 @@ STRATEGY_STARTUP_RETRY_SECONDS = _env_int(
 STRATEGY_STARTUP_MAX_ATTEMPTS = _env_int("STATBOT_STRATEGY_STARTUP_MAX_ATTEMPTS", 0, minimum=0)
 _PNL_LOG_INTERVAL_SECONDS = 60
 _PNL_LOG_DELTA_THRESHOLD = 0.5
+ROUTER_STATUS_LOG_INTERVAL_SECONDS = _env_int("STATBOT_ROUTER_STATUS_LOG_INTERVAL_SECONDS", 300, minimum=10)
+PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS = _env_int(
+    "STATBOT_PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS",
+    300,
+    minimum=10,
+)
+PAIR_SWITCH_SCAN_SUMMARY_LOG_INTERVAL_SECONDS = _env_int(
+    "STATBOT_PAIR_SWITCH_SCAN_SUMMARY_LOG_INTERVAL_SECONDS",
+    300,
+    minimum=10,
+)
+PAIR_SUPPLY_PROGRESS_LOG_INTERVAL_SECONDS = _env_int(
+    "STATBOT_PAIR_SUPPLY_PROGRESS_LOG_INTERVAL_SECONDS",
+    60,
+    minimum=1,
+)
+PAIR_SUPPLY_PROGRESS_MIN_DELTA_PCT = _env_int("STATBOT_PAIR_SUPPLY_PROGRESS_MIN_DELTA_PCT", 10, minimum=1)
 _LAST_PNL_LOG_TS = 0.0
 _LAST_PNL_LOG_VAL = None
+_LOG_THROTTLE_STATE = {}
 _PNL_ALERT_USDT = None
 _PNL_ALERT_PCT = None
 _PNL_ALERT_INTERVAL_SECONDS = None
@@ -312,6 +330,26 @@ PAIR_SUPPLY_LOG_FILE = Path(__file__).resolve().parent.parent / "Logs" / "v1" / 
 MANUAL_PAIR_SWITCH_FILE = Path(__file__).resolve().parent / "state" / "manual_pair_switch.json"
 PAIR_SUPPLY_STATUS_FILE = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs_status.json"
 PAIR_CURATOR_REPORT_FILE = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "pair_universe_curator.json"
+
+
+def _should_log_state_change(key, signature, interval_seconds, now=None):
+    now = time.time() if now is None else now
+    state = _LOG_THROTTLE_STATE.get(key)
+    if (
+        not state
+        or state.get("signature") != signature
+        or (now - float(state.get("ts") or 0.0)) >= interval_seconds
+    ):
+        _LOG_THROTTLE_STATE[key] = {"signature": signature, "ts": now}
+        return True
+    return False
+
+
+def _log_state_change_or_interval(key, signature, interval_seconds, log_method, message, *args):
+    if _should_log_state_change(key, signature, interval_seconds):
+        log_method(message, *args)
+    else:
+        logger.debug(message, *args)
 
 
 def _should_log_pnl(total_pnl):
@@ -507,6 +545,76 @@ def _get_recon_unexplained_warn_threshold_usdt(recon_basis):
 
 def _get_recon_unexplained_warn_threshold_pct():
     return max(_env_float("STATBOT_RECON_UNEXPLAINED_WARN_PCT", 50.0), 0.0)
+
+
+def _float_or_none(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_trade_close_result(
+    *,
+    entry_equity,
+    post_close_equity,
+    pre_close_equity_change,
+    starting_equity,
+    position_pnl,
+):
+    entry_equity = _float_or_none(entry_equity)
+    post_close_equity = _float_or_none(post_close_equity)
+    pre_close_equity_change = _float_or_none(pre_close_equity_change)
+    starting_equity = _float_or_none(starting_equity)
+    position_pnl = _float_or_none(position_pnl)
+
+    if entry_equity is not None and post_close_equity is not None:
+        pnl = post_close_equity - entry_equity
+        return {
+            "pnl": pnl,
+            "basis": "entry_to_post_close_equity",
+            "verified": True,
+            "record_history": True,
+            "label": "WIN" if pnl > 0 else "LOSS",
+        }
+
+    if pre_close_equity_change is not None:
+        pnl = pre_close_equity_change
+        return {
+            "pnl": pnl,
+            "basis": "entry_to_pre_close_equity",
+            "verified": False,
+            "record_history": True,
+            "label": "WIN" if pnl > 0 else "LOSS",
+        }
+
+    if post_close_equity is not None and starting_equity is not None and starting_equity > 0:
+        return {
+            "pnl": post_close_equity - starting_equity,
+            "basis": "session_equity_delta_unverified",
+            "verified": False,
+            "record_history": False,
+            "label": "UNVERIFIED",
+        }
+
+    if position_pnl is not None:
+        return {
+            "pnl": position_pnl,
+            "basis": "position_pnl_unverified",
+            "verified": False,
+            "record_history": False,
+            "label": "UNVERIFIED",
+        }
+
+    return {
+        "pnl": 0.0,
+        "basis": "missing_pnl_unverified",
+        "verified": False,
+        "record_history": False,
+        "label": "UNVERIFIED",
+    }
 
 
 def _get_regime_eval_seconds():
@@ -1297,13 +1405,34 @@ def _wait_for_pair_supply_scan(status, context):
         context,
     )
     last_line = ""
+    last_phase = ""
+    last_bucket = None
+    last_log_ts = 0.0
     while _should_defer_to_pair_supply():
         status = _get_pair_supply_runtime_status()
         progress = _read_pair_supply_scan_progress(status, watch_started_at=watched_start)
         line = _render_pair_supply_progress(progress)
-        if line != last_line:
+        now = time.time()
+        total = int(progress.get("total") or 0)
+        current = int(progress.get("current") or 0)
+        phase = str(progress.get("phase") or "")
+        bucket = None
+        if total > 0:
+            percent = int((max(0, min(current, total)) / total) * 100)
+            bucket = (percent // PAIR_SUPPLY_PROGRESS_MIN_DELTA_PCT) * PAIR_SUPPLY_PROGRESS_MIN_DELTA_PCT
+        should_log = (
+            phase != last_phase
+            or bucket != last_bucket
+            or (now - last_log_ts) >= PAIR_SUPPLY_PROGRESS_LOG_INTERVAL_SECONDS
+        )
+        if should_log:
             logger.info(line)
             last_line = line
+            last_phase = phase
+            last_bucket = bucket
+            last_log_ts = now
+        elif line != last_line:
+            logger.debug(line)
         if progress.get("watched_completed") or (progress.get("known") and not progress.get("active")):
             complete_line = _render_pair_supply_progress({**progress, "active": False, "phase": "scan complete"})
             if complete_line != last_line:
@@ -1812,7 +1941,17 @@ def _wait_for_pair_supply(context, csv_path=None):
         return False
     wait_context, readiness_detail = _pair_supply_wait_context(status, context, csv_path=csv_path)
     state_text = "running" if status.get("running") else "requested"
-    logger.warning(
+    _log_state_change_or_interval(
+        "pair_supply_wait",
+        (
+            state_text,
+            status.get("pid") or "unknown",
+            int(bool(status.get("desired_running"))),
+            wait_context,
+            readiness_detail or "",
+        ),
+        PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS,
+        logger.warning,
         "Pair supply is %s (pid=%s desired=%s detail=%s); waiting for supplied Pair Universe instead of running Strategy refresh (%s).",
         state_text,
         status.get("pid") or "unknown",
@@ -1821,7 +1960,14 @@ def _wait_for_pair_supply(context, csv_path=None):
         wait_context,
     )
     if readiness_detail:
-        logger.info("Pair Universe handoff is waiting on Pair Doctor: %s.", readiness_detail)
+        _log_state_change_or_interval(
+            "pair_supply_handoff_curator",
+            (wait_context, readiness_detail),
+            PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS,
+            logger.info,
+            "Pair Universe handoff is waiting on Pair Doctor: %s.",
+            readiness_detail,
+        )
     _wait_for_pair_supply_scan(status, wait_context)
     _wait_for_pair_curator_ready(status, wait_context, csv_path=csv_path)
     return True
@@ -1982,11 +2128,16 @@ def _maybe_switch_pruned_active_pair(csv_path, is_manage_new_trades, account_fla
         blockers.append("lock_on_pair is enabled")
 
     if blockers:
-        logger.warning(
+        blockers_text = "; ".join(blockers)
+        _log_state_change_or_interval(
+            "active_pair_doctor_deferred",
+            (ticker_1, ticker_2, tuple(blockers), detail),
+            PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS,
+            logger.warning,
             "Active pair %s/%s is no longer Pair Doctor eligible, but switch is deferred: %s (%s).",
             ticker_1,
             ticker_2,
-            "; ".join(blockers),
+            blockers_text,
             detail,
         )
         _emit_pair_switch_blocked(switch_reason, blockers, health_score=0)
@@ -2005,7 +2156,11 @@ def _maybe_switch_pruned_active_pair(csv_path, is_manage_new_trades, account_fla
 def _run_strategy_refresh():
     if _should_defer_to_pair_supply():
         status = _get_pair_supply_runtime_status()
-        logger.warning(
+        _log_state_change_or_interval(
+            "pair_supply_refresh_deferred",
+            (status.get("pid") or "unknown", int(bool(status.get("desired_running")))),
+            PAIR_DOCTOR_DEFERRED_LOG_INTERVAL_SECONDS,
+            logger.warning,
             "Pair supply is active/requested (pid=%s desired=%s detail=%s); skipping local Strategy refresh and waiting for supplied pairs.",
             status.get("pid") or "unknown",
             int(bool(status.get("desired_running"))),
@@ -2384,7 +2539,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         if not csv_path.exists():
             logger.error("Cannot switch pair: CSV not found at %s", csv_path)
             return []
-        logger.info("Reading pairs from %s...", csv_path)
+        logger.debug("Reading pairs from %s...", csv_path)
         df = pd.read_csv(csv_path)
         if df.empty:
             logger.error("Cannot switch pair: CSV is empty")
@@ -2393,7 +2548,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         # Get current pair from config
         curr_t1 = ticker_1
         curr_t2 = ticker_2
-        logger.info("Current pair: %s/%s", curr_t1, curr_t2)
+        logger.debug("Current pair: %s/%s", curr_t1, curr_t2)
 
         # Ensure we have the necessary columns
         if "sym_1" not in df.columns or "sym_2" not in df.columns:
@@ -2409,6 +2564,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             )
 
         pairs = []
+        skipped_curator = 0
         for _, row in df.iterrows():
             sym_1 = row.get("sym_1")
             sym_2 = row.get("sym_2")
@@ -2418,9 +2574,10 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
 
             curator_row = curator_index.get(pair_key) if pair_key else None
             if require_curator_health and not _curator_pair_is_switch_eligible(curator_row):
+                skipped_curator += 1
                 status = str((curator_row or {}).get("status") or "missing")
                 recommendation = str((curator_row or {}).get("recommendation") or "missing")
-                logger.info(
+                logger.debug(
                     "Skipping pair %s/%s: curator status not eligible for switch "
                     "(status=%s recommendation=%s; require healthy/promote).",
                     sym_1,
@@ -2475,7 +2632,17 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
                     "curator_score": (curator_row or {}).get("score"),
                 }
             )
-        logger.info("Found %d pairs in CSV.", len(pairs))
+        _log_state_change_or_interval(
+            "switch_pair_csv_summary",
+            (str(csv_path), len(pairs), skipped_curator, int(bool(require_curator_health))),
+            PAIR_SWITCH_SCAN_SUMMARY_LOG_INTERVAL_SECONDS,
+            logger.info,
+            "Pair switch CSV summary: path=%s eligible_pairs=%d skipped_curator=%d require_curator_health=%d",
+            csv_path,
+            len(pairs),
+            skipped_curator,
+            int(bool(require_curator_health)),
+        )
         return pairs
 
     def _find_next_pair(pairs):
@@ -3503,7 +3670,19 @@ if __name__ == "__main__":
 
                         reasons_joined = "|".join(decision.reason_codes) if decision.reason_codes else "none"
                         diagnostics = decision.diagnostics or {}
-                        logger.info(
+                        regime_status_signature = (
+                            decision.mode,
+                            decision.regime,
+                            decision.candidate_regime,
+                            reasons_joined,
+                            int(metrics.get("coint_flag", 0)),
+                            1 if fallback_active else 0,
+                        )
+                        _log_state_change_or_interval(
+                            "regime_status",
+                            regime_status_signature,
+                            ROUTER_STATUS_LOG_INTERVAL_SECONDS,
+                            logger.info,
                             "REGIME_STATUS: mode=%s regime=%s candidate=%s conf=%.2f trend=%.3f vol_pct=%.2f depth=%.2f coint=%d fallback=%d reasons=%s",
                             decision.mode,
                             decision.regime,
@@ -3526,7 +3705,19 @@ if __name__ == "__main__":
                                 reasons_joined,
                             )
 
-                        logger.info(
+                        regime_policy_signature = (
+                            decision.regime,
+                            round(float(decision.entry_z), 2),
+                            round(float(decision.entry_z_max), 2),
+                            int(decision.min_persist_bars),
+                            round(float(decision.min_liquidity_ratio), 2),
+                            round(float(decision.size_multiplier), 2),
+                        )
+                        _log_state_change_or_interval(
+                            "regime_policy",
+                            regime_policy_signature,
+                            ROUTER_STATUS_LOG_INTERVAL_SECONDS,
+                            logger.info,
                             "REGIME_POLICY: regime=%s entry_z=%.2f entry_z_max=%.2f min_persist=%d min_liq=%.2f size_mult=%.2f",
                             decision.regime,
                             decision.entry_z,
@@ -3606,7 +3797,20 @@ if __name__ == "__main__":
                             else "none"
                         )
                         strategy_diag = strategy_decision.diagnostics or {}
-                        logger.info(
+                        strategy_status_signature = (
+                            strategy_decision.mode,
+                            strategy_decision.active_strategy,
+                            strategy_decision.desired_strategy,
+                            strategy_decision.pending_strategy or "none",
+                            1 if strategy_decision.allow_new_entries else 0,
+                            int(metrics.get("coint_flag", 0)),
+                            strategy_reasons,
+                        )
+                        _log_state_change_or_interval(
+                            "strategy_status",
+                            strategy_status_signature,
+                            ROUTER_STATUS_LOG_INTERVAL_SECONDS,
+                            logger.info,
                             "STRATEGY_STATUS: mode=%s active=%s desired=%s pending=%s pending_count=%d allow_new=%d coint=%d hold=%.0fs reasons=%s",
                             strategy_decision.mode,
                             strategy_decision.active_strategy,
@@ -3918,24 +4122,26 @@ if __name__ == "__main__":
             prev_equity_usdt = equity_usdt
             prev_total_pnl = total_pnl
 
-            # Trading Status Update every minute
+            # Compact status heartbeat at the configured interval.
             if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:
                 time_in_pair_min = (current_time - pair_start_time) / 60
                 uptime = _format_uptime(current_time - bot_start_time)
-                logger.info("--- Trading Status Update ---")
-                logger.info(f"Uptime: {uptime}")
-                logger.info(f"Time in pair: {time_in_pair_min:.1f} min")
-                logger.info(f"Signals seen: {signals_seen} | Trades: {trades_executed}")
+                zscore_text = f"{latest_zscore:+.2f}" if latest_zscore is not None else "n/a"
                 logger.info(
-                    "PnL: %+0.2f USDT (%+0.2f%%) | Equity: %.2f USDT | Session: %+0.2f USDT (%+0.2f%%)",
+                    "STATUS: Uptime: %s | Time in pair: %.1f min | Signals seen: %d | Trades: %d | "
+                    "PnL: %+0.2f USDT (%+0.2f%%) | Equity: %.2f USDT | Session: %+0.2f USDT (%+0.2f%%) | "
+                    "Z-Score: %s",
+                    uptime,
+                    time_in_pair_min,
+                    signals_seen,
+                    trades_executed,
                     total_pnl,
                     pnl_pct,
                     equity_usdt,
                     session_pnl,
                     session_pnl_pct,
+                    zscore_text,
                 )
-                if latest_zscore is not None:
-                    logger.info("Z-Score: %+0.2f", latest_zscore)
                 print(_green(f"Uptime: {uptime}"))
                 last_status_update = current_time
             # Check session-wide drawdown (not just current pair)
@@ -4362,11 +4568,21 @@ if __name__ == "__main__":
                     except Exception as fee_exc:
                         logger.debug("Fee snapshot after close unavailable: %s", fee_exc)
 
-                # Realized trade PnL: prefer post-close equity delta vs entry equity.
-                if entry_equity is not None and post_equity_usdt is not None:
-                    actual_pnl = post_equity_usdt - entry_equity
-                elif pre_close_equity_change is not None:
-                    actual_pnl = pre_close_equity_change
+                # Realized trade PnL: prefer equity-grounded results and quarantine restart fallbacks.
+                close_result_metrics = _select_trade_close_result(
+                    entry_equity=entry_equity,
+                    post_close_equity=post_equity_usdt,
+                    pre_close_equity_change=pre_close_equity_change,
+                    starting_equity=starting_equity,
+                    position_pnl=total_pnl,
+                )
+                actual_pnl = close_result_metrics["pnl"]
+                trade_result_basis = close_result_metrics["basis"]
+                trade_result_verified = bool(close_result_metrics["verified"])
+                record_trade_history = bool(close_result_metrics["record_history"])
+                result_label = close_result_metrics["label"]
+
+                if trade_result_basis == "entry_to_pre_close_equity":
                     logger.warning(
                         "Post-close equity unavailable; using pre-close equity delta for trade result."
                     )
@@ -4383,20 +4599,56 @@ if __name__ == "__main__":
                         severity="warn",
                         logger=logger,
                     )
-                else:
-                    actual_pnl = total_pnl
+                elif trade_result_basis == "session_equity_delta_unverified":
+                    position_pnl_text = "n/a"
+                    position_pnl_val = _float_or_none(total_pnl)
+                    if position_pnl_val is not None:
+                        position_pnl_text = f"{position_pnl_val:.2f}"
                     logger.warning(
-                        "Entry/post-close equity unavailable; falling back to pair PnL for trade result."
+                        "Entry equity unavailable; using session equity delta for unverified close result "
+                        "(position_pnl=%s session_delta=%.2f). Skipping win-rate history update.",
+                        position_pnl_text,
+                        actual_pnl,
+                    )
+                    emit_event(
+                        "data_quality_warning",
+                        payload={
+                            "warning_type": "trade_result_unverified_session_equity_delta",
+                            "message": (
+                                "Entry equity unavailable; using session equity delta and skipping "
+                                "performance history"
+                            ),
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "strategy": entry_strategy,
+                            "regime": entry_regime,
+                            "position_pnl": total_pnl,
+                            "session_equity_delta": actual_pnl,
+                            "starting_equity": starting_equity,
+                            "post_close_equity": post_equity_usdt,
+                        },
+                        severity="warn",
+                        logger=logger,
+                    )
+                elif not record_trade_history:
+                    logger.warning(
+                        "Entry/post-close equity unavailable; close result is unverified "
+                        "(basis=%s, pnl=%.2f). Skipping win-rate history update.",
+                        trade_result_basis,
+                        actual_pnl,
                     )
                     emit_event(
                         "data_quality_warning",
                         payload={
                             "warning_type": "trade_result_fallback_pair_pnl",
-                            "message": "Entry/post-close equity unavailable; using pair PnL fallback",
+                            "message": (
+                                "Entry/post-close equity unavailable; using unverified fallback and "
+                                "skipping performance history"
+                            ),
                             "pair": f"{ticker_1}/{ticker_2}",
                             "strategy": entry_strategy,
                             "regime": entry_regime,
                             "pair_pnl": total_pnl,
+                            "basis": trade_result_basis,
                         },
                         severity="warn",
                         logger=logger,
@@ -4527,6 +4779,9 @@ if __name__ == "__main__":
                             "funding": reconciliation["funding"],
                             "unexplained": reconciliation["unexplained"],
                             "basis": recon_basis,
+                            "result_basis": trade_result_basis,
+                            "result_verified": trade_result_verified,
+                            "history_recorded": record_trade_history,
                             "delta_warn_threshold": recon_delta_warn_threshold,
                             "unexplained_warn_threshold": recon_unexplained_warn_threshold,
                             "unexplained_pct_warn_threshold": recon_unexplained_pct_warn_threshold,
@@ -4558,32 +4813,39 @@ if __name__ == "__main__":
                             logger=logger,
                         )
 
-                is_win = actual_pnl > 0
-                result_label = "WIN" if is_win else "LOSS"
                 exit_reason = switch_reason_after_close or "normal"
-                record_trade_result(is_win)
-                try:
-                    strategy_perf = record_strategy_trade_result(
-                        entry_strategy,
+                if record_trade_history:
+                    is_win = actual_pnl > 0
+                    record_trade_result(is_win)
+                    try:
+                        strategy_perf = record_strategy_trade_result(
+                            entry_strategy,
+                            actual_pnl,
+                            regime_name=entry_regime,
+                            hold_minutes=hold_minutes,
+                            exit_reason=exit_reason,
+                        )
+                        logger.info(
+                            "STRATEGY_PERF_UPDATE: strategy=%s trades=%d rolling=%d rolling_pnl=%.2f rolling_win_rate=%s",
+                            entry_strategy,
+                            int(strategy_perf.get("trades_total", 0) or 0),
+                            int(strategy_perf.get("rolling_count", 0) or 0),
+                            float(strategy_perf.get("rolling_pnl_usdt", 0.0) or 0.0),
+                            (
+                                f"{float(strategy_perf.get('rolling_win_rate_pct')):.2f}%"
+                                if strategy_perf.get("rolling_win_rate_pct") is not None
+                                else "n/a"
+                            ),
+                        )
+                    except Exception as strategy_state_exc:
+                        logger.warning("Failed to persist strategy performance state: %s", strategy_state_exc)
+                else:
+                    logger.warning(
+                        "Trade result unverified; skipped global, strategy, and pair win-rate history "
+                        "(basis=%s pnl=%.2f).",
+                        trade_result_basis,
                         actual_pnl,
-                        regime_name=entry_regime,
-                        hold_minutes=hold_minutes,
-                        exit_reason=exit_reason,
                     )
-                    logger.info(
-                        "STRATEGY_PERF_UPDATE: strategy=%s trades=%d rolling=%d rolling_pnl=%.2f rolling_win_rate=%s",
-                        entry_strategy,
-                        int(strategy_perf.get("trades_total", 0) or 0),
-                        int(strategy_perf.get("rolling_count", 0) or 0),
-                        float(strategy_perf.get("rolling_pnl_usdt", 0.0) or 0.0),
-                        (
-                            f"{float(strategy_perf.get('rolling_win_rate_pct')):.2f}%"
-                            if strategy_perf.get("rolling_win_rate_pct") is not None
-                            else "n/a"
-                        ),
-                    )
-                except Exception as strategy_state_exc:
-                    logger.warning("Failed to persist strategy performance state: %s", strategy_state_exc)
 
                 # Log funding fees from reconciliation
                 funding_fees = reconciliation.get("funding", 0.0) if reconciliation else 0.0
@@ -4592,15 +4854,25 @@ if __name__ == "__main__":
 
                 hold_label = f"{hold_minutes:.2f}" if hold_minutes is not None else "n/a"
                 logger.info(
-                    "STRATEGY_TRADE_CLOSE: strategy=%s regime=%s result=%s pnl=%.2f hold_min=%s exit_reason=%s",
+                    "STRATEGY_TRADE_CLOSE: strategy=%s regime=%s result=%s pnl=%.2f hold_min=%s exit_reason=%s basis=%s history_recorded=%d",
                     entry_strategy,
                     entry_regime,
                     result_label,
                     actual_pnl,
                     hold_label,
                     exit_reason,
+                    trade_result_basis,
+                    1 if record_trade_history else 0,
                 )
-                logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
+                if record_trade_history:
+                    logger.info(f"Trade result recorded: {result_label} (PNL: {actual_pnl:.2f} USDT)")
+                else:
+                    logger.warning(
+                        "Trade result not recorded in win-rate history: result=%s pnl=%.2f basis=%s",
+                        result_label,
+                        actual_pnl,
+                        trade_result_basis,
+                    )
 
                 # Use realized post-close metrics for alert output.
                 alert_pnl = actual_pnl
@@ -4615,9 +4887,9 @@ if __name__ == "__main__":
                     alert_session_pnl = alert_equity - starting_equity
                     alert_session_pnl_pct = (alert_session_pnl / starting_equity) * 100
 
-                # Update pair history with realized PnL.
+                # Update pair history only when the trade result is tied to entry equity context.
                 history_pnl = actual_pnl
-                if record_pair_trade_result(ticker_1, ticker_2, history_pnl):
+                if record_trade_history and record_pair_trade_result(ticker_1, ticker_2, history_pnl):
                     stats = get_pair_history_stats(ticker_1, ticker_2)
                     if stats:
                         logger.info(
@@ -4652,7 +4924,7 @@ if __name__ == "__main__":
                             )
 
                 logger.warning(
-                    "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%) | Strategy %s | Regime %s",
+                    "!!! PNL_ALERT !!! Trade closed %s | PnL %+0.2f USDT (%+0.2f%%) | Equity %.2f USDT | Session %+0.2f USDT (%+0.2f%%) | Strategy %s | Regime %s | Basis %s | History %s",
                     result_label,
                     alert_pnl,
                     alert_pnl_pct,
@@ -4661,13 +4933,20 @@ if __name__ == "__main__":
                     alert_session_pnl_pct,
                     entry_strategy,
                     entry_regime,
+                    trade_result_basis,
+                    "recorded" if record_trade_history else "skipped",
                 )
                 emit_event(
                     "trade_close",
                     payload={
                         "pair": f"{ticker_1}/{ticker_2}",
+                        "result": result_label,
                         "pnl_usdt": alert_pnl,
                         "pnl_pct": alert_pnl_pct,
+                        "result_basis": trade_result_basis,
+                        "result_verified": trade_result_verified,
+                        "history_recorded": record_trade_history,
+                        "position_pnl_fallback_usdt": total_pnl if not record_trade_history else None,
                         "strategy": entry_strategy,
                         "regime": entry_regime,
                         "entry_strategy": entry_strategy,
@@ -4684,7 +4963,7 @@ if __name__ == "__main__":
                         "session_pnl_usdt": alert_session_pnl,
                         "session_pnl_pct": alert_session_pnl_pct,
                     },
-                    severity="info" if alert_pnl >= 0 else "warn",
+                    severity="info" if record_trade_history and alert_pnl >= 0 else "warn",
                     logger=logger,
                 )
 

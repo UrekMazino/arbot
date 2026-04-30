@@ -34,6 +34,10 @@ def _env_float(name, default):
         return default
 
 
+def _get_liquidity_ratio_cap():
+    return max(_env_float("STATBOT_LIQUIDITY_RATIO_CAP", 5.0), 0.0)
+
+
 def _clip(value, low, high):
     if value < low:
         return low
@@ -472,10 +476,13 @@ class RegimeRouter:
         except (TypeError, ValueError):
             base_liq_ratio = 0.0
 
-        liq_ratio_cap = 3.0
+        liq_ratio_cap = _get_liquidity_ratio_cap()
 
         def _capped_min_ratio(floor_ratio):
-            return min(max(base_liq_ratio, floor_ratio), liq_ratio_cap)
+            ratio = max(base_liq_ratio, floor_ratio)
+            if liq_ratio_cap > 0:
+                ratio = min(ratio, liq_ratio_cap)
+            return ratio
 
         if regime == "TREND":
             return {
@@ -564,7 +571,11 @@ def resolve_regime_policy_overrides(mode, decision):
 
     min_liq = _safe_float(_decision_get(decision, "min_liquidity_ratio", None), None)
     if min_liq is not None:
-        overrides["min_liquidity_ratio"] = min(max(min_liq, 0.0), 3.0)
+        min_liq = max(min_liq, 0.0)
+        liq_ratio_cap = _get_liquidity_ratio_cap()
+        if liq_ratio_cap > 0:
+            min_liq = min(min_liq, liq_ratio_cap)
+        overrides["min_liquidity_ratio"] = min_liq
 
     size_mult = _safe_float(_decision_get(decision, "size_multiplier", None), None)
     if size_mult is not None:

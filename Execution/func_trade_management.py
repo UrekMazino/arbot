@@ -66,7 +66,7 @@ Z_STALL_LATE_STRICT_MINUTES = 120
 Z_STALL_TRIGGER_ABS = 1.5
 Z_STALL_WARN_ABS = 1.0
 DEFAULT_LIQUIDITY_RATIO_STEPS = [3.0, 2.5, 2.0, 1.5, 1.0]
-LIQUIDITY_RATIO_CAP = 3.0
+DEFAULT_LIQUIDITY_RATIO_CAP = 5.0
 HYBRID_EXIT_PROFIT_USDT = 10.0
 HYBRID_EXIT_HARD_STOP_PNL_PCT = -5.0
 HYBRID_EXIT_COINT_GRACE_SECONDS = 300
@@ -126,6 +126,13 @@ def _env_float(name, default=None):
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _get_liquidity_ratio_cap():
+    cap = _env_float("STATBOT_LIQUIDITY_RATIO_CAP", DEFAULT_LIQUIDITY_RATIO_CAP)
+    if cap is None:
+        cap = DEFAULT_LIQUIDITY_RATIO_CAP
+    return max(float(cap), 0.0)
 
 
 def _env_int(name, default=None):
@@ -2193,13 +2200,14 @@ def manage_new_trades(
             min_liquidity_ratio = 0.0
         if effective_min_liquidity_ratio is not None:
             min_liquidity_ratio = max(min_liquidity_ratio, effective_min_liquidity_ratio)
-        if min_liquidity_ratio > LIQUIDITY_RATIO_CAP:
+        liquidity_ratio_cap = _get_liquidity_ratio_cap()
+        if liquidity_ratio_cap > 0 and min_liquidity_ratio > liquidity_ratio_cap:
             logger.info(
                 "Liquidity ratio capped: requested=%.2fx cap=%.2fx",
                 min_liquidity_ratio,
-                LIQUIDITY_RATIO_CAP,
+                liquidity_ratio_cap,
             )
-            min_liquidity_ratio = LIQUIDITY_RATIO_CAP
+            min_liquidity_ratio = liquidity_ratio_cap
 
         def _liq_ratio(liquidity_usdt, target_usdt):
             if target_usdt <= 0:

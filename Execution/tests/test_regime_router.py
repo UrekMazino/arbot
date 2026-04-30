@@ -238,6 +238,50 @@ class TestRegimeRouter(unittest.TestCase):
         self.assertEqual(active["min_liquidity_ratio"], 0.0)
         self.assertEqual(active["size_multiplier"], 0.0)
 
+    def test_policy_honors_five_x_liquidity_ratio_setting(self):
+        prev_min = os.environ.get("STATBOT_MIN_LIQUIDITY_RATIO")
+        prev_cap = os.environ.get("STATBOT_LIQUIDITY_RATIO_CAP")
+        try:
+            os.environ["STATBOT_MIN_LIQUIDITY_RATIO"] = "5.0"
+            os.environ.pop("STATBOT_LIQUIDITY_RATIO_CAP", None)
+            router = RegimeRouter(
+                state_store=_MemoryStateStore(),
+                config={"min_hold_seconds": 0, "confirm_count": 1},
+            )
+
+            policy = router._build_policy("RANGE")
+            self.assertEqual(policy["min_liquidity_ratio"], 5.0)
+
+            active = resolve_regime_policy_overrides(
+                "active",
+                {"allow_new_entries": True, "min_liquidity_ratio": 5.0},
+            )
+            self.assertEqual(active["min_liquidity_ratio"], 5.0)
+        finally:
+            if prev_min is None:
+                os.environ.pop("STATBOT_MIN_LIQUIDITY_RATIO", None)
+            else:
+                os.environ["STATBOT_MIN_LIQUIDITY_RATIO"] = prev_min
+            if prev_cap is None:
+                os.environ.pop("STATBOT_LIQUIDITY_RATIO_CAP", None)
+            else:
+                os.environ["STATBOT_LIQUIDITY_RATIO_CAP"] = prev_cap
+
+    def test_policy_liquidity_ratio_cap_is_configurable(self):
+        prev_cap = os.environ.get("STATBOT_LIQUIDITY_RATIO_CAP")
+        try:
+            os.environ["STATBOT_LIQUIDITY_RATIO_CAP"] = "6.0"
+            active = resolve_regime_policy_overrides(
+                "active",
+                {"allow_new_entries": True, "min_liquidity_ratio": 6.0},
+            )
+            self.assertEqual(active["min_liquidity_ratio"], 6.0)
+        finally:
+            if prev_cap is None:
+                os.environ.pop("STATBOT_LIQUIDITY_RATIO_CAP", None)
+            else:
+                os.environ["STATBOT_LIQUIDITY_RATIO_CAP"] = prev_cap
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -174,7 +174,7 @@ services:
       - api
     environment:
       PUBLIC_SITE_ADDRESS: ${PUBLIC_SITE_ADDRESS:-localhost}
-      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
     ports:
       - "80:80"
       - "443:443"

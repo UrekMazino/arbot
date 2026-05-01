@@ -59,6 +59,7 @@ services:
       - "8082:8080"
     volumes:
       - ../:/workspace
+      - ./runtime/Execution.env:/workspace/Execution/.env
     working_dir: /workspace/Platform/api
     command: >
       sh -c "pip install --no-cache-dir -r /workspace/Platform/api/requirements.txt &&
@@ -83,6 +84,7 @@ services:
       STATBOT_PROCESS_OWNER: bot-runner
     volumes:
       - ../:/workspace
+      - ./runtime/Execution.env:/workspace/Execution/.env
     working_dir: /workspace/Platform/api
     command: >
       sh -c "python -m app.process_runner bot"
@@ -104,6 +106,7 @@ services:
       STATBOT_PROCESS_OWNER: pair-supply-runner
     volumes:
       - ../:/workspace
+      - ./runtime/Execution.env:/workspace/Execution/.env
     working_dir: /workspace/Platform/api
     command: >
       sh -c "python -m app.process_runner pair-supply"
@@ -124,6 +127,7 @@ services:
       STATBOT_PAIR_CURATOR_INTERVAL_SECONDS: ${STATBOT_PAIR_CURATOR_INTERVAL_SECONDS:-60}
     volumes:
       - ../:/workspace
+      - ./runtime/Execution.env:/workspace/Execution/.env
     working_dir: /workspace
     command: >
       sh -c "python /workspace/Strategy/pair_universe_curator.py"
@@ -139,6 +143,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://okxbot:okxbot@postgres:5432/okxbot_v2
     volumes:
       - ../:/workspace
+      - ./runtime/Execution.env:/workspace/Execution/.env
     working_dir: /workspace/Platform/worker
     command: >
       sh -c "python worker.py"

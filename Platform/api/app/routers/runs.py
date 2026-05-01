@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..deps import get_db_session, require_permissions
 from ..models import Alert, BotConfig, EquitySnapshot, RegimeMetric, Report, ReportFile, Run, RunEvent, StrategyMetric, Trade
 from ..schemas import RunEventOut, RunOut, RunPairSegmentOut, TradeOut
+from ..services.equity_sanity import is_plausible_equity
 from ..services.run_pair_segments import list_run_pair_history_rows
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -23,6 +24,7 @@ PORTFOLIO_RANGE_WINDOWS = {
     "90d": timedelta(days=90),
 }
 PORTFOLIO_BUCKETS = {"auto", "raw", "hour", "day", "week"}
+PORTFOLIO_BASES = {"realized", "live"}
 
 
 def _coerce_float(value):
@@ -51,6 +53,13 @@ def _normalize_portfolio_bucket(value: str) -> str:
     if normalized in PORTFOLIO_BUCKETS:
         return normalized
     return "auto"
+
+
+def _normalize_portfolio_basis(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in PORTFOLIO_BASES:
+        return normalized
+    return "realized"
 
 
 def _auto_portfolio_bucket(range_key: str, points: list[dict]) -> str:
@@ -89,12 +98,19 @@ def _finish_portfolio_points(points: list[dict], *, baseline: float | None = Non
     for point in points:
         equity = point["equity"]
         drawdown_peak = _coerce_float(point.get("_drawdown_peak"))
-        peak = max(peak, equity, drawdown_peak if drawdown_peak is not None else equity)
+        bucket_max = _coerce_float(point.get("_max_equity"))
+        peak = max(
+            peak,
+            equity,
+            drawdown_peak if drawdown_peak is not None else equity,
+            bucket_max if bucket_max is not None else equity,
+        )
         pnl_usdt = equity - baseline_equity
         drawdown = equity - peak
         output.append(
             {
                 "ts": point["ts"].isoformat(),
+                "bucket_start": point["_bucket_ts"].isoformat() if point.get("_bucket_ts") else None,
                 "equity": equity,
                 "pnl_usdt": pnl_usdt,
                 "pnl_pct": (pnl_usdt / baseline_equity * 100.0) if baseline_equity else None,
@@ -107,6 +123,146 @@ def _finish_portfolio_points(points: list[dict], *, baseline: float | None = Non
             }
         )
     return output
+
+
+def _bucket_portfolio_points(raw_points: list[dict], bucket: str, max_points: int) -> list[dict]:
+    if bucket == "raw":
+        return raw_points[-max_points:] if len(raw_points) > max_points else raw_points
+
+    buckets: dict[datetime, dict] = {}
+    for point in raw_points:
+        bucket_ts = _bucket_start(point["ts"], bucket)
+        point_samples = int(point.get("samples") or 1)
+        equity = point["equity"]
+        existing = buckets.get(bucket_ts)
+        if existing is None:
+            buckets[bucket_ts] = {
+                **point,
+                "_bucket_ts": bucket_ts,
+                "_last_sample_ts": point["ts"],
+                "samples": point_samples,
+                "_min_equity": equity,
+                "_max_equity": equity,
+            }
+            continue
+
+        next_samples = int(existing.get("samples") or 0) + point_samples
+        existing["_min_equity"] = min(existing["_min_equity"], equity)
+        existing["_max_equity"] = max(existing["_max_equity"], equity)
+        if point["ts"] >= existing.get("_last_sample_ts", existing["ts"]):
+            existing.update(
+                {
+                    **point,
+                    "_bucket_ts": bucket_ts,
+                    "_last_sample_ts": point["ts"],
+                    "samples": next_samples,
+                }
+            )
+        else:
+            existing["samples"] = next_samples
+
+    chart_points = sorted(
+        buckets.values(),
+        key=lambda point: (point.get("_bucket_ts") or point["ts"], point["ts"]),
+    )
+    if len(chart_points) > max_points:
+        chart_points = chart_points[-max_points:]
+
+    running_peak = None
+    peak_by_bucket: dict[datetime, float] = {}
+    for point in raw_points:
+        equity = point["equity"]
+        running_peak = equity if running_peak is None else max(running_peak, equity)
+        peak_by_bucket[_bucket_start(point["ts"], bucket)] = running_peak
+    for point in chart_points:
+        bucket_ts = point.get("_bucket_ts") or _bucket_start(point["ts"], bucket)
+        bucket_peak = peak_by_bucket.get(bucket_ts)
+        if bucket_peak is not None:
+            point["_drawdown_peak"] = bucket_peak
+        point.pop("_last_sample_ts", None)
+
+    return chart_points
+
+
+def _build_realized_portfolio_points(
+    db: Session,
+    *,
+    since: datetime | None,
+    max_points: int,
+) -> tuple[list[dict], int]:
+    trade_rows = db.execute(
+        select(Trade, Run)
+        .join(Run, Trade.run_id == Run.id)
+        .where(Trade.exit_ts.is_not(None), Trade.pnl_usdt.is_not(None))
+        .order_by(Trade.exit_ts.asc(), Trade.id.asc())
+    ).all()
+    if not trade_rows:
+        return [], 0
+
+    baseline_run = None
+    for _trade, run in trade_rows:
+        if _coerce_float(run.start_equity) is not None and _as_utc(run.start_ts) is not None:
+            baseline_run = run
+            break
+    if baseline_run is None:
+        return [], 0
+
+    baseline_ts = _as_utc(baseline_run.start_ts)
+    baseline_equity = _coerce_float(baseline_run.start_equity)
+    if baseline_ts is None or baseline_equity is None or baseline_equity <= 0:
+        return [], 0
+
+    cumulative_pnl = 0.0
+    plotted_trades = 0
+    for trade, _run in trade_rows:
+        exit_ts = _as_utc(trade.exit_ts)
+        pnl_usdt = _coerce_float(trade.pnl_usdt)
+        if exit_ts is None or pnl_usdt is None:
+            continue
+        if since is not None and exit_ts < since:
+            cumulative_pnl += pnl_usdt
+            continue
+        break
+
+    start_ts = baseline_ts
+    if since is not None and since > baseline_ts:
+        start_ts = since
+    start_equity = baseline_equity + cumulative_pnl
+    raw_points: list[dict] = [
+        {
+            "ts": start_ts,
+            "equity": start_equity,
+            "run_id": baseline_run.id,
+            "run_key": baseline_run.run_key,
+            "source": "realized_start",
+            "samples": 1,
+        }
+    ]
+
+    running_pnl = cumulative_pnl
+    for trade, run in trade_rows:
+        exit_ts = _as_utc(trade.exit_ts)
+        pnl_usdt = _coerce_float(trade.pnl_usdt)
+        if exit_ts is None or pnl_usdt is None:
+            continue
+        if since is not None and exit_ts < since:
+            continue
+        running_pnl += pnl_usdt
+        plotted_trades += 1
+        raw_points.append(
+            {
+                "ts": exit_ts,
+                "equity": baseline_equity + running_pnl,
+                "run_id": run.id,
+                "run_key": run.run_key,
+                "source": "trade_close",
+                "samples": 1,
+            }
+        )
+
+    if len(raw_points) > max_points:
+        raw_points = raw_points[-max_points:]
+    return raw_points, plotted_trades
 
 
 def _status_rank(status_text: str) -> int:
@@ -357,18 +513,77 @@ def performance_history(
 def portfolio_equity_curve(
     range_key: str = Query(default="7d", alias="range"),
     bucket_key: str = Query(default="auto", alias="bucket"),
+    basis_key: str = Query(default="realized", alias="basis"),
     max_points: int = Query(default=2000, ge=100, le=10000),
     _: object = Depends(require_permissions("view_portfolio")),
     db: Session = Depends(get_db_session),
 ):
     normalized_range = _normalize_portfolio_range(range_key)
     requested_bucket = _normalize_portfolio_bucket(bucket_key)
+    basis = _normalize_portfolio_basis(basis_key)
     now = datetime.now(timezone.utc)
     since = None
     if normalized_range != "all":
         since = now - PORTFOLIO_RANGE_WINDOWS[normalized_range]
 
     raw_points: list[dict] = []
+    closed_trade_count = 0
+    if basis == "realized":
+        raw_points, closed_trade_count = _build_realized_portfolio_points(
+            db,
+            since=since,
+            max_points=max_points,
+        )
+        raw_points.sort(key=lambda point: (point["ts"], str(point.get("run_key") or ""), str(point.get("source") or "")))
+        raw_run_keys = {
+            str(point.get("run_key") or "").strip()
+            for point in raw_points
+            if str(point.get("run_key") or "").strip()
+        }
+        actual_bucket = "raw"
+        chart_points = raw_points
+        raw_finished_points = _finish_portfolio_points(raw_points)
+        raw_equities = [point["equity"] for point in raw_finished_points]
+        raw_pnl_values = [point["pnl_usdt"] for point in raw_finished_points]
+        raw_drawdowns = [point["drawdown"] for point in raw_finished_points]
+        raw_drawdown_pcts = [
+            point["drawdown_pct"]
+            for point in raw_finished_points
+            if point["drawdown_pct"] is not None
+        ]
+        start_equity = raw_equities[0] if raw_equities else None
+        end_equity = raw_equities[-1] if raw_equities else None
+        change_usdt = (end_equity - start_equity) if start_equity is not None and end_equity is not None else None
+        start_ts = raw_finished_points[0]["ts"] if raw_finished_points else None
+        end_ts = raw_finished_points[-1]["ts"] if raw_finished_points else None
+
+        return {
+            "range": normalized_range,
+            "bucket": actual_bucket,
+            "requested_bucket": requested_bucket,
+            "basis": basis,
+            "source": "realized_trades",
+            "generated_at": now.isoformat(),
+            "points": raw_finished_points,
+            "stats": {
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "start_equity": start_equity,
+                "end_equity": end_equity,
+                "change_usdt": change_usdt,
+                "change_pct": (change_usdt / start_equity * 100.0) if change_usdt is not None and start_equity else None,
+                "min_equity": min(raw_equities) if raw_equities else None,
+                "max_equity": max(raw_equities) if raw_equities else None,
+                "max_drawdown": min(raw_drawdowns) if raw_drawdowns else None,
+                "max_drawdown_pct": min(raw_drawdown_pcts) if raw_drawdown_pcts else None,
+                "point_count": len(raw_finished_points),
+                "raw_point_count": len(raw_points),
+                "run_count": len(raw_run_keys),
+                "latest_pnl_usdt": raw_pnl_values[-1] if raw_pnl_values else None,
+                "closed_trade_count": closed_trade_count,
+            },
+        }
+
     runs_stmt = select(Run)
     if since is not None:
         runs_stmt = runs_stmt.where(
@@ -381,7 +596,7 @@ def portfolio_equity_curve(
     runs_by_id = {row.id: row for row in db.execute(runs_stmt).scalars().all()}
 
     snapshot_stmt = (
-        select(EquitySnapshot, Run.run_key)
+        select(EquitySnapshot, Run.run_key, Run.start_equity)
         .join(Run, EquitySnapshot.run_id == Run.id)
         .order_by(EquitySnapshot.ts.asc(), EquitySnapshot.created_at.asc(), EquitySnapshot.id.asc())
     )
@@ -389,11 +604,19 @@ def portfolio_equity_curve(
         snapshot_stmt = snapshot_stmt.where(EquitySnapshot.ts >= since)
     equity_snapshot_rows = db.execute(snapshot_stmt).all()
     snapshot_run_ids: set[str] = set()
-    for snapshot_row, run_key in equity_snapshot_rows:
+    latest_equity_by_run: dict[str, float] = {}
+    for snapshot_row, run_key, run_start_equity in equity_snapshot_rows:
         equity = _coerce_float(snapshot_row.equity_usdt)
         ts_value = _as_utc(snapshot_row.ts)
-        if equity is None or ts_value is None:
+        if equity is None or equity <= 0 or ts_value is None:
             continue
+        if not is_plausible_equity(
+            equity,
+            reference_equity=_coerce_float(run_start_equity),
+            previous_equity=latest_equity_by_run.get(snapshot_row.run_id),
+        ):
+            continue
+        latest_equity_by_run[snapshot_row.run_id] = equity
         snapshot_run_ids.add(snapshot_row.run_id)
         raw_points.append(
             {
@@ -412,7 +635,7 @@ def portfolio_equity_curve(
                 continue
             start_ts = _as_utc(run.start_ts)
             start_equity = _coerce_float(run.start_equity)
-            if start_ts is not None and start_equity is not None and (since is None or start_ts >= since):
+            if start_ts is not None and start_equity is not None and start_equity > 0 and (since is None or start_ts >= since):
                 raw_points.append(
                     {
                         "ts": start_ts,
@@ -426,7 +649,13 @@ def portfolio_equity_curve(
 
             end_ts = _as_utc(run.end_ts)
             end_equity = _coerce_float(run.end_equity)
-            if end_ts is not None and end_equity is not None and (since is None or end_ts >= since):
+            if (
+                end_ts is not None
+                and end_equity is not None
+                and end_equity > 0
+                and is_plausible_equity(end_equity, reference_equity=start_equity)
+                and (since is None or end_ts >= since)
+            ):
                 raw_points.append(
                     {
                         "ts": end_ts,
@@ -442,7 +671,7 @@ def portfolio_equity_curve(
         for run in runs_by_id.values():
             start_ts = _as_utc(run.start_ts)
             start_equity = _coerce_float(run.start_equity)
-            if start_ts is not None and start_equity is not None and (since is None or start_ts >= since):
+            if start_ts is not None and start_equity is not None and start_equity > 0 and (since is None or start_ts >= since):
                 raw_points.append(
                     {
                         "ts": start_ts,
@@ -456,7 +685,13 @@ def portfolio_equity_curve(
 
             end_ts = _as_utc(run.end_ts)
             end_equity = _coerce_float(run.end_equity)
-            if end_ts is not None and end_equity is not None and (since is None or end_ts >= since):
+            if (
+                end_ts is not None
+                and end_equity is not None
+                and end_equity > 0
+                and is_plausible_equity(end_equity, reference_equity=start_equity)
+                and (since is None or end_ts >= since)
+            ):
                 raw_points.append(
                     {
                         "ts": end_ts,
@@ -477,12 +712,22 @@ def portfolio_equity_curve(
         if since is not None:
             heartbeat_stmt = heartbeat_stmt.where(RunEvent.ts >= since)
         heartbeat_rows = db.execute(heartbeat_stmt).all()
+        latest_event_equity_by_run: dict[str, float] = {}
         for event_row, run_key in heartbeat_rows:
             payload = event_row.payload_json if isinstance(event_row.payload_json, dict) else {}
             equity = _coerce_float(payload.get("equity_usdt"))
             ts_value = _as_utc(event_row.ts)
-            if equity is None or ts_value is None:
+            run = runs_by_id.get(event_row.run_id)
+            start_equity = _coerce_float(run.start_equity) if run is not None else None
+            if equity is None or equity <= 0 or ts_value is None:
                 continue
+            if not is_plausible_equity(
+                equity,
+                reference_equity=start_equity,
+                previous_equity=latest_event_equity_by_run.get(event_row.run_id),
+            ):
+                continue
+            latest_event_equity_by_run[event_row.run_id] = equity
             raw_points.append(
                 {
                     "ts": ts_value,
@@ -502,56 +747,31 @@ def portfolio_equity_curve(
     }
     actual_bucket = _auto_portfolio_bucket(normalized_range, raw_points) if requested_bucket == "auto" else requested_bucket
 
-    if actual_bucket == "raw":
-        chart_points = raw_points[-max_points:] if len(raw_points) > max_points else raw_points
-    else:
-        buckets: dict[datetime, dict] = {}
-        for point in raw_points:
-            bucket_ts = _bucket_start(point["ts"], actual_bucket)
-            existing = buckets.get(bucket_ts)
-            if existing is None:
-                buckets[bucket_ts] = {**point, "ts": bucket_ts, "samples": int(point.get("samples") or 1)}
-                continue
-            existing["samples"] = int(existing.get("samples") or 0) + int(point.get("samples") or 1)
-            if point["ts"] >= existing.get("_last_sample_ts", existing["ts"]):
-                existing.update({**point, "ts": bucket_ts, "samples": existing["samples"], "_last_sample_ts": point["ts"]})
-        chart_points = sorted(buckets.values(), key=lambda point: point["ts"])
-        if len(chart_points) > max_points:
-            chart_points = chart_points[-max_points:]
-        for point in chart_points:
-            point.pop("_last_sample_ts", None)
-        running_peak = None
-        peak_by_bucket: dict[datetime, float] = {}
-        for point in raw_points:
-            equity = point["equity"]
-            running_peak = equity if running_peak is None else max(running_peak, equity)
-            peak_by_bucket[_bucket_start(point["ts"], actual_bucket)] = running_peak
-        for point in chart_points:
-            bucket_peak = peak_by_bucket.get(point["ts"])
-            if bucket_peak is not None:
-                point["_drawdown_peak"] = bucket_peak
+    chart_points = _bucket_portfolio_points(raw_points, actual_bucket, max_points)
 
     raw_finished_points = _finish_portfolio_points(raw_points)
     raw_start_equity = raw_points[0]["equity"] if raw_points else None
     points = _finish_portfolio_points(chart_points, baseline=raw_start_equity)
-    raw_equities = [point["equity"] for point in raw_finished_points]
-    raw_pnl_values = [point["pnl_usdt"] for point in raw_finished_points]
-    raw_drawdowns = [point["drawdown"] for point in raw_finished_points]
-    raw_drawdown_pcts = [
+    # Compute stats from chart points to ensure consistency with displayed data
+    chart_equities = [point["equity"] for point in points]
+    chart_pnl_values = [point["pnl_usdt"] for point in points]
+    chart_drawdowns = [point["drawdown"] for point in points]
+    chart_drawdown_pcts = [
         point["drawdown_pct"]
-        for point in raw_finished_points
+        for point in points
         if point["drawdown_pct"] is not None
     ]
-    start_equity = raw_equities[0] if raw_equities else None
-    end_equity = raw_equities[-1] if raw_equities else None
+    start_equity = chart_equities[0] if chart_equities else None
+    end_equity = chart_equities[-1] if chart_equities else None
     change_usdt = (end_equity - start_equity) if start_equity is not None and end_equity is not None else None
-    start_ts = raw_finished_points[0]["ts"] if raw_finished_points else None
-    end_ts = raw_finished_points[-1]["ts"] if raw_finished_points else None
+    start_ts = points[0]["ts"] if points else None
+    end_ts = points[-1]["ts"] if points else None
 
     return {
         "range": normalized_range,
         "bucket": actual_bucket,
         "requested_bucket": requested_bucket,
+        "basis": basis,
         "source": "equity_snapshots" if equity_snapshot_rows else "event_fallback",
         "generated_at": now.isoformat(),
         "points": points,
@@ -562,14 +782,16 @@ def portfolio_equity_curve(
             "end_equity": end_equity,
             "change_usdt": change_usdt,
             "change_pct": (change_usdt / start_equity * 100.0) if change_usdt is not None and start_equity else None,
-            "min_equity": min(raw_equities) if raw_equities else None,
-            "max_equity": max(raw_equities) if raw_equities else None,
-            "max_drawdown": min(raw_drawdowns) if raw_drawdowns else None,
-            "max_drawdown_pct": min(raw_drawdown_pcts) if raw_drawdown_pcts else None,
-            "point_count": len(points),
-            "raw_point_count": len(raw_points),
-            "run_count": len(raw_run_keys),
-            "latest_pnl_usdt": raw_pnl_values[-1] if raw_pnl_values else None,
+                "min_equity": min(chart_equities) if chart_equities else None,
+                "max_equity": max(chart_equities) if chart_equities else None,
+                "max_drawdown": min(chart_drawdowns) if chart_drawdowns else None,
+                "max_drawdown_pct": min(chart_drawdown_pcts) if chart_drawdown_pcts else None,
+                "point_count": len(points),
+                "raw_point_count": len(raw_points),
+                "run_count": len(raw_run_keys),
+                "latest_pnl_usdt": chart_pnl_values[-1] if chart_pnl_values else None,
+                "closed_trade_count": closed_trade_count,
+
         },
     }
 

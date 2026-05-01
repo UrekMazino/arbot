@@ -1075,16 +1075,27 @@ def _get_available_usdt():
 
 def _get_equity_usdt():
     balance_res = _get_account_balance_safe()
+    equity = _extract_equity_from_balance_response(balance_res)
+    return equity if equity is not None else 0.0
+
+
+def _extract_equity_from_balance_response(balance_res):
     if not balance_res or balance_res.get("code") != "0":
-        return 0.0
-    details = balance_res.get("data", [{}])[0].get("details", [])
+        return None
+    data = balance_res.get("data") or []
+    if not data or not isinstance(data[0], dict):
+        return None
+    details = data[0].get("details", [])
     for det in details:
         if det.get("ccy") == "USDT":
             try:
-                return float(det.get("eq", 0))
+                equity = float(det.get("eq"))
             except (TypeError, ValueError):
-                return 0.0
-    return 0.0
+                return None
+            if math.isfinite(equity) and equity > 0:
+                return equity
+            return None
+    return None
 
 
 def _extract_usdt_balance_snapshot(balance_res):
@@ -3300,6 +3311,8 @@ if __name__ == "__main__":
     # Retry startup balance capture once if the earliest snapshot was unavailable.
     if (not balance_res or balance_res.get("code") != "0") and starting_equity <= 0:
         starting_equity, balance_res, avail_bal, avail_eq = _capture_starting_equity_snapshot()
+    last_trusted_equity_usdt = starting_equity if starting_equity > 0 else None
+    last_equity_untrusted_log_ts = 0.0
 
     # Save status
     save_status(status_dict)
@@ -3556,24 +3569,39 @@ if __name__ == "__main__":
                 acc_state, price_p, price_n
             )
 
-            # Get account equity
+            # Get account equity. Missing or invalid balance responses must not
+            # be treated as zero, otherwise transient OKX/API failures look
+            # like a full account drawdown and pollute the portfolio curve.
             try:
                 balance_res = _get_account_balance_safe()
-                equity_usdt = 0.0
-                if balance_res and balance_res.get("code") == "0":
-                    details = balance_res.get("data", [{}])[0].get("details", [])
-                    for det in details:
-                        if det.get("ccy") == "USDT":
-                            equity_usdt = float(det.get("eq", 0))
-                            break
-            except:
-                equity_usdt = 0.0
+                equity_usdt = _extract_equity_from_balance_response(balance_res)
+            except Exception as exc:
+                logger.warning("Account equity snapshot failed: %s", exc)
+                equity_usdt = None
+
+            equity_trusted = equity_usdt is not None
+            if equity_trusted:
+                last_trusted_equity_usdt = equity_usdt
+            else:
+                if current_time - last_equity_untrusted_log_ts >= 60:
+                    logger.warning(
+                        "Account equity unavailable; retaining last trusted equity for display and skipping equity-driven risk checks."
+                    )
+                    last_equity_untrusted_log_ts = current_time
+            equity_display_usdt = (
+                equity_usdt
+                if equity_trusted
+                else last_trusted_equity_usdt
+                if last_trusted_equity_usdt is not None
+                else 0.0
+            )
 
             # Calculate session P&L (realized gains/losses)
-            session_pnl = equity_usdt - starting_equity if starting_equity > 0 else 0.0
+            session_pnl = equity_display_usdt - starting_equity if starting_equity > 0 else 0.0
             session_pnl_pct = (session_pnl / starting_equity * 100) if starting_equity > 0 else 0.0
 
-            _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
+            if equity_trusted:
+                _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
             if (current_time - last_event_heartbeat_ts) >= event_heartbeat_seconds:
                 entry_time_ts = get_entry_time()
                 hold_minutes_live = None
@@ -3589,9 +3617,11 @@ if __name__ == "__main__":
                         "uptime_seconds": max(current_time - bot_start_time, 0.0),
                         "in_position": bool(in_position_or_orders),
                         "current_pair": f"{ticker_1}/{ticker_2}",
-                        "equity_usdt": equity_usdt,
-                        "session_pnl_usdt": session_pnl,
-                        "session_pnl_pct": session_pnl_pct,
+                        "equity_usdt": equity_usdt if equity_trusted else None,
+                        "equity_trusted": bool(equity_trusted),
+                        "last_trusted_equity_usdt": last_trusted_equity_usdt,
+                        "session_pnl_usdt": session_pnl if equity_trusted else None,
+                        "session_pnl_pct": session_pnl_pct if equity_trusted else None,
                         "entry_notional_usdt": get_entry_notional() if in_position_or_orders else None,
                         "entry_z": get_entry_z_score() if in_position_or_orders else None,
                         "current_z": latest_zscore,
@@ -4038,13 +4068,13 @@ if __name__ == "__main__":
                 pnl_emoji,
                 total_pnl,
                 pnl_pct,
-                equity_usdt,
+                equity_display_usdt,
                 session_emoji,
                 session_pnl,
                 session_pnl_pct,
             )
 
-            if prev_equity_usdt is not None and prev_total_pnl is not None:
+            if equity_trusted and prev_equity_usdt is not None and prev_total_pnl is not None:
                 equity_delta = equity_usdt - prev_equity_usdt
                 pair_pnl_delta = total_pnl - prev_total_pnl
                 drift = equity_delta - pair_pnl_delta
@@ -4119,8 +4149,9 @@ if __name__ == "__main__":
                         logger=logger,
                     )
 
-            prev_equity_usdt = equity_usdt
-            prev_total_pnl = total_pnl
+            if equity_trusted:
+                prev_equity_usdt = equity_usdt
+                prev_total_pnl = total_pnl
 
             # Compact status heartbeat at the configured interval.
             if current_time - last_status_update >= STATUS_UPDATE_INTERVAL:
@@ -4137,7 +4168,7 @@ if __name__ == "__main__":
                     trades_executed,
                     total_pnl,
                     pnl_pct,
-                    equity_usdt,
+                    equity_display_usdt,
                     session_pnl,
                     session_pnl_pct,
                     zscore_text,
@@ -4145,7 +4176,7 @@ if __name__ == "__main__":
                 print(_green(f"Uptime: {uptime}"))
                 last_status_update = current_time
             # Check session-wide drawdown (not just current pair)
-            if starting_equity > 0 and equity_usdt is not None:
+            if equity_trusted and starting_equity > 0 and equity_usdt is not None:
                 session_drawdown = equity_usdt - starting_equity
                 session_drawdown_pct = (session_drawdown / starting_equity) * 100
 
@@ -4346,7 +4377,7 @@ if __name__ == "__main__":
                         signals_seen += 1
                     if tr_placed:
                         trades_executed += 1
-                        if equity_usdt is not None:
+                        if equity_trusted and equity_usdt is not None:
                             set_entry_equity(equity_usdt)
                         entry_policy_snapshot = get_entry_policy_snapshot() or {}
                         entry_strategy = str(get_entry_strategy() or "").strip().upper() or (
@@ -4540,12 +4571,7 @@ if __name__ == "__main__":
                 post_equity_usdt = None
                 try:
                     balance_res = _get_account_balance_safe()
-                    if balance_res and balance_res.get("code") == "0":
-                        details = balance_res.get("data", [{}])[0].get("details", [])
-                        for det in details:
-                            if det.get("ccy") == "USDT":
-                                post_equity_usdt = float(det.get("eq", 0))
-                                break
+                    post_equity_usdt = _extract_equity_from_balance_response(balance_res)
                 except Exception:
                     post_equity_usdt = None
 

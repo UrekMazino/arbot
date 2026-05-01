@@ -13,6 +13,7 @@ from ..deps import get_db_session, get_event_ingest_principal
 from ..models import Alert, BotInstance, Run, RunEvent
 from ..realtime import publish_bot_event
 from ..services.event_materializer import materialize_run_entities_for_event
+from ..services.equity_sanity import is_plausible_equity
 from ..schemas import EventBatchIn, EventIngestResultOut
 from ..services.live_report import materialize_live_run_report
 from ..services.run_pair_segments import sync_run_pair_segments_for_event
@@ -92,12 +93,27 @@ def _apply_run_metrics_from_event(run: Run, event) -> None:
     if event.event_type == "heartbeat":
         end_equity = _coerce_float(payload.get("equity_usdt"))
         session_pnl = _coerce_float(payload.get("session_pnl_usdt"))
-        if end_equity is not None:
+        start_equity = _coerce_float(run.start_equity)
+        current_equity = _coerce_float(run.end_equity)
+        if end_equity is not None and is_plausible_equity(
+            end_equity,
+            reference_equity=start_equity,
+            previous_equity=current_equity,
+        ):
             run.end_equity = end_equity
-        if session_pnl is not None:
+        elif end_equity is not None:
+            logger.warning(
+                "Ignoring implausible heartbeat equity for run=%s: equity=%s start=%s previous=%s",
+                run.run_key or run.id,
+                end_equity,
+                start_equity,
+                current_equity,
+            )
+            end_equity = None
+
+        if session_pnl is not None and end_equity is not None:
             run.session_pnl = session_pnl
         else:
-            start_equity = _coerce_float(run.start_equity)
             if end_equity is not None and start_equity is not None:
                 run.session_pnl = round(end_equity - start_equity, 8)
 

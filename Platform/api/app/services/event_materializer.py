@@ -17,6 +17,7 @@ from ..models import (
     StrategyMetric,
     Trade,
 )
+from .equity_sanity import is_plausible_equity
 
 
 def _coerce_float(value) -> float | None:
@@ -373,11 +374,19 @@ def _sync_equity_snapshot_for_event(db: Session, run: Run, event: RunEvent) -> N
     if equity_usdt is None:
         return
 
+    latest_snapshot = _latest_equity_snapshot(db, run.id)
+    latest_equity = _coerce_float(latest_snapshot.equity_usdt) if latest_snapshot is not None else None
+    if not is_plausible_equity(
+        equity_usdt,
+        reference_equity=_coerce_float(run.start_equity),
+        previous_equity=latest_equity,
+    ):
+        return
+
     current_pair = _normalize_pair_text(payload.get("current_pair") or payload.get("pair"))
     regime = _normalize_upper(payload.get("regime"))
     strategy = _normalize_upper(payload.get("strategy"))
     in_position = bool(payload.get("in_position"))
-    latest_snapshot = _latest_equity_snapshot(db, run.id)
 
     existing = db.execute(
         select(EquitySnapshot)
@@ -449,8 +458,25 @@ def _rebuild_run_equity_summary(db: Session, run: Run) -> None:
     if not rows:
         return
 
-    latest_equity = _coerce_float(rows[-1].equity_usdt)
-    start_equity = _coerce_float(run.start_equity) or _coerce_float(rows[0].equity_usdt)
+    valid_rows = []
+    latest_valid_equity = None
+    start_equity = _coerce_float(run.start_equity)
+    for row in rows:
+        equity = _coerce_float(row.equity_usdt)
+        if not is_plausible_equity(
+            equity,
+            reference_equity=start_equity,
+            previous_equity=latest_valid_equity,
+        ):
+            continue
+        valid_rows.append(row)
+        latest_valid_equity = equity
+        if start_equity is None:
+            start_equity = equity
+    if not valid_rows:
+        return
+
+    latest_equity = latest_valid_equity
     if latest_equity is not None:
         run.end_equity = latest_equity
     if latest_equity is not None and start_equity is not None:
@@ -458,7 +484,7 @@ def _rebuild_run_equity_summary(db: Session, run: Run) -> None:
 
     peak = None
     max_drawdown = 0.0
-    for row in rows:
+    for row in valid_rows:
         equity = _coerce_float(row.equity_usdt)
         if equity is None:
             continue

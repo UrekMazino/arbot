@@ -82,9 +82,11 @@ export type WalkForwardPoint = {
 export type PortfolioEquityRange = "24h" | "7d" | "30d" | "90d" | "all";
 
 export type PortfolioEquityBucket = "auto" | "raw" | "hour" | "day" | "week";
+export type PortfolioEquityBasis = "realized" | "live";
 
 export type PortfolioEquityPoint = {
   ts: string;
+  bucket_start: string | null;
   equity: number;
   pnl_usdt: number;
   pnl_pct: number | null;
@@ -111,13 +113,15 @@ export type PortfolioEquityStats = {
   raw_point_count: number;
   run_count: number;
   latest_pnl_usdt: number | null;
+  closed_trade_count?: number;
 };
 
 export type PortfolioEquityCurve = {
   range: PortfolioEquityRange;
   bucket: Exclude<PortfolioEquityBucket, "auto">;
   requested_bucket: PortfolioEquityBucket;
-  source: "equity_snapshots" | "event_fallback";
+  basis: PortfolioEquityBasis;
+  source: "realized_trades" | "equity_snapshots" | "event_fallback";
   generated_at: string;
   points: PortfolioEquityPoint[];
   stats: PortfolioEquityStats;
@@ -765,8 +769,9 @@ export async function getRunWalkForward(runId: string): Promise<WalkForwardPoint
 export async function getPortfolioEquityCurve(
   range: PortfolioEquityRange = "7d",
   bucket: PortfolioEquityBucket = "auto",
+  basis: PortfolioEquityBasis = "realized",
 ): Promise<PortfolioEquityCurve> {
-  const params = new URLSearchParams({ range, bucket });
+  const params = new URLSearchParams({ range, bucket, basis });
   return apiRequest<PortfolioEquityCurve>(`/runs/portfolio/equity-curve?${params.toString()}`, { method: "GET" });
 }
 

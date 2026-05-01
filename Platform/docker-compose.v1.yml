@@ -16,7 +16,7 @@ x-backend-env: &backend-env
     STATBOT_PAIR_SUPPLY_PROCESS_MODE: runner
     STATBOT_PROCESS_OWNER: api
   volumes:
-    - logs_v1:/workspace/Logs
+    - ./Logs:/workspace/Logs
     - reports_v1:/workspace/Reports
     - execution_state_v1:/workspace/Execution/state
     - strategy_output_v1:/workspace/Strategy/output
@@ -77,6 +77,8 @@ services:
       STATBOT_BOT_PROCESS_MODE: runner
       STATBOT_PAIR_SUPPLY_PROCESS_MODE: runner
       STATBOT_PROCESS_OWNER: api
+      STATBOT_LOG_PATH: /workspace/Logs/v1/bot.log
+
     expose:
       - "8080"
     command: >
@@ -214,7 +216,6 @@ services:
 volumes:
   pgdata_v1:
   redisdata_v1:
-  logs_v1:
   reports_v1:
   execution_state_v1:
   strategy_output_v1:

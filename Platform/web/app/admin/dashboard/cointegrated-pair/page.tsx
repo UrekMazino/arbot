@@ -420,6 +420,7 @@ export default function CointegratedPairPage() {
   const [showGraph, setShowGraph] = useState(true);
   const [query, setQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const selectedPairRef = useRef<CointegratedPair | null>(null);
   const refreshInFlightRef = useRef(false);
   const detailRefreshInFlightRef = useRef(false);
   const detailRequestIdRef = useRef(0);
@@ -489,6 +490,10 @@ export default function CointegratedPairPage() {
     };
   }, [graphFullscreen]);
 
+  useEffect(() => {
+    selectedPairRef.current = selectedPair;
+  }, [selectedPair]);
+
   const filteredPairs = useMemo(
     () => (catalog?.pairs || []).filter((pair) => pairMatches(pair, query)),
     [catalog, query],
@@ -510,7 +515,9 @@ export default function CointegratedPairPage() {
   const curatorCounts = catalog?.curator?.status_counts || {};
   const curatorHealthyCount = Number(curatorCounts.healthy || 0);
   const curatorWatchCount = Number(curatorCounts.watch || 0) + Number(curatorCounts.degraded || 0) + Number(curatorCounts.hospital_candidate || 0);
-  const chartData = detail?.points || [];
+  const detailMatchesSelection = Boolean(selectedPair && detail && detail.pair.id === selectedPair.id);
+  const detailPairMismatch = Boolean(selectedPair && detail && detail.pair.id !== selectedPair.id);
+  const chartData = detailMatchesSelection ? detail?.points || [] : [];
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
@@ -532,7 +539,7 @@ export default function CointegratedPairPage() {
         ? "Stop Supply"
         : "Start Supply";
 
-  const loadPairDetail = useCallback(async (sym1: string, sym2: string, options: { background?: boolean } = {}) => {
+  const loadPairDetail = useCallback(async (sym1: string, sym2: string, options: { background?: boolean; expectedPairId?: string } = {}) => {
     const background = Boolean(options.background);
     if (background && detailRefreshInFlightRef.current) return;
     const requestId = detailRequestIdRef.current + 1;
@@ -547,6 +554,7 @@ export default function CointegratedPairPage() {
     try {
       const data = await getCointegratedPairDetail(sym1, sym2, 720);
       if (detailRequestIdRef.current !== requestId) return;
+      if (options.expectedPairId && selectedPairRef.current?.id !== options.expectedPairId) return;
       setDetail(data);
     } catch (err) {
       if (detailRequestIdRef.current !== requestId) return;
@@ -580,15 +588,12 @@ export default function CointegratedPairPage() {
       setCatalog((current) => mergeCatalogSnapshot(current, data));
       setSupplyStatus(supply);
       setPairsHealth(health);
-      let nextSelectedPair: CointegratedPair | null = null;
-      setSelectedPair((current) => {
-        if (!current || current.id === options.removedPairId) return data.pairs[0] || null;
-        nextSelectedPair = data.pairs.find((pair) => pair.id === current.id) || data.pairs[0] || null;
-        return nextSelectedPair;
-      });
-      if (!nextSelectedPair && data.pairs.length) {
-        nextSelectedPair = data.pairs[0] || null;
-      }
+      const currentSelectedPair = selectedPairRef.current;
+      const nextSelectedPair =
+        !currentSelectedPair || currentSelectedPair.id === options.removedPairId
+          ? data.pairs[0] || null
+          : data.pairs.find((pair) => pair.id === currentSelectedPair.id) || data.pairs[0] || null;
+      setSelectedPair(nextSelectedPair);
       if (nextSelectedPair) {
         setDetail((current) =>
           current && current.pair.id === nextSelectedPair?.id
@@ -597,7 +602,7 @@ export default function CointegratedPairPage() {
         );
       }
       if (options.refreshDetail && nextSelectedPair) {
-        void loadPairDetail(nextSelectedPair.sym_1, nextSelectedPair.sym_2, { background });
+        void loadPairDetail(nextSelectedPair.sym_1, nextSelectedPair.sym_2, { background, expectedPairId: nextSelectedPair.id });
       }
     } catch (err) {
       if (!background || !catalog) {
@@ -617,8 +622,8 @@ export default function CointegratedPairPage() {
       setGraphFullscreen(false);
       return;
     }
-    void loadPairDetail(selectedSym1, selectedSym2);
-  }, [loadPairDetail, selectedSym1, selectedSym2]);
+    void loadPairDetail(selectedSym1, selectedSym2, { expectedPairId: selectedPair?.id });
+  }, [loadPairDetail, selectedPair?.id, selectedSym1, selectedSym2]);
 
   useEffect(() => {
     if (!pairDoctorEnabled) return;
@@ -809,7 +814,7 @@ export default function CointegratedPairPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-4 custom-scrollbar sm:p-6">
-              <PairUniverseCharts chartData={chartData} selectedPair={selectedPair} fullscreen />
+              <PairUniverseCharts key={`fullscreen-${selectedPair.id}`} chartData={chartData} selectedPair={selectedPair} fullscreen />
             </div>
           </div>
         </div>
@@ -848,9 +853,9 @@ export default function CointegratedPairPage() {
           />
           <MetricCard
             label="Selected Z"
-            value={fmtNumber(detail?.stats.zscore_current, 3)}
+            value={fmtNumber(detailMatchesSelection ? detail?.stats.zscore_current : null, 3)}
             hint={selectedPair?.pair || "No pair selected"}
-            tone={Math.abs(detail?.stats.zscore_current || 0) >= 2 ? "amber" : "violet"}
+            tone={Math.abs(detailMatchesSelection ? detail?.stats.zscore_current || 0 : 0) >= 2 ? "amber" : "violet"}
           />
         </div>
 
@@ -1153,7 +1158,7 @@ export default function CointegratedPairPage() {
               title={selectedPair ? selectedPair.pair : "Pair Detail"}
               subtitle="Normalized prices, spread, and z-score computed from Strategy price history."
               titleRight={
-                detailLoading ? (
+                detailLoading || detailPairMismatch ? (
                   <StatusPill label="Loading" tone="neutral" />
                 ) : (
                   <div className="flex items-center gap-2">
@@ -1174,26 +1179,26 @@ export default function CointegratedPairPage() {
                 )
               }
             >
-              {detailLoading ? (
+              {detailLoading || detailPairMismatch ? (
                 <ChartEmpty message="Loading pair graph..." />
               ) : !selectedPair ? (
                 <ChartEmpty message="Select a pair to view cointegration graphs." />
               ) : !chartData.length ? (
                 <ChartEmpty message="No chart data available for this pair." />
               ) : (
-                <PairUniverseCharts chartData={chartData} selectedPair={selectedPair} />
+                <PairUniverseCharts key={selectedPair.id} chartData={chartData} selectedPair={selectedPair} />
               )}
             </PanelCard>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <MetricCard label="p-value" value={fmtNumber(detail?.pair.p_value, 5)} hint="Lower is stronger" tone="teal" />
+              <MetricCard label="p-value" value={fmtNumber(detailMatchesSelection ? detail?.pair.p_value : null, 5)} hint="Lower is stronger" tone="teal" />
               <MetricCard
                 label="Chart Crossings"
-                value={String(detail?.stats.zero_crossing_window ?? detail?.pair.zero_crossing ?? "n/a")}
+                value={String(detailMatchesSelection ? detail?.stats.zero_crossing_window ?? detail?.pair.zero_crossing ?? "n/a" : "n/a")}
                 hint="Displayed window, noise-filtered"
                 tone="sky"
               />
-              <MetricCard label="Spread Std" value={fmtNumber(detail?.stats.spread_std, 5)} hint="Latest chart window" tone="violet" />
+              <MetricCard label="Spread Std" value={fmtNumber(detailMatchesSelection ? detail?.stats.spread_std : null, 5)} hint="Latest chart window" tone="violet" />
             </div>
           </div>
           ) : null}

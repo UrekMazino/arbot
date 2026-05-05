@@ -1,4 +1,4 @@
-﻿# Remove Pandas Future Warnings
+# Remove Pandas Future Warnings
 import csv
 import os
 import json
@@ -455,6 +455,10 @@ def _get_switch_precheck_coint_enabled():
 
 def _get_switch_precheck_fail_open():
     return _env_flag("STATBOT_SWITCH_PRECHECK_FAIL_OPEN", False)
+
+
+def _get_switch_precheck_trust_curator():
+    return _env_flag("STATBOT_SWITCH_PRECHECK_TRUST_CURATOR", True)
 
 
 def _get_switch_precheck_limit():
@@ -2479,6 +2483,22 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
         cached = precheck_cache.get(pair_key)
         if cached is not None:
             return bool(cached)
+
+        # Align live pre-check with curator's criteria/recommendations
+        if _get_switch_precheck_trust_curator():
+            curator_index = _read_pair_curator_index()
+            curator_row = curator_index.get(pair_key) if curator_index else None
+            if curator_row and _curator_pair_is_switch_eligible(curator_row):
+                logger.debug(
+                    "Pair %s/%s passes switch pre-check via curator recommendation "
+                    "(status=%s recommendation=%s).",
+                    t1,
+                    t2,
+                    curator_row.get("status"),
+                    curator_row.get("recommendation"),
+                )
+                precheck_cache[pair_key] = True
+                return True
 
         try:
             zscores, _sign, metrics = get_latest_zscore(
@@ -4990,6 +5010,7 @@ if __name__ == "__main__":
                         "session_pnl_pct": alert_session_pnl_pct,
                     },
                     severity="info" if record_trade_history and alert_pnl >= 0 else "warn",
+                    flush=True,
                     logger=logger,
                 )
 

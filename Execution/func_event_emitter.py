@@ -230,7 +230,7 @@ class EventEmitter:
                 should_flush = (time.time() - self._last_flush_ts) >= self.flush_seconds
 
         if should_flush:
-            self.flush()
+            self.flush(force=flush)
         return True
 
     def flush(self, force: bool = False) -> None:

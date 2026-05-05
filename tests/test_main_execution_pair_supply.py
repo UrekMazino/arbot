@@ -477,6 +477,23 @@ def test_trade_close_result_uses_verified_entry_to_post_close_equity():
     assert result["record_history"] is True
 
 
+def test_trade_close_result_ignores_stale_entry_equity_for_carried_position():
+    result = me._select_trade_close_result(
+        entry_equity=2742.06,
+        post_close_equity=2750.14,
+        pre_close_equity_change=8.21,
+        starting_equity=2750.27,
+        position_pnl=16.05,
+        entry_context_verified=False,
+    )
+
+    assert result["pnl"] == pytest.approx(-0.13)
+    assert result["basis"] == "session_equity_delta_unverified"
+    assert result["label"] == "UNVERIFIED"
+    assert result["verified"] is False
+    assert result["record_history"] is False
+
+
 def test_trade_close_result_quarantines_restart_close_with_session_equity_delta():
     result = me._select_trade_close_result(
         entry_equity=None,
@@ -491,6 +508,24 @@ def test_trade_close_result_quarantines_restart_close_with_session_equity_delta(
     assert result["label"] == "UNVERIFIED"
     assert result["verified"] is False
     assert result["record_history"] is False
+
+
+def test_entry_context_verified_requires_current_process_trade():
+    assert me._entry_context_is_verified(
+        entry_time_ts=1002.0,
+        pair_start_time=1000.0,
+        trades_executed=1,
+    )
+    assert not me._entry_context_is_verified(
+        entry_time_ts=900.0,
+        pair_start_time=1000.0,
+        trades_executed=1,
+    )
+    assert not me._entry_context_is_verified(
+        entry_time_ts=1002.0,
+        pair_start_time=1000.0,
+        trades_executed=0,
+    )
 
 
 def test_trade_close_result_keeps_position_pnl_unverified_when_equity_missing():

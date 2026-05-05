@@ -567,14 +567,16 @@ def _select_trade_close_result(
     pre_close_equity_change,
     starting_equity,
     position_pnl,
+    entry_context_verified=True,
 ):
     entry_equity = _float_or_none(entry_equity)
     post_close_equity = _float_or_none(post_close_equity)
     pre_close_equity_change = _float_or_none(pre_close_equity_change)
     starting_equity = _float_or_none(starting_equity)
     position_pnl = _float_or_none(position_pnl)
+    entry_context_verified = bool(entry_context_verified)
 
-    if entry_equity is not None and post_close_equity is not None:
+    if entry_context_verified and entry_equity is not None and post_close_equity is not None:
         pnl = post_close_equity - entry_equity
         return {
             "pnl": pnl,
@@ -584,7 +586,7 @@ def _select_trade_close_result(
             "label": "WIN" if pnl > 0 else "LOSS",
         }
 
-    if pre_close_equity_change is not None:
+    if entry_context_verified and pre_close_equity_change is not None:
         pnl = pre_close_equity_change
         return {
             "pnl": pnl,
@@ -595,8 +597,9 @@ def _select_trade_close_result(
         }
 
     if post_close_equity is not None and starting_equity is not None and starting_equity > 0:
+        pnl = post_close_equity - starting_equity
         return {
-            "pnl": post_close_equity - starting_equity,
+            "pnl": pnl,
             "basis": "session_equity_delta_unverified",
             "verified": False,
             "record_history": False,
@@ -619,6 +622,21 @@ def _select_trade_close_result(
         "record_history": False,
         "label": "UNVERIFIED",
     }
+
+
+def _entry_context_is_verified(entry_time_ts, pair_start_time, trades_executed, grace_seconds=5.0):
+    try:
+        entry_ts = float(entry_time_ts)
+        start_ts = float(pair_start_time)
+    except (TypeError, ValueError):
+        return False
+    try:
+        trade_count = int(trades_executed or 0)
+    except (TypeError, ValueError):
+        trade_count = 0
+    if trade_count <= 0:
+        return False
+    return entry_ts >= start_ts - max(float(grace_seconds or 0.0), 0.0)
 
 
 def _get_regime_eval_seconds():
@@ -4526,6 +4544,21 @@ if __name__ == "__main__":
                     entry_regime = "UNKNOWN"
                 switch_reason_after_close = get_last_switch_reason() or ""
                 force_switch_after_close = switch_reason_after_close in FORCED_SWITCH_EXIT_REASONS
+                entry_context_verified = _entry_context_is_verified(
+                    entry_time_ts,
+                    pair_start_time,
+                    trades_executed,
+                )
+                if entry_equity is not None and not entry_context_verified:
+                    logger.warning(
+                        "Ignoring stale entry equity for close result: entry_equity=%s entry_time=%s "
+                        "pair_start_time=%.3f trades_executed=%d. Treating carried-over position "
+                        "PnL as session-equity delta.",
+                        entry_equity,
+                        entry_time_ts,
+                        pair_start_time,
+                        trades_executed,
+                    )
                 reconciliation = None
                 pre_close_equity = equity_usdt
                 pre_close_equity_change = None
@@ -4536,7 +4569,7 @@ if __name__ == "__main__":
                 actual_fee_delta = None
 
                 # Pre-close diagnostics (estimate only; not used for trade classification).
-                if entry_equity is not None and pre_close_equity is not None:
+                if entry_context_verified and entry_equity is not None and pre_close_equity is not None:
                     pre_close_equity_change = pre_close_equity - entry_equity
 
                 # Capture pre-close fee snapshot from fills so we can isolate close-time fee delta.
@@ -4621,6 +4654,7 @@ if __name__ == "__main__":
                     pre_close_equity_change=pre_close_equity_change,
                     starting_equity=starting_equity,
                     position_pnl=total_pnl,
+                    entry_context_verified=entry_context_verified,
                 )
                 actual_pnl = close_result_metrics["pnl"]
                 trade_result_basis = close_result_metrics["basis"]
@@ -4650,20 +4684,32 @@ if __name__ == "__main__":
                     position_pnl_val = _float_or_none(total_pnl)
                     if position_pnl_val is not None:
                         position_pnl_text = f"{position_pnl_val:.2f}"
+                    stale_entry_context = entry_equity is not None and not entry_context_verified
+                    warning_message = (
+                        "Entry equity is stale for this process; using session equity delta and skipping "
+                        "performance history"
+                        if stale_entry_context
+                        else (
+                            "Entry equity unavailable; using session equity delta and skipping "
+                            "performance history"
+                        )
+                    )
                     logger.warning(
-                        "Entry equity unavailable; using session equity delta for unverified close result "
+                        "%s for unverified close result "
                         "(position_pnl=%s session_delta=%.2f). Skipping win-rate history update.",
+                        "Entry equity is stale" if stale_entry_context else "Entry equity unavailable",
                         position_pnl_text,
                         actual_pnl,
                     )
                     emit_event(
                         "data_quality_warning",
                         payload={
-                            "warning_type": "trade_result_unverified_session_equity_delta",
-                            "message": (
-                                "Entry equity unavailable; using session equity delta and skipping "
-                                "performance history"
+                            "warning_type": (
+                                "trade_result_stale_entry_equity"
+                                if stale_entry_context
+                                else "trade_result_unverified_session_equity_delta"
                             ),
+                            "message": warning_message,
                             "pair": f"{ticker_1}/{ticker_2}",
                             "strategy": entry_strategy,
                             "regime": entry_regime,
@@ -4671,6 +4717,10 @@ if __name__ == "__main__":
                             "session_equity_delta": actual_pnl,
                             "starting_equity": starting_equity,
                             "post_close_equity": post_equity_usdt,
+                            "entry_equity": entry_equity,
+                            "entry_time": entry_time_ts,
+                            "pair_start_time": pair_start_time,
+                            "trades_executed": trades_executed,
                         },
                         severity="warn",
                         logger=logger,
@@ -4992,6 +5042,7 @@ if __name__ == "__main__":
                         "result_basis": trade_result_basis,
                         "result_verified": trade_result_verified,
                         "history_recorded": record_trade_history,
+                        "entry_context_verified": entry_context_verified,
                         "position_pnl_fallback_usdt": total_pnl if not record_trade_history else None,
                         "strategy": entry_strategy,
                         "regime": entry_regime,

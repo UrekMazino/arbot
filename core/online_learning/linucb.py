@@ -190,7 +190,12 @@ class LinUCBContextualBandit:
         store.save_model("linucb", self)
 
     def load_state(self, store: Any) -> None:
-        loaded = store.load_model("linucb", LinUCBContextualBandit, LinUCBContextualBandit)
+        loaded = store.load_model(
+            "linucb",
+            LinUCBContextualBandit,
+            lambda: LinUCBContextualBandit(self.config, schema=self.schema),
+            expected_feature_schema_version=self.config.features.feature_schema_version,
+        )
         with self._lock:
             self.schema = loaded.schema
             self.A = None if loaded.A is None else loaded.A.copy()

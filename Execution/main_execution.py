@@ -91,6 +91,7 @@ from advanced_ml_runtime import (
     advanced_ml_runtime_mode,
     evaluate_advanced_regime,
     generate_post_trade_shadow_report,
+    learn_from_closed_trade,
     log_advanced_ml_startup_status,
 )
 from func_strategy_state import record_strategy_trade_result
@@ -4825,6 +4826,33 @@ if __name__ == "__main__":
                         trade_id=advanced_trade_id,
                         actual_pnl_usdt=actual_pnl,
                         actual_exit_timestamp=time.time(),
+                        log=logger,
+                    )
+                    learn_from_closed_trade(
+                        pair=(ticker_1, ticker_2),
+                        trade_id=advanced_trade_id,
+                        actual_pnl_usdt=actual_pnl,
+                        result_verified=trade_result_verified,
+                        history_recorded=record_trade_history,
+                        entry_notional_usdt=entry_notional,
+                        fees_usdt=(
+                            actual_fee_delta
+                            if actual_fee_delta is not None
+                            else (
+                                float(costs.get("entry_fee", 0.0) or 0.0)
+                                + float(costs.get("exit_fee", 0.0) or 0.0)
+                                if isinstance(costs, dict)
+                                else None
+                            )
+                        ),
+                        slippage_usdt=(
+                            float(costs.get("slippage", 0.0) or 0.0)
+                            if isinstance(costs, dict)
+                            else None
+                        ),
+                        hold_seconds=(hold_minutes * 60.0 if hold_minutes is not None else None),
+                        metrics=metrics or {},
+                        exit_reason=switch_reason_after_close or "normal",
                         log=logger,
                     )
 

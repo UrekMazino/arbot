@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 
 import {
   DataQualitySummary,
+  AdvancedMLAnalytics,
   PerformanceHistory,
   PerformanceSummaryRow,
   RunEvent,
@@ -15,6 +16,7 @@ import {
   getPerformanceHistory,
   getMe,
   getRunDataQuality,
+  getRunAdvancedMLAnalytics,
   getRunEvents,
   getRunScorecard,
   getRunTrades,
@@ -92,6 +94,15 @@ function fmtDuration(startIso: string, endIso: string | null): string {
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function normalizeSeverity(value: unknown): Exclude<TimelineSeverity, "all"> {
@@ -201,6 +212,7 @@ export default function AnalyticsPage() {
   const [liveEvents, setLiveEvents] = useState<TimelineEvent[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunSummary | null>(null);
   const [runQuality, setRunQuality] = useState<DataQualitySummary | null>(null);
+  const [advancedML, setAdvancedML] = useState<AdvancedMLAnalytics | null>(null);
   const [runTrades, setRunTrades] = useState<Trade[]>([]);
   const [runScorecard, setRunScorecard] = useState<ScorecardCell[]>([]);
   const [performanceHistory, setPerformanceHistory] = useState<PerformanceHistory | null>(null);
@@ -296,9 +308,16 @@ export default function AnalyticsPage() {
         setRunTrades(trades);
         setTimelineEvents(evts.map(normalizeHistoryEvent));
         setRunScorecard(scorecard);
+        getRunAdvancedMLAnalytics(effectiveSelectedRun.id)
+          .then(setAdvancedML)
+          .catch((err) => {
+            console.error("Failed to load advanced ML analytics", err);
+            setAdvancedML(null);
+          });
       } catch (e) {
         console.error("Failed to load run data", e);
         setRunScorecard([]);
+        setAdvancedML(null);
       }
     })();
   }, [effectiveSelectedRun]);
@@ -386,6 +405,76 @@ export default function AnalyticsPage() {
           <MetricCard label="Start Equity" value={fmtNumber(effectiveSelectedRun?.start_equity)} unit="USDT" />
           <MetricCard label="End Equity" value={fmtNumber(effectiveSelectedRun?.end_equity)} unit="USDT" />
         </div>
+
+        {advancedML && (
+          <PanelCard
+            title="Advanced ML"
+            subtitle="Regime, pair scoring, learning, rollout, and exit-policy telemetry for the selected run."
+            titleRight={
+              <StatusPill
+                label={advancedML.strategy_level.advanced_policy_mode}
+                variant={advancedML.strategy_level.advanced_policy_mode === "live" ? "success" : advancedML.strategy_level.advanced_policy_mode === "shadow" ? "info" : "neutral"}
+              />
+            }
+          >
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                label="Learning"
+                value={`${advancedML.strategy_level.learning_updates}`}
+                hint={`Bayes ${advancedML.strategy_level.bayes_updates} | LinUCB ${advancedML.strategy_level.linucb_updates} | skipped ${advancedML.strategy_level.learning_skips}`}
+                tone="sky"
+              />
+              <MetricCard
+                label="Live Exits"
+                value={`${advancedML.strategy_level.live_exit_allowed}/${advancedML.strategy_level.live_exit_events}`}
+                hint={`${advancedML.strategy_level.rollout_blocked} blocked by rollout guard`}
+                tone={advancedML.strategy_level.rollout_blocked > 0 ? "amber" : "teal"}
+              />
+              <MetricCard
+                label="Shadow Agreement"
+                value={advancedML.strategy_level.shadow_agreement_rate === null ? "n/a" : fmtPercent(advancedML.strategy_level.shadow_agreement_rate * 100)}
+                hint="Old vs advanced exit decisions"
+                tone="violet"
+              />
+              <MetricCard
+                label="Risk"
+                value={fmtNumber(advancedML.strategy_level.avg_break_risk, 3)}
+                hint={`avg exit score ${fmtNumber(advancedML.strategy_level.avg_exit_score, 3)}`}
+                tone={(advancedML.strategy_level.avg_break_risk ?? 0) > 0.5 ? "rose" : "teal"}
+              />
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Regime</div>
+                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
+                  {String(asRecord(advancedML.latest_regime?.payload).advanced_regime || asRecord(advancedML.latest_regime?.payload).regime || "n/a")}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  conf {fmtNumber(asNumber(asRecord(advancedML.latest_regime?.payload).confidence), 3)} | break {fmtNumber(asNumber(asRecord(advancedML.latest_regime?.payload).break_risk), 3)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Exit</div>
+                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
+                  {String(asRecord(advancedML.latest_exit?.payload).new_action || "n/a")}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  score {fmtNumber(asNumber(asRecord(advancedML.latest_exit?.payload).total_exit_score), 3)} | rollout {String(asRecord(advancedML.latest_exit?.payload).rollout_allowed ?? "n/a")}
+                </div>
+              </div>
+              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Learning</div>
+                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
+                  {String(asRecord(advancedML.latest_learning?.payload).pair || "n/a")}
+                </div>
+                <div className="mt-1 text-xs text-gray-500">
+                  Bayes {String(asRecord(advancedML.latest_learning?.payload).bayes_updated ?? "n/a")} | LinUCB {String(asRecord(advancedML.latest_learning?.payload).linucb_updated ?? "n/a")}
+                </div>
+              </div>
+            </div>
+          </PanelCard>
+        )}
 
         <PanelCard
           title="Strategy Performance"

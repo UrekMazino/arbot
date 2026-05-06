@@ -13,20 +13,28 @@ import logging
 import math
 import sys
 import time
-from dataclasses import asdict, dataclass
+import hashlib
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from core.adapters.bot_adapter_types import PairState  # noqa: E402
+from core.bayes.bayesian_pair_scorer import BayesianPairScorer  # noqa: E402
 from core.config.advanced_ml_config import AdvancedMLConfig, load_advanced_ml_config_from_env  # noqa: E402
 from core.ev.hold_exit_ev import ExitAction  # noqa: E402
+from core.features.feature_schema import FeatureSchema, NamedFeatureVector  # noqa: E402
+from core.online_learning.linucb import BanditContext, LinUCBContextualBandit  # noqa: E402
+from core.regime.global_market_context import estimate_global_market_context  # noqa: E402
 from core.regime.heuristic_regime_detector import HeuristicRegimeDetector  # noqa: E402
+from core.regime.hmm_regime_detector import OptionalHMMRegimeRefiner  # noqa: E402
 from core.regime.regime_types import RegimeDetectionResult, RegimeName  # noqa: E402
+from core.storage.model_state_store import ModelStateStore, resolve_model_state_path  # noqa: E402
 from core.trade_management.probabilistic_exit_manager import (  # noqa: E402
     ExitDecision,
     ProbabilisticExitManager,
@@ -42,11 +50,26 @@ _CONFIG: AdvancedMLConfig | None = None
 _EXIT_MANAGER: ProbabilisticExitManager | None = None
 _EXIT_MANAGER_MODE: tuple[bool, bool] | None = None
 _REGIME_DETECTOR: HeuristicRegimeDetector | None = None
+_HMM_REFINER: OptionalHMMRegimeRefiner | None = None
+_MODEL_STORE: ModelStateStore | None = None
+_BAYES_MODEL: BayesianPairScorer | None = None
+_BANDIT_MODEL: LinUCBContextualBandit | None = None
 _REGIME_MEMORY: dict[str, dict[str, Any]] = {}
 _LAST_REGIME_LOG_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_REGIME_LOG_TS = 0.0
 _LAST_EXIT_LOG_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_EXIT_LOG_TS = 0.0
+
+PAIR_RANK_FEATURE_NAMES = (
+    "p_value_quality",
+    "zero_crossing_quality",
+    "correlation_quality",
+    "liquidity_quality",
+    "capacity_quality",
+    "hedge_ratio_quality",
+    "adf_quality",
+    "reputation_quality",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +77,13 @@ class RuntimePair:
     key: str
     sym_1: str
     sym_2: str
+
+
+@dataclass(frozen=True)
+class RuntimeHardValidation:
+    is_valid: bool
+    p_value: float | None = None
+    reasons: tuple[str, ...] = ()
 
 
 class RuntimeExistingBotAdapter:
@@ -112,13 +142,18 @@ def get_advanced_ml_config() -> AdvancedMLConfig:
 def reset_advanced_ml_runtime_cache() -> None:
     """Test helper: force env/config to be re-read."""
 
-    global _CONFIG, _EXIT_MANAGER, _EXIT_MANAGER_MODE, _REGIME_DETECTOR
+    global _CONFIG, _EXIT_MANAGER, _EXIT_MANAGER_MODE, _REGIME_DETECTOR, _HMM_REFINER
+    global _MODEL_STORE, _BAYES_MODEL, _BANDIT_MODEL
     global _LAST_REGIME_LOG_SIGNATURE, _LAST_REGIME_LOG_TS
     global _LAST_EXIT_LOG_SIGNATURE, _LAST_EXIT_LOG_TS
     _CONFIG = None
     _EXIT_MANAGER = None
     _EXIT_MANAGER_MODE = None
     _REGIME_DETECTOR = None
+    _HMM_REFINER = None
+    _MODEL_STORE = None
+    _BAYES_MODEL = None
+    _BANDIT_MODEL = None
     _REGIME_MEMORY.clear()
     _LAST_REGIME_LOG_SIGNATURE = None
     _LAST_REGIME_LOG_TS = 0.0
@@ -137,10 +172,16 @@ def advanced_ml_config_snapshot(config: AdvancedMLConfig | None = None) -> dict[
         "max_shadow_disagreement_rate": float(cfg.pipeline.max_shadow_disagreement_rate),
         "min_shadow_policy_delta_usdt": float(cfg.pipeline.min_shadow_policy_delta_usdt),
         "model_state_path": str(cfg.persistence.model_state_path),
+        "resolved_model_state_path": str(resolve_model_state_path(cfg.persistence.model_state_path)),
+        "rollout_phase": int(cfg.rollout.phase),
+        "rollout_live_trade_percentage": float(cfg.rollout.live_trade_percentage),
+        "rollout_require_positive_shadow_report": bool(cfg.rollout.require_positive_shadow_report),
         "max_book_age_ms": float(cfg.microstructure.max_book_age_ms),
         "fast_adverse_threshold": float(cfg.microstructure.fast_adverse_threshold),
         "wide_spread_bps": float(cfg.microstructure.wide_spread_bps),
         "max_drawdown_usdt": float(cfg.exit.max_drawdown_usdt),
+        "hmm_regime_enabled": bool(cfg.extensions.hmm_regime_enabled),
+        "global_market_context_enabled": bool(cfg.extensions.global_market_context_enabled),
     }
 
 
@@ -218,6 +259,35 @@ def evaluate_advanced_regime(
         (log or logger).warning("ADVANCED_REGIME_%s failed: pair=%s error=%s", mode.upper(), pair_obj.key, exc)
         return None
 
+    if cfg.extensions.global_market_context_enabled or cfg.extensions.hmm_regime_enabled:
+        try:
+            global_context = (
+                estimate_global_market_context(metrics, config=cfg)
+                if cfg.extensions.global_market_context_enabled
+                else None
+            )
+            if global_context is not None:
+                features = dict(result.features)
+                features.update(
+                    {
+                        "global_market_risk_score": float(global_context.risk_score),
+                        "global_market_volatility_score": float(global_context.volatility_score),
+                        "global_market_liquidity_stress_score": float(global_context.liquidity_stress_score),
+                    }
+                )
+                result = replace(
+                    result,
+                    break_risk=_clamp01(
+                        result.break_risk
+                        + cfg.extensions.global_market_risk_weight * global_context.risk_score
+                    ),
+                    features=features,
+                    reasons=[*result.reasons, f"global_market_context={global_context.state}"],
+                )
+            result = _get_hmm_refiner(cfg).refine(result, global_context=global_context)
+        except Exception as exc:
+            (log or logger).warning("ADVANCED_REGIME_EXTENSION failed: pair=%s error=%s", pair_obj.key, exc)
+
     previous_regime = pair_memory.get("regime")
     if previous_regime == result.regime:
         ticks = int(pair_memory.get("ticks", 0) or 0) + 1
@@ -284,7 +354,36 @@ def evaluate_probabilistic_exit(
         (log or logger).warning("ADVANCED_EXIT_%s failed: pair=%s error=%s", mode.upper(), pair_obj.key, exc)
         return None
 
+    rollout = evaluate_live_rollout_guard(decision, features=features, config=cfg)
+    decision.metadata["rollout"] = rollout
     _log_advanced_exit_decision(decision, old_action=old_action, old_reason=old_reason, log=log or logger)
+    _emit_advanced_event(
+        "advanced_ml_exit_live" if mode == "live" else "advanced_ml_exit_shadow",
+        {
+            "pair": pair_obj.key,
+            "mode": mode,
+            "old_action": str(old_action),
+            "new_action": decision.action.value,
+            "exit_percentage": float(decision.exit_percentage),
+            "total_exit_score": float(decision.scores.total_exit_score),
+            "pre_microstructure_exit_score": float(decision.scores.pre_microstructure_exit_score),
+            "risk_pressure_score": float(decision.scores.risk_pressure_score),
+            "expected_hold_value_usdt": float(decision.ev.expected_hold_value_usdt),
+            "probability_reversion": float(decision.ev.probability_of_reversion),
+            "probability_adverse": float(decision.ev.probability_of_adverse_move),
+            "probability_neutral": float(decision.ev.probability_of_neutral),
+            "book_stress": float(decision.microstructure.book_stress_score),
+            "slippage_risk": float(decision.microstructure.slippage_risk_score),
+            "recommended_order_style": decision.microstructure.recommended_order_style,
+            "hard_kill": bool(decision.hard_kill_triggered),
+            "blocked_by_net_profit_guard": bool(decision.blocked_by_net_profit_guard),
+            "rollout_allowed": bool(rollout.get("allowed")),
+            "rollout_phase": rollout.get("phase"),
+            "rollout_reason": "|".join(rollout.get("reasons", [])),
+        },
+        severity="warn" if decision.action in (ExitAction.PARTIAL_EXIT, ExitAction.FULL_EXIT) else "info",
+        log=log or logger,
+    )
     return decision
 
 
@@ -328,6 +427,7 @@ def build_exit_features(
 
     return {
         "pair_key": pair.key,
+        "pair_state": str(metrics.get("pair_state") or metrics.get("reputation_state") or "stable").strip().lower() or "stable",
         "trade_id": f"{pair.key}:{entry_time if entry_time is not None else 'unknown'}",
         "entry_z": float(entry_z) if entry_z is not None else float(latest_zscore),
         "current_z": float(latest_zscore),
@@ -381,7 +481,201 @@ def should_apply_live_advanced_exit(decision: ExitDecision | None) -> bool:
     cfg = get_advanced_ml_config()
     if advanced_ml_runtime_mode(cfg) != "live":
         return False
-    return decision.action in (ExitAction.PARTIAL_EXIT, ExitAction.FULL_EXIT)
+    if decision.action not in (ExitAction.PARTIAL_EXIT, ExitAction.FULL_EXIT):
+        return False
+    if decision.hard_kill_triggered:
+        return True
+    rollout = decision.metadata.get("rollout") if isinstance(decision.metadata, dict) else None
+    if isinstance(rollout, dict):
+        return bool(rollout.get("allowed"))
+    return False
+
+
+def evaluate_live_rollout_guard(
+    decision: ExitDecision,
+    *,
+    features: dict[str, Any],
+    config: AdvancedMLConfig | None = None,
+) -> dict[str, Any]:
+    cfg = config or get_advanced_ml_config()
+    mode = advanced_ml_runtime_mode(cfg)
+    phase = int(cfg.rollout.phase)
+    reasons: list[str] = []
+    if mode != "live":
+        return {"allowed": False, "phase": phase, "bucket": None, "reasons": ["not_live_mode"]}
+    if decision.hard_kill_triggered:
+        return {"allowed": True, "phase": phase, "bucket": None, "reasons": ["hard_kill_override"]}
+    if phase < 6:
+        return {"allowed": False, "phase": phase, "bucket": None, "reasons": ["rollout_phase_below_6"]}
+
+    pair_state = str(features.get("pair_state") or "stable").strip().lower()
+    if cfg.rollout.require_elite_or_stable_pair and pair_state not in {"elite", "stable"}:
+        reasons.append(f"pair_state={pair_state}")
+    break_risk = _clamp01(_finite_float(features.get("break_risk"), 0.0) or 0.0)
+    if break_risk > cfg.rollout.max_phase6_break_risk:
+        reasons.append(f"break_risk={break_risk:.3f}")
+    book_age = _finite_float(
+        features.get("freshness_ms", features.get("book_freshness_ms", features.get("update_age_ms"))),
+        0.0,
+    ) or 0.0
+    max_book_age = min(float(cfg.rollout.max_phase6_book_age_ms), float(cfg.microstructure.max_book_age_ms))
+    if book_age > max_book_age:
+        reasons.append(f"book_age_ms={book_age:.0f}")
+    notional = _finite_float(features.get("position_notional_usdt"), 0.0) or 0.0
+    if cfg.rollout.max_phase6_position_notional_usdt > 0 and notional > cfg.rollout.max_phase6_position_notional_usdt:
+        reasons.append(f"position_notional_usdt={notional:.2f}")
+
+    shadow_status = _shadow_policy_status(cfg)
+    if cfg.rollout.require_positive_shadow_report:
+        if int(shadow_status.get("evaluated_reports", 0)) < int(cfg.rollout.min_shadow_reports):
+            reasons.append(
+                f"shadow_reports={shadow_status.get('evaluated_reports', 0)}/{cfg.rollout.min_shadow_reports}"
+            )
+        if bool(shadow_status.get("disable_advanced_live_exits")):
+            reasons.append("shadow_disagreement_limit")
+        if bool(shadow_status.get("keep_shadow_mode_enabled")):
+            reasons.append("shadow_policy_delta_not_positive")
+
+    bucket = _deterministic_rollout_bucket(
+        pair_key=str(features.get("pair_key") or _pair_key(decision.metadata.get("pair", ""))),
+        trade_id=str(features.get("trade_id") or ""),
+        salt=cfg.rollout.decision_salt,
+    )
+    live_percentage = _phase_rollout_percentage(phase, cfg.rollout.live_trade_percentage)
+    if phase >= 7 and bucket >= live_percentage:
+        reasons.append(f"rollout_bucket={bucket:.4f}>={live_percentage:.4f}")
+
+    return {
+        "allowed": not reasons,
+        "phase": phase,
+        "bucket": bucket,
+        "live_trade_percentage": live_percentage,
+        "shadow_status": shadow_status,
+        "reasons": reasons or ["rollout_allowed"],
+    }
+
+
+def learn_from_closed_trade(
+    *,
+    pair: tuple[str, str] | RuntimePair | str,
+    trade_id: str,
+    actual_pnl_usdt: float | None,
+    result_verified: bool,
+    history_recorded: bool,
+    entry_notional_usdt: float | None = None,
+    fees_usdt: float | None = None,
+    slippage_usdt: float | None = None,
+    hold_seconds: float | None = None,
+    metrics: dict[str, Any] | None = None,
+    exit_reason: str | None = None,
+    log: logging.Logger | None = None,
+) -> dict[str, Any]:
+    cfg = get_advanced_ml_config()
+    mode = advanced_ml_runtime_mode(cfg)
+    pair_obj = _coerce_pair(pair)
+    target_log = log or logger
+    payload: dict[str, Any] = {
+        "pair": pair_obj.key,
+        "trade_id": str(trade_id),
+        "mode": mode,
+        "bayes_updated": False,
+        "linucb_updated": False,
+        "state_flushed": False,
+        "skipped": False,
+        "skip_reason": None,
+    }
+    if mode == "off":
+        payload.update({"skipped": True, "skip_reason": "advanced_ml_off"})
+        return payload
+    pnl = _finite_float(actual_pnl_usdt, None)
+    if pnl is None:
+        payload.update({"skipped": True, "skip_reason": "missing_verified_pnl"})
+        return payload
+    if not result_verified or not history_recorded:
+        payload.update({"skipped": True, "skip_reason": "unverified_trade_result"})
+        return payload
+
+    trade_metrics = dict(metrics or {})
+    notional = _finite_float(entry_notional_usdt, None)
+    hold_time = max(_finite_float(hold_seconds, 0.0) or 0.0, 0.0)
+    pnl_bps = (pnl / notional * 10000.0) if notional and notional > 0 else None
+    fee_bps = ((_finite_float(fees_usdt, 0.0) or 0.0) / notional * 10000.0) if notional and notional > 0 else 0.0
+    slippage_bps = (
+        ((_finite_float(slippage_usdt, 0.0) or 0.0) / notional * 10000.0)
+        if notional and notional > 0
+        else (_finite_float(trade_metrics.get("slippage_estimate_bps"), 0.0) or 0.0)
+    )
+    hard_validation = RuntimeHardValidation(
+        is_valid=True,
+        p_value=_finite_float(trade_metrics.get("entry_p_value", trade_metrics.get("p_value")), None),
+        reasons=(),
+    )
+
+    try:
+        store = _get_model_store(cfg)
+        bayes = _get_bayes_model(cfg, store)
+        bandit = _get_bandit_model(cfg, store)
+        bayes_updated = bayes.update(
+            pair=pair_obj,
+            hard_validation=hard_validation,
+            net_pnl_after_fees=pnl,
+            net_pnl_bps=pnl_bps,
+            slippage_bps=slippage_bps,
+            hold_time_seconds=hold_time,
+        )
+        payload["bayes_updated"] = bool(bayes_updated)
+        if pnl_bps is not None:
+            vector = _closed_trade_feature_vector(trade_metrics, cfg)
+            context = {
+                "pair": pair_obj,
+                "features": vector,
+                "hard_validation": hard_validation,
+            }
+            payload["linucb_updated"] = bool(
+                bandit.update(
+                    context,
+                    pnl_bps=pnl_bps,
+                    fee_bps=fee_bps,
+                    slippage_bps=slippage_bps,
+                    excessive_hold_penalty_bps=(
+                        max(hold_time - cfg.exit.max_hold_seconds, 0.0) / max(cfg.exit.max_hold_seconds, 1.0) * 10.0
+                    ),
+                )
+            )
+        if cfg.persistence.model_state_flush_on_trade_close:
+            bayes.save_state(store)
+            bandit.save_state(store)
+            payload["state_flushed"] = True
+        payload.update(
+            {
+                "pnl_usdt": pnl,
+                "pnl_bps": pnl_bps,
+                "hold_seconds": hold_time,
+                "exit_reason": str(exit_reason or "unknown"),
+                "model_state_path": str(resolve_model_state_path(cfg.persistence.model_state_path)),
+            }
+        )
+        target_log.info(
+            "ADVANCED_ML_LEARNING_UPDATE: pair=%s pnl=%+.2f pnl_bps=%s bayes=%d linucb=%d flushed=%d reason=%s",
+            pair_obj.key,
+            pnl,
+            "n/a" if pnl_bps is None else f"{pnl_bps:+.2f}",
+            1 if payload["bayes_updated"] else 0,
+            1 if payload["linucb_updated"] else 0,
+            1 if payload["state_flushed"] else 0,
+            str(exit_reason or "unknown"),
+        )
+    except Exception as exc:
+        payload.update({"skipped": True, "skip_reason": "learning_update_failed", "error": str(exc)})
+        target_log.warning("ADVANCED_ML_LEARNING_UPDATE failed: pair=%s error=%s", pair_obj.key, exc)
+
+    _emit_advanced_event(
+        "advanced_ml_learning_update",
+        _json_safe(payload),
+        severity="warn" if payload.get("skipped") else "info",
+        log=target_log,
+    )
+    return payload
 
 
 def generate_post_trade_shadow_report(
@@ -397,6 +691,17 @@ def generate_post_trade_shadow_report(
         return None
     manager = _get_exit_manager(cfg)
     pair_obj = _coerce_pair(pair)
+    if not any(
+        _pair_key(record.pair) == pair_obj.key
+        and str(record.trade_features.get("trade_id", trade_id)) == str(trade_id)
+        for record in manager.shadow_records
+    ):
+        (log or logger).debug(
+            "ADVANCED_EXIT_POST_TRADE_SHADOW skipped: pair=%s trade_id=%s no shadow records",
+            pair_obj.key,
+            trade_id,
+        )
+        return None
     try:
         report = manager.generate_post_trade_shadow_report(
             pair_obj,
@@ -439,6 +744,13 @@ def _get_regime_detector(config: AdvancedMLConfig) -> HeuristicRegimeDetector:
     if _REGIME_DETECTOR is None:
         _REGIME_DETECTOR = HeuristicRegimeDetector(config)
     return _REGIME_DETECTOR
+
+
+def _get_hmm_refiner(config: AdvancedMLConfig) -> OptionalHMMRegimeRefiner:
+    global _HMM_REFINER
+    if _HMM_REFINER is None:
+        _HMM_REFINER = OptionalHMMRegimeRefiner(config)
+    return _HMM_REFINER
 
 
 def _log_advanced_regime_result(
@@ -531,6 +843,147 @@ def _append_shadow_report(payload: dict[str, Any]) -> None:
         temp.replace(SHADOW_REPORT_PATH)
     except Exception as exc:
         logger.warning("Failed to persist advanced ML shadow report: %s", exc)
+
+
+def _shadow_policy_status(config: AdvancedMLConfig) -> dict[str, Any]:
+    reports = _load_shadow_reports()
+    window = max(int(config.pipeline.shadow_eval_window), 1)
+    recent = reports[-window:]
+    if not recent:
+        return {
+            "evaluated_reports": 0,
+            "window": window,
+            "disable_advanced_live_exits": False,
+            "keep_shadow_mode_enabled": True,
+            "mean_disagreement_rate": 0.0,
+            "mean_net_policy_delta_usdt": 0.0,
+        }
+    disagreement = [
+        _finite_float(report.get("disagreement_rate"), 0.0) or 0.0
+        for report in recent
+        if isinstance(report, dict)
+    ]
+    deltas = [
+        _finite_float(report.get("net_policy_delta_usdt"), 0.0) or 0.0
+        for report in recent
+        if isinstance(report, dict)
+    ]
+    mean_disagreement = sum(disagreement) / max(len(disagreement), 1)
+    mean_delta = sum(deltas) / max(len(deltas), 1)
+    return {
+        "evaluated_reports": len(recent),
+        "window": window,
+        "disable_advanced_live_exits": mean_disagreement > config.pipeline.max_shadow_disagreement_rate,
+        "keep_shadow_mode_enabled": mean_delta < config.pipeline.min_shadow_policy_delta_usdt,
+        "mean_disagreement_rate": mean_disagreement,
+        "mean_net_policy_delta_usdt": mean_delta,
+    }
+
+
+def _load_shadow_reports() -> list[dict[str, Any]]:
+    try:
+        if not SHADOW_REPORT_PATH.exists():
+            return []
+        payload = json.loads(SHADOW_REPORT_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            return []
+        return [dict(item) for item in payload if isinstance(item, dict)]
+    except Exception:
+        return []
+
+
+def _deterministic_rollout_bucket(*, pair_key: str, trade_id: str, salt: str) -> float:
+    seed = f"{salt}|{pair_key}|{trade_id}".encode("utf-8", errors="ignore")
+    digest = hashlib.sha256(seed).hexdigest()[:12]
+    return int(digest, 16) / float(0xFFFFFFFFFFFF)
+
+
+def _phase_rollout_percentage(phase: int, configured_percentage: float) -> float:
+    configured = _clamp01(float(configured_percentage))
+    if phase <= 6:
+        return 1.0
+    if configured > 0.0:
+        return configured
+    if phase == 7:
+        return 0.10
+    if phase == 8:
+        return 0.25
+    if phase == 9:
+        return 0.50
+    return 1.0
+
+
+def _get_model_store(config: AdvancedMLConfig) -> ModelStateStore:
+    global _MODEL_STORE
+    if _MODEL_STORE is None:
+        _MODEL_STORE = ModelStateStore(
+            resolve_model_state_path(config.persistence.model_state_path),
+            atomic_write=config.persistence.atomic_write,
+            corrupted_state_policy=config.persistence.corrupted_state_policy,
+        )
+    return _MODEL_STORE
+
+
+def _get_bayes_model(config: AdvancedMLConfig, store: ModelStateStore) -> BayesianPairScorer:
+    global _BAYES_MODEL
+    if _BAYES_MODEL is None:
+        _BAYES_MODEL = BayesianPairScorer(config)
+        if store.path_for("bayesian_pair_scorer").exists():
+            _BAYES_MODEL.load_state(store)
+    return _BAYES_MODEL
+
+
+def _get_bandit_model(config: AdvancedMLConfig, store: ModelStateStore) -> LinUCBContextualBandit:
+    global _BANDIT_MODEL
+    if _BANDIT_MODEL is None:
+        schema = _pair_feature_schema(config)
+        _BANDIT_MODEL = LinUCBContextualBandit(config, schema=schema)
+        if store.path_for("linucb").exists():
+            _BANDIT_MODEL.load_state(store)
+    return _BANDIT_MODEL
+
+
+def _pair_feature_schema(config: AdvancedMLConfig) -> FeatureSchema:
+    return FeatureSchema(
+        PAIR_RANK_FEATURE_NAMES,
+        feature_schema_version=config.features.feature_schema_version,
+        reject_nan_features=config.features.reject_nan_features,
+    )
+
+
+def _closed_trade_feature_vector(metrics: dict[str, Any], config: AdvancedMLConfig) -> NamedFeatureVector:
+    schema = _pair_feature_schema(config)
+    values = (
+        _p_value_quality(metrics.get("entry_p_value", metrics.get("p_value"))),
+        _zero_crossing_quality(metrics.get("entry_zero_crossing", metrics.get("zero_crossing", metrics.get("zero_crossings")))),
+        _correlation_quality(metrics.get("entry_correlation", metrics.get("correlation"))),
+        _liquidity_quality(metrics),
+        _capacity_quality(metrics.get("entry_pair_order_capacity_usdt", metrics.get("pair_order_capacity_usdt"))),
+        _hedge_ratio_quality(metrics.get("entry_hedge_ratio", metrics.get("hedge_ratio"))),
+        _adf_quality(metrics.get("entry_adf_stat", metrics.get("adf_stat"))),
+        _reputation_quality(str(metrics.get("pair_state") or metrics.get("reputation_state") or "stable")),
+    )
+    return NamedFeatureVector(schema, np.asarray(values, dtype=float))
+
+
+def _emit_advanced_event(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    severity: str = "info",
+    log: logging.Logger | None = None,
+) -> None:
+    try:
+        from func_event_emitter import emit_event
+
+        emit_event(
+            event_type,
+            payload=_json_safe(payload),
+            severity=severity,
+            logger=log or logger,
+        )
+    except Exception as exc:
+        (log or logger).debug("Advanced ML event emission skipped: type=%s error=%s", event_type, exc)
 
 
 def _json_safe(value: Any) -> Any:
@@ -693,6 +1146,60 @@ def _take_profit_score(pnl: float, notional: float) -> float:
     return _clamp01(pnl / target)
 
 
+def _p_value_quality(value: Any) -> float:
+    p_value = _finite_float(value, 1.0) or 1.0
+    if p_value <= 0:
+        return 1.0
+    return _clamp01(1.0 - p_value / 0.15)
+
+
+def _zero_crossing_quality(value: Any) -> float:
+    return _clamp01((_finite_float(value, 0.0) or 0.0) / 50.0)
+
+
+def _correlation_quality(value: Any) -> float:
+    return _clamp01((abs(_finite_float(value, 0.0) or 0.0) - 0.50) / 0.50)
+
+
+def _liquidity_quality(metrics: dict[str, Any]) -> float:
+    if "liquidity_score" in metrics:
+        return _clamp01(_finite_float(metrics.get("liquidity_score"), 0.0) or 0.0)
+    liquidity = _finite_float(metrics.get("pair_liquidity_min"), 0.0) or 0.0
+    return _clamp01(math.log10(max(liquidity, 1.0)) / 5.0)
+
+
+def _capacity_quality(value: Any) -> float:
+    capacity = _finite_float(value, 0.0) or 0.0
+    return _clamp01(math.log10(max(capacity, 1.0)) / 5.0)
+
+
+def _hedge_ratio_quality(value: Any) -> float:
+    hedge_ratio = abs(_finite_float(value, 0.0) or 0.0)
+    if hedge_ratio <= 0:
+        return 0.0
+    return _clamp01(1.0 - abs(math.log(max(hedge_ratio, 1e-9))) / math.log(5.0))
+
+
+def _adf_quality(value: Any) -> float:
+    adf = _finite_float(value, 0.0) or 0.0
+    return _clamp01(abs(min(adf, 0.0)) / 5.0)
+
+
+def _reputation_quality(state: str) -> float:
+    normalized = str(state or "stable").strip().lower()
+    if normalized == "elite":
+        return 1.0
+    if normalized == "stable":
+        return 0.85
+    if normalized == "warning":
+        return 0.55
+    if normalized == "hospital":
+        return 0.20
+    if normalized == "graveyard":
+        return 0.0
+    return 0.75
+
+
 def _clamp01(value: float | None) -> float:
     try:
         number = float(value)
@@ -708,10 +1215,12 @@ __all__ = [
     "advanced_ml_config_snapshot",
     "advanced_ml_runtime_mode",
     "build_exit_features",
+    "evaluate_live_rollout_guard",
     "evaluate_advanced_regime",
     "evaluate_probabilistic_exit",
     "generate_post_trade_shadow_report",
     "get_advanced_ml_config",
+    "learn_from_closed_trade",
     "log_advanced_ml_startup_status",
     "reset_advanced_ml_runtime_cache",
     "should_apply_live_advanced_exit",

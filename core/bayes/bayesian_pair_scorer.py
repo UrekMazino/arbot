@@ -251,7 +251,12 @@ class BayesianPairScorer:
         store.save_model("bayesian_pair_scorer", self)
 
     def load_state(self, store: Any) -> None:
-        loaded = store.load_model("bayesian_pair_scorer", BayesianPairScorer, BayesianPairScorer)
+        loaded = store.load_model(
+            "bayesian_pair_scorer",
+            BayesianPairScorer,
+            lambda: BayesianPairScorer(self.config),
+            expected_feature_schema_version=self.config.features.feature_schema_version,
+        )
         with self._lock:
             self._states = dict(loaded._states)
 

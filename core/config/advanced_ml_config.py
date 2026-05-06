@@ -26,6 +26,19 @@ class PipelineConfig:
 
 
 @dataclass
+class RolloutConfig:
+    phase: int = 6
+    live_trade_percentage: float = 0.10
+    require_elite_or_stable_pair: bool = True
+    require_positive_shadow_report: bool = True
+    min_shadow_reports: int = 10
+    max_phase6_break_risk: float = 0.30
+    max_phase6_book_age_ms: float = 1500.0
+    max_phase6_position_notional_usdt: float = 500.0
+    decision_salt: str = "advanced_ml_v3_1"
+
+
+@dataclass
 class PersistenceConfig:
     model_state_flush_ticks: int = 50
     model_state_flush_on_trade_close: bool = True
@@ -144,8 +157,18 @@ class ExitConfig:
 
 
 @dataclass
+class ExtensionConfig:
+    hmm_regime_enabled: bool = False
+    global_market_context_enabled: bool = False
+    global_market_risk_weight: float = 0.15
+    global_market_high_risk_threshold: float = 0.70
+    global_market_low_risk_threshold: float = 0.30
+
+
+@dataclass
 class AdvancedMLConfig:
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    rollout: RolloutConfig = field(default_factory=RolloutConfig)
     persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     regime: RegimeConfig = field(default_factory=RegimeConfig)
@@ -155,6 +178,7 @@ class AdvancedMLConfig:
     microstructure: MicrostructureConfig = field(default_factory=MicrostructureConfig)
     ev: EVConfig = field(default_factory=EVConfig)
     exit: ExitConfig = field(default_factory=ExitConfig)
+    extensions: ExtensionConfig = field(default_factory=ExtensionConfig)
 
 
 _ENV_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
@@ -175,6 +199,30 @@ _ENV_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("pipeline", "audit_log_level"): ("STATBOT_ADVANCED_ML_AUDIT_LOG_LEVEL",),
     ("pipeline", "shadow_eval_window"): ("STATBOT_ADVANCED_ML_SHADOW_EVAL_WINDOW",),
+    ("rollout", "phase"): ("STATBOT_ADVANCED_ML_ROLLOUT_PHASE",),
+    ("rollout", "live_trade_percentage"): (
+        "STATBOT_ADVANCED_ML_LIVE_TRADE_PERCENTAGE",
+        "STATBOT_ADVANCED_ML_ROLLOUT_LIVE_TRADE_PERCENTAGE",
+    ),
+    ("rollout", "require_elite_or_stable_pair"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_REQUIRE_ELITE_OR_STABLE_PAIR",
+    ),
+    ("rollout", "require_positive_shadow_report"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_REQUIRE_POSITIVE_SHADOW_REPORT",
+    ),
+    ("rollout", "min_shadow_reports"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_MIN_SHADOW_REPORTS",
+    ),
+    ("rollout", "max_phase6_break_risk"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_MAX_PHASE6_BREAK_RISK",
+    ),
+    ("rollout", "max_phase6_book_age_ms"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_MAX_PHASE6_BOOK_AGE_MS",
+    ),
+    ("rollout", "max_phase6_position_notional_usdt"): (
+        "STATBOT_ADVANCED_ML_ROLLOUT_MAX_PHASE6_POSITION_NOTIONAL_USDT",
+    ),
+    ("rollout", "decision_salt"): ("STATBOT_ADVANCED_ML_ROLLOUT_DECISION_SALT",),
     ("persistence", "model_state_path"): ("STATBOT_ADVANCED_ML_MODEL_STATE_PATH",),
     ("persistence", "model_state_flush_ticks"): (
         "STATBOT_ADVANCED_ML_MODEL_STATE_FLUSH_TICKS",
@@ -226,6 +274,21 @@ _ENV_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
     ),
     ("regime", "regime_switch_confidence_margin"): (
         "STATBOT_ADVANCED_ML_REGIME_SWITCH_CONFIDENCE_MARGIN",
+    ),
+    ("extensions", "hmm_regime_enabled"): (
+        "STATBOT_ADVANCED_ML_HMM_REGIME_ENABLED",
+    ),
+    ("extensions", "global_market_context_enabled"): (
+        "STATBOT_ADVANCED_ML_GLOBAL_MARKET_CONTEXT_ENABLED",
+    ),
+    ("extensions", "global_market_risk_weight"): (
+        "STATBOT_ADVANCED_ML_GLOBAL_MARKET_RISK_WEIGHT",
+    ),
+    ("extensions", "global_market_high_risk_threshold"): (
+        "STATBOT_ADVANCED_ML_GLOBAL_MARKET_HIGH_RISK_THRESHOLD",
+    ),
+    ("extensions", "global_market_low_risk_threshold"): (
+        "STATBOT_ADVANCED_ML_GLOBAL_MARKET_LOW_RISK_THRESHOLD",
     ),
 }
 
@@ -298,11 +361,13 @@ __all__ = [
     "BayesianConfig",
     "EVConfig",
     "ExitConfig",
+    "ExtensionConfig",
     "FeatureConfig",
     "MicrostructureConfig",
     "PersistenceConfig",
     "PipelineConfig",
     "RankingConfig",
     "RegimeConfig",
+    "RolloutConfig",
     "load_advanced_ml_config_from_env",
 ]

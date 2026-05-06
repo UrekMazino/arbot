@@ -20,6 +20,7 @@ from core.features.feature_schema import FeatureSchemaVersionMismatch
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class StatefulModel(Protocol):
@@ -187,7 +188,22 @@ class ModelStateStore:
             )
 
 
+def resolve_model_state_path(root_path: str | Path) -> Path:
+    """Resolve relative model state paths to the shared Strategy data folder.
+
+    Execution and Strategy run from different working directories in Docker.
+    Keeping the relative default under Strategy/data/model_state lets pair
+    discovery and closed-trade learning read the same persisted models.
+    """
+
+    path = Path(root_path).expanduser()
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / "Strategy" / path
+
+
 __all__ = [
     "ModelStateStore",
     "StatefulModel",
+    "resolve_model_state_path",
 ]

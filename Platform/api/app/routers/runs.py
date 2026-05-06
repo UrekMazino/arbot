@@ -30,7 +30,10 @@ PORTFOLIO_BASES = {"realized", "live"}
 def _coerce_float(value):
     if value is None:
         return None
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -1171,6 +1174,128 @@ def analytics_data_quality(
         },
         "top_alerts": alert_top,
         "recent_issues": recent_issues,
+    }
+
+
+@router.get("/{run_id}/analytics/advanced-ml")
+def analytics_advanced_ml(
+    run_id: str,
+    _: object = Depends(require_permissions("view_dashboard")),
+    db: Session = Depends(get_db_session),
+):
+    _get_run_or_404(db, run_id)
+    advanced_types = [
+        "advanced_ml_regime_shadow",
+        "advanced_ml_regime_live",
+        "advanced_ml_exit_shadow",
+        "advanced_ml_exit_live",
+        "advanced_ml_learning_update",
+        "advanced_ml_rollout_guard",
+    ]
+    rows = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run_id, RunEvent.event_type.in_(advanced_types))
+        .order_by(RunEvent.ts.desc())
+        .limit(500)
+    ).scalars().all()
+
+    counts: dict[str, int] = {event_type: 0 for event_type in advanced_types}
+    latest_regime: dict | None = None
+    latest_exit: dict | None = None
+    latest_learning: dict | None = None
+    live_exit_events = 0
+    live_exit_allowed = 0
+    rollout_blocked = 0
+    learning_updates = 0
+    learning_skips = 0
+    bayes_updates = 0
+    linucb_updates = 0
+    regime_events = 0
+    regime_break_risk_sum = 0.0
+    exit_score_sum = 0.0
+    exit_score_count = 0
+    shadow_disagreements = 0
+    shadow_decisions = 0
+    recent: list[dict] = []
+
+    for row in rows:
+        event_type = str(row.event_type or "")
+        counts[event_type] = counts.get(event_type, 0) + 1
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        item = {
+            "event_id": row.event_id,
+            "ts": row.ts.isoformat() if row.ts else None,
+            "event_type": event_type,
+            "severity": row.severity,
+            "payload": payload,
+        }
+        recent.append(item)
+        if event_type.startswith("advanced_ml_regime"):
+            regime_events += 1
+            latest_regime = latest_regime or item
+            break_risk = _coerce_float(payload.get("break_risk"))
+            if break_risk is not None:
+                regime_break_risk_sum += break_risk
+        elif event_type.startswith("advanced_ml_exit"):
+            latest_exit = latest_exit or item
+            if event_type == "advanced_ml_exit_live":
+                live_exit_events += 1
+                if bool(payload.get("rollout_allowed")):
+                    live_exit_allowed += 1
+                else:
+                    rollout_blocked += 1
+            old_action = str(payload.get("old_action") or "")
+            new_action = str(payload.get("new_action") or "")
+            if old_action or new_action:
+                shadow_decisions += 1
+                if old_action != new_action:
+                    shadow_disagreements += 1
+            exit_score = _coerce_float(payload.get("total_exit_score"))
+            if exit_score is not None:
+                exit_score_sum += exit_score
+                exit_score_count += 1
+        elif event_type == "advanced_ml_learning_update":
+            latest_learning = latest_learning or item
+            if bool(payload.get("skipped")):
+                learning_skips += 1
+            else:
+                learning_updates += 1
+            if bool(payload.get("bayes_updated")):
+                bayes_updates += 1
+            if bool(payload.get("linucb_updated")):
+                linucb_updates += 1
+
+    return {
+        "run_id": run_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "event_counts": counts,
+        "strategy_level": {
+            "advanced_policy_mode": (
+                "live"
+                if counts.get("advanced_ml_exit_live", 0) or counts.get("advanced_ml_regime_live", 0)
+                else "shadow"
+                if counts.get("advanced_ml_exit_shadow", 0) or counts.get("advanced_ml_regime_shadow", 0)
+                else "unknown"
+            ),
+            "learning_updates": learning_updates,
+            "learning_skips": learning_skips,
+            "bayes_updates": bayes_updates,
+            "linucb_updates": linucb_updates,
+            "live_exit_events": live_exit_events,
+            "live_exit_allowed": live_exit_allowed,
+            "rollout_blocked": rollout_blocked,
+            "shadow_agreement_rate": (
+                1.0 - (shadow_disagreements / shadow_decisions)
+                if shadow_decisions > 0
+                else None
+            ),
+            "avg_exit_score": exit_score_sum / exit_score_count if exit_score_count else None,
+            "avg_break_risk": regime_break_risk_sum / regime_events if regime_events else None,
+        },
+        "latest_regime": latest_regime,
+        "latest_exit": latest_exit,
+        "latest_learning": latest_learning,
+        "recent_events": recent[:80],
     }
 
 

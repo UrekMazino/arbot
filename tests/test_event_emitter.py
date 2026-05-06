@@ -62,3 +62,6 @@ def test_emit_without_flush_respects_interval(monkeypatch, tmp_path):
 def test_advanced_ml_regime_shadow_is_registered_event_type():
     assert "advanced_ml_regime_shadow" in _KNOWN_EVENT_TYPES
     assert "advanced_ml_regime_live" in _KNOWN_EVENT_TYPES
+    assert "advanced_ml_exit_shadow" in _KNOWN_EVENT_TYPES
+    assert "advanced_ml_exit_live" in _KNOWN_EVENT_TYPES
+    assert "advanced_ml_learning_update" in _KNOWN_EVENT_TYPES

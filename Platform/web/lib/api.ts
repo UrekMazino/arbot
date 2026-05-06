@@ -233,6 +233,37 @@ export type DataQualitySummary = {
   recent_issues: DataQualityIssue[];
 };
 
+export type AdvancedMLAnalyticsEvent = {
+  event_id: string;
+  ts: string | null;
+  event_type: string;
+  severity: string;
+  payload: Record<string, unknown>;
+};
+
+export type AdvancedMLAnalytics = {
+  run_id: string;
+  generated_at: string;
+  event_counts: Record<string, number>;
+  strategy_level: {
+    advanced_policy_mode: string;
+    learning_updates: number;
+    learning_skips: number;
+    bayes_updates: number;
+    linucb_updates: number;
+    live_exit_events: number;
+    live_exit_allowed: number;
+    rollout_blocked: number;
+    shadow_agreement_rate: number | null;
+    avg_exit_score: number | null;
+    avg_break_risk: number | null;
+  };
+  latest_regime: AdvancedMLAnalyticsEvent | null;
+  latest_exit: AdvancedMLAnalyticsEvent | null;
+  latest_learning: AdvancedMLAnalyticsEvent | null;
+  recent_events: AdvancedMLAnalyticsEvent[];
+};
+
 export type ConfigSnapshotResponse = {
   run_id: string;
   source: string;
@@ -786,6 +817,10 @@ export async function getPerformanceHistory(range = "30d", limit = 5000): Promis
 
 export async function getRunDataQuality(runId: string): Promise<DataQualitySummary> {
   return apiRequest<DataQualitySummary>(`/runs/${runId}/analytics/data-quality`, { method: "GET" });
+}
+
+export async function getRunAdvancedMLAnalytics(runId: string): Promise<AdvancedMLAnalytics> {
+  return apiRequest<AdvancedMLAnalytics>(`/runs/${runId}/analytics/advanced-ml`, { method: "GET" });
 }
 
 export async function getRunConfigSnapshot(runId: string): Promise<ConfigSnapshotResponse> {

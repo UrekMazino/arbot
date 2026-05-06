@@ -28,7 +28,7 @@ from core.features.feature_schema import FeatureSchema, NamedFeatureVector  # no
 from core.online_learning.linucb import BanditContext, LinUCBContextualBandit  # noqa: E402
 from core.ranking.final_ranker import FinalRanker  # noqa: E402
 from core.regime.regime_types import RegimeName  # noqa: E402
-from core.storage.model_state_store import ModelStateStore  # noqa: E402
+from core.storage.model_state_store import ModelStateStore, resolve_model_state_path  # noqa: E402
 
 
 FEATURE_NAMES = (
@@ -105,7 +105,7 @@ def apply_advanced_pair_ranking(
         reject_nan_features=cfg.features.reject_nan_features,
     )
     store = ModelStateStore(
-        cfg.persistence.model_state_path,
+        resolve_model_state_path(cfg.persistence.model_state_path),
         atomic_write=cfg.persistence.atomic_write,
         corrupted_state_policy=cfg.persistence.corrupted_state_policy,
     )

@@ -29,6 +29,7 @@ import time
 import os
 from pathlib import Path
 import json
+import hashlib
 import sys
 from datetime import datetime, timezone
 import pandas as pd
@@ -472,6 +473,143 @@ def extract_close_prices(klines):
     return quality.get("close_prices") or []
 
 
+_PAIR_METRIC_CACHE_VERSION = 1
+
+
+def _stable_float_array(values):
+    return np.ascontiguousarray(values, dtype="<f8")
+
+
+def _stable_int_array(values):
+    source = [] if values is None else values
+    return np.ascontiguousarray(list(source), dtype="<i8")
+
+
+def _series_content_signature(log_series, timestamps):
+    log_values = _stable_float_array(log_series)
+    timestamp_values = _stable_int_array(timestamps)
+    hasher = hashlib.blake2b(digest_size=20)
+    hasher.update(b"series-v1")
+    hasher.update(timestamp_values.tobytes())
+    hasher.update(log_values.tobytes())
+    return {
+        "hash": hasher.hexdigest(),
+        "length": int(log_values.size),
+        "first_ts": int(timestamp_values[0]) if timestamp_values.size else None,
+        "last_ts": int(timestamp_values[-1]) if timestamp_values.size else None,
+    }
+
+
+def _metric_config_signature():
+    payload = {
+        "version": _PAIR_METRIC_CACHE_VERSION,
+        "z_score_window": int(z_score_window),
+        "pvalue_threshold": float(shared_coint_pvalue_threshold),
+        "zero_cross_threshold_ratio": float(cointegration_zero_cross_threshold_ratio),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.blake2b(encoded, digest_size=16).hexdigest(), payload
+
+
+def _pair_metric_cache_key(sym_1, signature_1, sym_2, signature_2, config_hash):
+    payload = {
+        "sym_1": str(sym_1),
+        "sig_1": signature_1.get("hash"),
+        "sym_2": str(sym_2),
+        "sig_2": signature_2.get("hash"),
+        "config": config_hash,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.blake2b(encoded, digest_size=24).hexdigest()
+
+
+def _metric_value_or_none(value):
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(result):
+        return None
+    return result
+
+
+def _decode_pair_metric_result(entry):
+    if not isinstance(entry, dict):
+        return None
+    result = entry.get("result")
+    if not isinstance(result, list) or len(result) != 6:
+        return None
+    try:
+        return (
+            int(result[0] or 0),
+            _metric_value_or_none(result[1]),
+            _metric_value_or_none(result[2]),
+            _metric_value_or_none(result[3]),
+            _metric_value_or_none(result[4]),
+            int(result[5] or 0),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _encode_pair_metric_result(metrics):
+    coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = metrics
+    return [
+        int(coint_flag or 0),
+        _metric_value_or_none(p_value),
+        _metric_value_or_none(adf_statistic),
+        _metric_value_or_none(critical_values),
+        _metric_value_or_none(hedge_ratio),
+        int(zero_crossings or 0),
+    ]
+
+
+def _load_pair_metric_cache(path, logger=None):
+    data = _read_json_object(path)
+    if data.get("version") != _PAIR_METRIC_CACHE_VERSION:
+        return {}, 0
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}, 0
+    return entries, len(entries)
+
+
+def _write_pair_metric_cache(path, entries, *, max_entries=None, logger=None):
+    if not isinstance(entries, dict):
+        entries = {}
+    pruned = 0
+    if max_entries is not None and max_entries >= 0 and len(entries) > max_entries:
+        def _entry_used_at(item):
+            entry = item[1] if isinstance(item[1], dict) else {}
+            return float(entry.get("used_at") or entry.get("updated_at_unix") or 0)
+
+        sorted_entries = sorted(
+            entries.items(),
+            key=_entry_used_at,
+            reverse=True,
+        )
+        pruned = len(entries) - max_entries
+        entries = dict(sorted_entries[:max_entries])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": _PAIR_METRIC_CACHE_VERSION,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "entries": entries,
+    }
+    temp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        temp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        temp_path.replace(path)
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to write pair metric cache: %s", exc)
+        return {"entries": len(entries), "pruned": pruned, "write_error": str(exc)}
+    return {"entries": len(entries), "pruned": pruned, "write_error": None}
+
+
 def _parse_quote_ccy(inst_id):
     if not inst_id:
         return ""
@@ -860,6 +998,7 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "filtered_breakdown",
         "data_quality",
         "timestamp_alignment_filtered",
+        "pair_metric_cache",
         "zero_crossing",
     ]
     scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
@@ -949,11 +1088,42 @@ def get_cointegrated_pairs(
     restricted_tickers = _load_restricted_tickers()
     restricted_removed = 0
 
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_cache_path = output_dir / "pair_metric_cache.json"
+    metric_cache_enabled = _env_bool("STATBOT_STRATEGY_PAIR_METRIC_CACHE", True)
+    metric_cache_max_entries = _env_int("STATBOT_STRATEGY_PAIR_METRIC_CACHE_MAX_ENTRIES", 50000, minimum=0)
+    metric_cache_entries = {}
+    metric_cache_loaded_entries = 0
+    if metric_cache_enabled:
+        metric_cache_entries, metric_cache_loaded_entries = _load_pair_metric_cache(
+            metric_cache_path,
+            logger=logger,
+        )
+    metric_config_hash, metric_config = _metric_config_signature()
+    metric_cache_stats = {
+        "enabled": bool(metric_cache_enabled),
+        "persisted": bool(metric_cache_enabled and write_output),
+        "path": str(metric_cache_path),
+        "loaded_entries": metric_cache_loaded_entries,
+        "hits": 0,
+        "misses": 0,
+        "writes": 0,
+        "entries": metric_cache_loaded_entries,
+        "pruned": 0,
+        "write_error": None,
+        "max_entries": metric_cache_max_entries,
+        "config": metric_config,
+    }
+    metric_cache_dirty = False
+    scan_time = time.time()
+    scan_unix = int(scan_time)
+
     bar_ms = _parse_timeframe_ms(time_frame)
     closed_candle_only = _env_bool("STATBOT_STRATEGY_CLOSED_CANDLE_ONLY", True)
     max_missing_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_MISSING_BARS_ANALYSIS", 2, minimum=0)
     max_stale_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_STALE_BARS", 5, minimum=0)
-    now_ms = int(time.time() * 1000)
+    now_ms = int(scan_time * 1000)
     data_quality = {
         "total_symbols": len(json_symbols),
         "tradable_symbols": 0,
@@ -989,6 +1159,7 @@ def get_cointegrated_pairs(
     log_series_by_symbol = {}
     returns_by_symbol = {}
     timestamps_by_symbol = {}
+    symbol_signatures = {}
     symbol_meta = {}
     for sym, data in json_symbols.items():
         klines = data.get('klines', []) if isinstance(data, dict) else []
@@ -1016,7 +1187,9 @@ def get_cointegrated_pairs(
 
         series_by_symbol[sym] = series
         log_series_by_symbol[sym] = log_series
-        timestamps_by_symbol[sym] = tuple(quality.get("timestamps") or ())
+        timestamp_tuple = tuple(quality.get("timestamps") or ())
+        timestamps_by_symbol[sym] = timestamp_tuple
+        symbol_signatures[sym] = _series_content_signature(log_series, timestamp_tuple)
         returns = np.diff(log_series)
         if corr_lookback and corr_lookback > 0 and returns.size > corr_lookback:
             returns = returns[-corr_lookback:]
@@ -1334,10 +1507,55 @@ def get_cointegrated_pairs(
                 filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
                 continue
 
-        # Check for cointegration using precomputed logs
-        coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
-            calculate_cointegration_from_log(series_1_log, series_2_log)
-        )
+        cache_key = None
+        cached_metrics = None
+        if metric_cache_enabled:
+            signature_1 = symbol_signatures.get(sym_1)
+            signature_2 = symbol_signatures.get(sym_2)
+            if signature_1 and signature_2:
+                cache_key = _pair_metric_cache_key(
+                    sym_1,
+                    signature_1,
+                    sym_2,
+                    signature_2,
+                    metric_config_hash,
+                )
+                cached_metrics = _decode_pair_metric_result(metric_cache_entries.get(cache_key))
+
+        if cached_metrics is not None:
+            metric_cache_stats["hits"] += 1
+            metric_cache_entries[cache_key]["used_at"] = scan_unix
+            metric_cache_dirty = True
+            coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = cached_metrics
+        else:
+            if metric_cache_enabled:
+                metric_cache_stats["misses"] += 1
+            # Check for cointegration using precomputed logs
+            coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
+                calculate_cointegration_from_log(series_1_log, series_2_log)
+            )
+            if metric_cache_enabled and cache_key:
+                metric_cache_entries[cache_key] = {
+                    "sym_1": sym_1,
+                    "sym_2": sym_2,
+                    "series_1_hash": symbol_signatures[sym_1]["hash"],
+                    "series_2_hash": symbol_signatures[sym_2]["hash"],
+                    "config_hash": metric_config_hash,
+                    "result": _encode_pair_metric_result(
+                        (
+                            coint_flag,
+                            p_value,
+                            adf_statistic,
+                            critical_values,
+                            hedge_ratio,
+                            zero_crossings,
+                        )
+                    ),
+                    "updated_at_unix": scan_unix,
+                    "used_at": scan_unix,
+                }
+                metric_cache_stats["writes"] += 1
+                metric_cache_dirty = True
 
         if coint_flag == 1:
             if zero_crossings > 0:
@@ -1561,8 +1779,6 @@ def get_cointegrated_pairs(
     usable_pairs_without_crossings = int(len(df_coint) - usable_pairs_with_crossings)
     crossing_candidates_filtered_later = max(int(pairs_with_crossings) - usable_pairs_with_crossings, 0)
 
-    output_dir = Path(__file__).resolve().parent / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "2_cointegrated_pairs.csv"
     if write_output:
         output_status = _write_cointegrated_pairs_csv(
@@ -1588,6 +1804,17 @@ def get_cointegrated_pairs(
     accumulation_cap_filtered = int(output_status.get("accumulation_cap_filtered") or 0)
     if accumulation_cap_filtered:
         filtered_breakdown["accumulation_cap"] = accumulation_cap_filtered
+    if metric_cache_enabled and metric_cache_dirty and write_output:
+        metric_cache_stats.update(
+            _write_pair_metric_cache(
+                metric_cache_path,
+                metric_cache_entries,
+                max_entries=metric_cache_max_entries,
+                logger=logger,
+            )
+        )
+    else:
+        metric_cache_stats["entries"] = len(metric_cache_entries)
     summary = {
         "total_pairs": total_comparisons,
         "cointegrated_pairs": len(coint_pair_list),
@@ -1603,6 +1830,7 @@ def get_cointegrated_pairs(
         "crossing_reject_examples": crossing_reject_examples,
         "filtered_breakdown": filtered_breakdown,
         "data_quality": data_quality,
+        "pair_metric_cache": metric_cache_stats,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),

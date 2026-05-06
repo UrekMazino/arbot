@@ -146,3 +146,67 @@ def test_get_cointegrated_pairs_skips_timestamp_mismatch_before_stats(monkeypatc
     assert summary["filtered_breakdown"]["timestamp_alignment"] == 1
     assert summary["timestamp_alignment_filtered"] == 1
     assert summary["data_quality"]["tradable_symbols"] == 2
+
+
+def test_pair_metric_cache_reuses_only_unchanged_content(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setenv("STATBOT_STRATEGY_PAIR_METRIC_CACHE", "1")
+
+    calls = {"count": 0}
+
+    def fake_cointegration(*_args, **_kwargs):
+        calls["count"] += 1
+        return 0, 0.5, -1.0, -3.0, 1.0, 0
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fake_cointegration)
+    timestamps = [idx for idx in range(4)]
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.0, 10.1, 10.2, 10.3], timestamps),
+        "BBB-USDT-SWAP": _symbol([11.0, 11.1, 11.2, 11.3], timestamps),
+    }
+
+    _, first_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=True,
+    )
+    assert calls["count"] == 1
+    assert first_summary["pair_metric_cache"]["misses"] == 1
+    assert first_summary["pair_metric_cache"]["writes"] == 1
+
+    def fail_cointegration(*_args, **_kwargs):
+        raise AssertionError("unchanged pair metrics should come from cache")
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fail_cointegration)
+    _, second_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=True,
+    )
+    assert second_summary["pair_metric_cache"]["hits"] == 1
+    assert second_summary["pair_metric_cache"]["misses"] == 0
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fake_cointegration)
+    changed_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.5, 10.1, 10.2, 10.3], timestamps),
+        "BBB-USDT-SWAP": _symbol([11.0, 11.1, 11.2, 11.3], timestamps),
+    }
+    _, third_summary = fc.get_cointegrated_pairs(
+        changed_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=True,
+    )
+
+    assert calls["count"] == 2
+    assert third_summary["pair_metric_cache"]["hits"] == 0
+    assert third_summary["pair_metric_cache"]["misses"] == 1

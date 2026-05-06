@@ -7,7 +7,10 @@ mandatory in the architecture and is not represented as a configurable flag.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
+from typing import Any
 
 
 @dataclass
@@ -154,6 +157,141 @@ class AdvancedMLConfig:
     exit: ExitConfig = field(default_factory=ExitConfig)
 
 
+_ENV_ALIASES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("pipeline", "enabled"): ("STATBOT_ADVANCED_ML_ENABLED",),
+    ("pipeline", "shadow_mode"): (
+        "STATBOT_ADVANCED_ML_SHADOW_MODE",
+        "STATBOT_ADVANCED_ML_SHADOW",
+    ),
+    ("pipeline", "max_pairs_active"): ("STATBOT_ADVANCED_ML_MAX_PAIRS_ACTIVE",),
+    ("pipeline", "emergency_disable_on_shadow_divergence"): (
+        "STATBOT_ADVANCED_ML_EMERGENCY_DISABLE_ON_SHADOW_DIVERGENCE",
+    ),
+    ("pipeline", "max_shadow_disagreement_rate"): (
+        "STATBOT_ADVANCED_ML_MAX_SHADOW_DISAGREEMENT_RATE",
+    ),
+    ("pipeline", "min_shadow_policy_delta_usdt"): (
+        "STATBOT_ADVANCED_ML_MIN_SHADOW_POLICY_DELTA_USDT",
+    ),
+    ("pipeline", "audit_log_level"): ("STATBOT_ADVANCED_ML_AUDIT_LOG_LEVEL",),
+    ("pipeline", "shadow_eval_window"): ("STATBOT_ADVANCED_ML_SHADOW_EVAL_WINDOW",),
+    ("persistence", "model_state_path"): ("STATBOT_ADVANCED_ML_MODEL_STATE_PATH",),
+    ("persistence", "model_state_flush_ticks"): (
+        "STATBOT_ADVANCED_ML_MODEL_STATE_FLUSH_TICKS",
+    ),
+    ("persistence", "model_state_flush_on_trade_close"): (
+        "STATBOT_ADVANCED_ML_MODEL_STATE_FLUSH_ON_TRADE_CLOSE",
+    ),
+    ("features", "feature_schema_version"): (
+        "STATBOT_ADVANCED_ML_FEATURE_SCHEMA_VERSION",
+    ),
+    ("features", "reject_nan_features"): ("STATBOT_ADVANCED_ML_REJECT_NAN_FEATURES",),
+    ("ranking", "final_score_soft_cap"): ("STATBOT_ADVANCED_ML_FINAL_SCORE_SOFT_CAP",),
+    ("microstructure", "max_book_age_ms"): ("STATBOT_ADVANCED_ML_MAX_BOOK_AGE_MS",),
+    ("microstructure", "max_allowed_slippage_bps"): (
+        "STATBOT_ADVANCED_ML_MAX_ALLOWED_SLIPPAGE_BPS",
+    ),
+    ("microstructure", "exit_score_slippage_cap"): (
+        "STATBOT_ADVANCED_ML_EXIT_SCORE_SLIPPAGE_CAP",
+    ),
+    ("microstructure", "fast_adverse_threshold"): (
+        "STATBOT_ADVANCED_ML_FAST_ADVERSE_THRESHOLD",
+    ),
+    ("microstructure", "wide_spread_bps"): ("STATBOT_ADVANCED_ML_WIDE_SPREAD_BPS",),
+    ("ev", "time_penalty_rate_per_hour"): (
+        "STATBOT_ADVANCED_ML_TIME_PENALTY_RATE_PER_HOUR",
+    ),
+    ("ev", "spread_edge_per_sigma_usdt"): (
+        "STATBOT_ADVANCED_ML_SPREAD_EDGE_PER_SIGMA_USDT",
+    ),
+    ("ev", "expected_adverse_sigma_move"): (
+        "STATBOT_ADVANCED_ML_EXPECTED_ADVERSE_SIGMA_MOVE",
+    ),
+    ("ev", "target_exit_z"): ("STATBOT_ADVANCED_ML_TARGET_EXIT_Z",),
+    ("ev", "exit_fee_rate"): ("STATBOT_ADVANCED_ML_EXIT_FEE_RATE",),
+    ("exit", "exit_hold_threshold"): ("STATBOT_ADVANCED_ML_EXIT_HOLD_THRESHOLD",),
+    ("exit", "exit_tighten_threshold"): (
+        "STATBOT_ADVANCED_ML_EXIT_TIGHTEN_THRESHOLD",
+    ),
+    ("exit", "exit_partial_threshold"): (
+        "STATBOT_ADVANCED_ML_EXIT_PARTIAL_THRESHOLD",
+    ),
+    ("exit", "max_hold_seconds"): ("STATBOT_ADVANCED_ML_MAX_HOLD_SECONDS",),
+    ("exit", "max_drawdown_usdt"): ("STATBOT_ADVANCED_ML_MAX_DRAWDOWN_USDT",),
+    ("regime", "min_regime_persistence_ticks"): (
+        "STATBOT_ADVANCED_ML_MIN_REGIME_PERSISTENCE_TICKS",
+    ),
+    ("regime", "regime_switch_cooldown_seconds"): (
+        "STATBOT_ADVANCED_ML_REGIME_SWITCH_COOLDOWN_SECONDS",
+    ),
+    ("regime", "regime_switch_confidence_margin"): (
+        "STATBOT_ADVANCED_ML_REGIME_SWITCH_CONFIDENCE_MARGIN",
+    ),
+}
+
+
+def load_advanced_ml_config_from_env(
+    env: Mapping[str, str] | None = None,
+) -> AdvancedMLConfig:
+    """Build AdvancedMLConfig from STATBOT_ADVANCED_ML_* environment values.
+
+    Missing or malformed values keep dataclass defaults so runtime startup does
+    not fail because of a mistyped optional tuning field.
+    """
+
+    source = os.environ if env is None else env
+    config = AdvancedMLConfig()
+    for section_field in fields(config):
+        section_name = section_field.name
+        section = getattr(config, section_name)
+        for value_field in fields(section):
+            raw = _first_env_value(
+                source,
+                *_env_names_for_field(section_name, value_field.name),
+            )
+            if raw is None:
+                continue
+            current_value = getattr(section, value_field.name)
+            setattr(section, value_field.name, _parse_env_value(raw, current_value))
+    return config
+
+
+def _env_names_for_field(section: str, field_name: str) -> tuple[str, ...]:
+    aliases = _ENV_ALIASES.get((section, field_name), ())
+    default_name = f"STATBOT_ADVANCED_ML_{section.upper()}_{field_name.upper()}"
+    return (*aliases, default_name)
+
+
+def _first_env_value(env: Mapping[str, str], *names: str) -> str | None:
+    for name in names:
+        raw = env.get(name)
+        if raw is not None and str(raw).strip() != "":
+            return str(raw).strip()
+    return None
+
+
+def _parse_env_value(raw: str, default: Any) -> Any:
+    try:
+        if isinstance(default, bool):
+            return _parse_bool(raw, default)
+        if isinstance(default, int) and not isinstance(default, bool):
+            return int(float(raw))
+        if isinstance(default, float):
+            return float(raw)
+        return str(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_bool(raw: str, default: bool) -> bool:
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on", "enabled", "active", "shadow"}:
+        return True
+    if value in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
 __all__ = [
     "AdvancedMLConfig",
     "BanditConfig",
@@ -166,4 +304,5 @@ __all__ = [
     "PipelineConfig",
     "RankingConfig",
     "RegimeConfig",
+    "load_advanced_ml_config_from_env",
 ]

@@ -131,6 +131,7 @@ def test_execution_defers_to_fresh_pair_supply_start_request(monkeypatch, tmp_pa
     )
 
     monkeypatch.setattr(me, "PAIR_SUPPLY_STATE_FILE", state_path)
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATUS_FILE", tmp_path / "missing_status.json")
     monkeypatch.setattr(me.subprocess, "call", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError()))
 
     status = me._get_pair_supply_runtime_status()
@@ -151,6 +152,7 @@ def test_execution_trusts_fresh_remote_pair_supply_state_without_local_pid(monke
             "desired_running": True,
             "pid": 12345,
             "detail": "started",
+            "pair_supply_mode": "full_discovery",
             "process_owner": "pair-supply-runner",
             "updated_at": now,
         },
@@ -158,12 +160,49 @@ def test_execution_trusts_fresh_remote_pair_supply_state_without_local_pid(monke
 
     monkeypatch.setenv("STATBOT_PROCESS_OWNER", "bot-runner")
     monkeypatch.setattr(me, "PAIR_SUPPLY_STATE_FILE", state_path)
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATUS_FILE", tmp_path / "missing_status.json")
     monkeypatch.setattr(me, "_pid_matches_pair_supply", lambda _pid: False)
 
     status = me._get_pair_supply_runtime_status()
 
     assert status["running"] is True
     assert status["defer_to_supply"] is True
+    assert status["pair_supply_mode"] == "full_discovery"
+
+
+def test_execution_does_not_defer_to_pair_supply_health_refresh_with_canonical_rows(monkeypatch, tmp_path):
+    state_path = tmp_path / "pair_supply_control.json"
+    status_path = tmp_path / "2_cointegrated_pairs_status.json"
+    now = datetime.now(timezone.utc).isoformat()
+    _write_supply_state(
+        state_path,
+        {
+            "running": True,
+            "desired_running": True,
+            "pid": 12345,
+            "detail": "health_refresh",
+            "pair_supply_mode": "health_refresh",
+            "process_owner": "pair-supply-runner",
+            "updated_at": now,
+            "status": {"canonical_rows": 8, "pair_supply_mode": "health_refresh"},
+        },
+    )
+    status_path.write_text(
+        json.dumps({"canonical_rows": 8, "pair_supply_mode": "health_refresh"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("STATBOT_PROCESS_OWNER", "bot-runner")
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATE_FILE", state_path)
+    monkeypatch.setattr(me, "PAIR_SUPPLY_STATUS_FILE", status_path)
+    monkeypatch.setattr(me, "_pid_matches_pair_supply", lambda _pid: False)
+
+    status = me._get_pair_supply_runtime_status()
+
+    assert status["running"] is True
+    assert status["canonical_rows"] == 8
+    assert status["pair_supply_mode"] == "health_refresh"
+    assert status["defer_to_supply"] is False
 
 
 def test_execution_trusts_existing_supplied_pair_universe_rows_when_runner_stopped(monkeypatch, tmp_path):

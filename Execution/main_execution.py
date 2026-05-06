@@ -1609,11 +1609,20 @@ def _get_pair_supply_runtime_status():
         running = bool(state.get("running")) and (runner_alive or state_fresh)
     else:
         running = bool(state.get("running")) and _pid_matches_pair_supply(pid)
-    defer_to_supply = bool(running or (desired_running and (runner_alive or request_fresh or state_fresh)))
+    pair_supply_mode = str(
+        state.get("pair_supply_mode") or status_metadata.get("pair_supply_mode") or ""
+    ).strip().lower()
+    canonical_rows = _pair_supply_canonical_rows(status_metadata)
+    full_discovery_active = bool(running and pair_supply_mode in {"full_discovery", "scan", "starting_full_discovery"})
+    waiting_for_initial_supply = bool(
+        canonical_rows <= 0 and (running or (desired_running and (runner_alive or request_fresh or state_fresh)))
+    )
+    defer_to_supply = bool(full_discovery_active or waiting_for_initial_supply)
     return {
         "running": running,
         "desired_running": desired_running,
         "defer_to_supply": defer_to_supply,
+        "pair_supply_mode": pair_supply_mode,
         "runner_alive": runner_alive,
         "request_fresh": request_fresh,
         "state_fresh": state_fresh,
@@ -1624,7 +1633,7 @@ def _get_pair_supply_runtime_status():
         "process_mode": state.get("process_mode") or "",
         "process_owner": state.get("process_owner") or "",
         "runner_heartbeat_at": state.get("runner_heartbeat_at") or "",
-        "canonical_rows": _pair_supply_canonical_rows(status_metadata),
+        "canonical_rows": canonical_rows,
         "status": status_metadata,
     }
 

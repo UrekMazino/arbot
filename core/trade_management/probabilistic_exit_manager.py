@@ -246,6 +246,7 @@ class ProbabilisticExitManager:
             hard_kill_triggered=False,
             blocked_by_net_profit_guard=blocked_by_net_profit_guard,
             metadata={
+                "pair": pair,
                 "shadow_mode": self.shadow_mode,
                 "ev_recommendation": ev.recommendation.value,
                 "recommended_order_style": microstructure.recommended_order_style,
@@ -430,7 +431,6 @@ class ProbabilisticExitManager:
         )
 
     def _disabled_decision(self, pair: Any, features: dict[str, Any]) -> ExitDecision:
-        del pair
         hard_kill = HardKillResult(False, ExitAction.HOLD, 0.0, "advanced exit disabled", 0.0)
         return ExitDecision(
             action=ExitAction.HOLD,
@@ -456,6 +456,7 @@ class ProbabilisticExitManager:
             hard_kill_triggered=False,
             blocked_by_net_profit_guard=False,
             metadata={
+                "pair": pair,
                 "shadow_mode": self.shadow_mode,
                 "advanced_enabled": False,
             },

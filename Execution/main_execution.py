@@ -86,6 +86,13 @@ from strategy_router import (
     StrategyRouter,
     should_block_new_entries as should_block_strategy_entries,
 )
+from advanced_ml_runtime import (
+    advanced_ml_config_snapshot,
+    advanced_ml_runtime_mode,
+    evaluate_advanced_regime,
+    generate_post_trade_shadow_report,
+    log_advanced_ml_startup_status,
+)
 from func_strategy_state import record_strategy_trade_result
 from cointegration_health import (
     COINT_HEALTH_VALID,
@@ -224,6 +231,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "strategy_eval_seconds": _env_text("STATBOT_STRATEGY_EVAL_SECONDS", "30"),
             "event_heartbeat_seconds": _env_text("STATBOT_EVENT_HEARTBEAT_SECONDS", "60"),
         },
+        "advanced_ml": advanced_ml_config_snapshot(),
         "strategy": {
             "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
             "strategy_kline_limit": _env_text("STATBOT_STRATEGY_KLINE_LIMIT", "2880"),
@@ -3303,6 +3311,7 @@ if __name__ == "__main__":
     regime_eval_seconds = _get_regime_eval_seconds()
     regime_market_symbol = _get_regime_market_symbol()
     last_regime_eval_ts = 0.0
+    last_advanced_regime_eval_ts = 0.0
     last_regime_decision = None
     last_regime_gate_log_ts = 0.0
     strategy_router = StrategyRouter()
@@ -3355,6 +3364,8 @@ if __name__ == "__main__":
     else:
         logger.warning("Strategy router ACTIVE mode enabled: strategy gate + policy enforcement is on.")
 
+    advanced_ml_startup_snapshot = log_advanced_ml_startup_status(logger)
+
     # Retry startup balance capture once if the earliest snapshot was unavailable.
     if (not balance_res or balance_res.get("code") != "0") and starting_equity <= 0:
         starting_equity, balance_res, avail_bal, avail_eq = _capture_starting_equity_snapshot()
@@ -3371,6 +3382,7 @@ if __name__ == "__main__":
             "pair": f"{ticker_1}/{ticker_2}",
             "regime_mode": regime_mode,
             "strategy_mode": strategy_mode,
+            "advanced_ml_mode": advanced_ml_startup_snapshot.get("mode"),
             "starting_equity_usdt": starting_equity,
             "config_snapshot": _build_startup_config_snapshot(regime_mode, strategy_mode),
         },
@@ -3839,6 +3851,43 @@ if __name__ == "__main__":
                             severity="warn",
                             logger=logger,
                         )
+
+            should_eval_advanced_regime = (
+                latest_zscore is not None
+                and (
+                    last_advanced_regime_eval_ts <= 0
+                    or (current_time - last_advanced_regime_eval_ts) >= regime_eval_seconds
+                )
+            )
+            if should_eval_advanced_regime:
+                advanced_regime_result = evaluate_advanced_regime(
+                    pair=(ticker_1, ticker_2),
+                    zscore_series=list(zscore_series or []),
+                    metrics=metrics or {},
+                    legacy_decision=last_regime_decision,
+                    log=logger,
+                )
+                if advanced_regime_result is not None:
+                    last_advanced_regime_eval_ts = current_time
+                    advanced_mode = advanced_ml_runtime_mode()
+                    emit_event(
+                        "advanced_ml_regime_live" if advanced_mode == "live" else "advanced_ml_regime_shadow",
+                        payload={
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "legacy_regime": (
+                                getattr(last_regime_decision, "regime", None)
+                                if last_regime_decision is not None
+                                else None
+                            ),
+                            "advanced_regime": advanced_regime_result.regime.value,
+                            "confidence": advanced_regime_result.confidence,
+                            "break_risk": advanced_regime_result.break_risk,
+                            "shadow": advanced_mode != "live",
+                            "mode": advanced_mode,
+                        },
+                        severity="info",
+                        logger=logger,
+                    )
 
             if strategy_mode != "off":
                 should_eval_strategy = (
@@ -4765,6 +4814,19 @@ if __name__ == "__main__":
                         hold_minutes = max((time.time() - float(entry_time_ts)) / 60.0, 0.0)
                     except (TypeError, ValueError):
                         hold_minutes = None
+
+                advanced_trade_id = "%s:%s" % (
+                    "/".join(sorted((str(ticker_1).upper(), str(ticker_2).upper()))),
+                    entry_time_ts if entry_time_ts is not None else "unknown",
+                )
+                if actual_pnl is not None:
+                    generate_post_trade_shadow_report(
+                        pair=(ticker_1, ticker_2),
+                        trade_id=advanced_trade_id,
+                        actual_pnl_usdt=actual_pnl,
+                        actual_exit_timestamp=time.time(),
+                        log=logger,
+                    )
 
                 # Reconcile estimate vs realized result using per-trade costs.
                 if actual_pnl is not None:

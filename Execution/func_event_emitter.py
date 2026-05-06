@@ -16,6 +16,8 @@ _SEVERITY_VALUES = {"info", "warn", "error", "critical"}
 _KNOWN_EVENT_TYPES = {
     "heartbeat",
     "regime_update",
+    "advanced_ml_regime_shadow",
+    "advanced_ml_regime_live",
     "strategy_update",
     "trade_open",
     "trade_close",

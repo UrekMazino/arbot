@@ -568,6 +568,18 @@ def _curate_row(
         "zero_crossings": crossings,
         "liquidity_min": liquidity,
         "capacity_usdt": capacity,
+        "advanced_shadow_mode": bool(str(row.get("advanced_shadow_mode", "")).strip().lower() in {"1", "true", "yes"}),
+        "advanced_rank_live_applied": bool(
+            str(row.get("advanced_rank_live_applied", "")).strip().lower() in {"1", "true", "yes"}
+        ),
+        "advanced_bayes_probability": _safe_float(row.get("advanced_bayes_probability")),
+        "advanced_bayes_grade": (
+            str(row.get("advanced_bayes_grade") or "").strip().upper() or None
+        ),
+        "advanced_bandit_score": _safe_float(row.get("advanced_bandit_score")),
+        "advanced_final_score": _safe_float(row.get("advanced_final_score")),
+        "advanced_final_rank": _safe_int(row.get("advanced_final_rank")),
+        "advanced_rank_reason": str(row.get("advanced_rank_reason") or "").strip() or None,
         "latest_zscore": float(latest_z) if isinstance(latest_z, (int, float)) and math.isfinite(latest_z) else None,
         "price_samples": min_len,
         "checked_at": _utc_iso_now(),

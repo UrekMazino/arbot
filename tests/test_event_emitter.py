@@ -9,6 +9,7 @@ if str(EXECUTION_DIR) not in sys.path:
     sys.path.insert(0, str(EXECUTION_DIR))
 
 from func_event_emitter import EventEmitter
+from func_event_emitter import _KNOWN_EVENT_TYPES
 
 
 def test_emit_flush_forces_small_batch(monkeypatch, tmp_path):
@@ -56,3 +57,8 @@ def test_emit_without_flush_respects_interval(monkeypatch, tmp_path):
 
     assert posted_batches == []
     assert len(emitter._queue) == 1
+
+
+def test_advanced_ml_regime_shadow_is_registered_event_type():
+    assert "advanced_ml_regime_shadow" in _KNOWN_EVENT_TYPES
+    assert "advanced_ml_regime_live" in _KNOWN_EVENT_TYPES

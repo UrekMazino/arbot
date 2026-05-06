@@ -77,6 +77,7 @@ Execution/logfile_okx.log
 Strategy/1_price_list.json
 Strategy/2_cointegrated_pairs.csv
 Strategy/3_backtest_file.csv
+Strategy/data/model_state/
 Strategy/output/
 Strategy/state/
 Strategy/4_summary_report_*

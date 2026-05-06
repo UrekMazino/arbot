@@ -124,16 +124,34 @@ def test_disabled_advanced_exit_noops_and_does_not_submit_order():
     config = _config()
     config.pipeline.enabled = False
     manager = ProbabilisticExitManager(adapter, config, shadow_mode=False)
+    pair = Pair()
 
     decision = manager.evaluate_exit(
-        Pair(),
+        pair,
         _features(current_z=5.5, entry_z=2.0, catastrophic_divergence_sigma=1.0),
     )
 
     assert decision.action == ExitAction.HOLD
     assert decision.reason == "advanced exit disabled by config"
     assert decision.metadata["advanced_enabled"] is False
+    assert decision.metadata["pair"] == pair
     assert adapter.submitted == []
+
+
+def test_soft_exit_decision_metadata_includes_pair_for_runtime_logs():
+    adapter = FakeExistingBotAdapter()
+    config = _config()
+    manager = ProbabilisticExitManager(adapter, config, shadow_mode=True)
+    pair = Pair()
+
+    decision = manager.evaluate_exit(
+        pair,
+        _features(current_z=1.8, entry_z=2.0, catastrophic_divergence_sigma=10.0),
+    )
+
+    assert decision.hard_kill_triggered is False
+    assert decision.reason == "probabilistic soft exit scoring"
+    assert decision.metadata["pair"] == pair
 
 
 def test_trend_continuation_risk_formula_is_exact():

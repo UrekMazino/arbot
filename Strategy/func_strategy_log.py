@@ -113,8 +113,10 @@ def get_strategy_logger():
         if backups < 0:
             backups = 3
         max_bytes = max_mb * 1024 * 1024
+        log_file = Path(log_path).expanduser()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
-            log_path,
+            str(log_file),
             maxBytes=max_bytes,
             backupCount=backups,
             encoding="utf-8",

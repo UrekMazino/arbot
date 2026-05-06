@@ -3,6 +3,8 @@ from scipy.stats import false_discovery_control
 
 from config_execution_api import (
     account_session,
+    ticker_1,
+    ticker_2,
     signal_positive_ticker,
     signal_negative_ticker,
     ENTRY_Z,
@@ -378,6 +380,10 @@ import datetime
 from regime_router import resolve_regime_policy_overrides
 from strategy_router import resolve_strategy_policy_overrides
 from trade_quality_gate import evaluate_trade_quality
+from advanced_ml_runtime import (
+    evaluate_probabilistic_exit,
+    should_apply_live_advanced_exit,
+)
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
@@ -3115,6 +3121,24 @@ def monitor_exit(
         hard_stop_basis = "equity"
         pnl_pct = pnl_pct_equity
 
+    def _evaluate_advanced_exit(old_action="hold", old_reason="legacy hold"):
+        return evaluate_probabilistic_exit(
+            pair=(ticker_1, ticker_2),
+            zscore_series=list(zscore or []),
+            metrics=metrics or {},
+            latest_zscore=latest_zscore,
+            entry_z=entry_z,
+            entry_time=entry_time,
+            entry_notional=entry_notional_val,
+            floating_pnl_usdt=floating_pnl_usdt,
+            pnl_pct=pnl_pct,
+            regime_decision=regime_decision,
+            strategy_decision=strategy_decision,
+            old_action=old_action,
+            old_reason=old_reason,
+            log=logger,
+        )
+
     coint_lost_seconds = 0.0
     coint_lost_confirm_count = 0
     if coint_flag == 0:
@@ -3176,6 +3200,7 @@ def monitor_exit(
         )
         logger.info(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("")
         _close_trade_manager()
         return 2
@@ -3188,6 +3213,7 @@ def monitor_exit(
         )
         logger.error(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("exit_tier_1_stop_loss")
         set_last_health_score(0)
         _close_trade_manager()
@@ -3221,6 +3247,7 @@ def monitor_exit(
         )
         logger.warning(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("exit_tier_15_riskoff_coint_loss")
         set_last_health_score(0)
         _close_trade_manager()
@@ -3242,6 +3269,7 @@ def monitor_exit(
         )
         logger.warning(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("exit_tier_2_coint_losing")
         set_last_health_score(0)
         _close_trade_manager()
@@ -3255,6 +3283,7 @@ def monitor_exit(
         )
         logger.warning(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("exit_tier_3_coint_grace")
         set_last_health_score(0)
         _close_trade_manager()
@@ -3273,6 +3302,7 @@ def monitor_exit(
             )
             logger.warning(msg)
             print(msg)
+            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
             set_last_switch_reason("exit_tier_4_divergence")
             set_last_health_score(0)
             _close_trade_manager()
@@ -3293,12 +3323,14 @@ def monitor_exit(
             msg = "KILL-SWITCH TRIGGERED: " + str(tm_result.get("message", tm_result.get("reason")))
             logger.warning(msg)
             print(msg)
+            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
             set_last_switch_reason("")
             _close_trade_manager()
             return 2
 
         if tm_result.get("action") == "PARTIAL_EXIT":
             percentage = tm_result.get("percentage", 0.0)
+            _evaluate_advanced_exit(old_action="partial_exit", old_reason=str(tm_result.get("reason", "legacy partial exit")))
             if _execute_partial_exit(percentage):
                 trade_manager.execute_partial_exit(pnl=0.0)
                 logger.info("Partial exit completed (%.0f%%).", percentage * 100)
@@ -3321,6 +3353,7 @@ def monitor_exit(
             )
             logger.error(msg)
             print(msg)
+            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
             set_last_switch_reason("")
             return 2
         logger.info("Holding position (no entry context). Will close on mean reversion only.")
@@ -3335,6 +3368,7 @@ def monitor_exit(
             )
             logger.warning(msg)
             print(msg)
+            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
             set_last_switch_reason("")
             _close_trade_manager()
             return 2
@@ -3344,8 +3378,42 @@ def monitor_exit(
         msg = "KILL-SWITCH TRIGGERED: Mean reversion exit (no entry context) - Z=%.4f" % latest_zscore
         logger.info(msg)
         print(msg)
+        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
         set_last_switch_reason("")
         return 2
+
+    advanced_exit_decision = _evaluate_advanced_exit(old_action="hold", old_reason="legacy hold")
+    if should_apply_live_advanced_exit(advanced_exit_decision):
+        action_value = getattr(advanced_exit_decision.action, "value", str(advanced_exit_decision.action))
+        if action_value == "full_exit":
+            msg = (
+                "ADVANCED_EXIT_LIVE_ENFORCED: full exit requested "
+                "score=%.3f ev=%+.4f reason=%s"
+                % (
+                    advanced_exit_decision.scores.total_exit_score,
+                    advanced_exit_decision.ev.expected_hold_value_usdt,
+                    advanced_exit_decision.reason,
+                )
+            )
+            logger.warning(msg)
+            print(msg)
+            set_last_switch_reason("advanced_probabilistic_exit")
+            _close_trade_manager()
+            return 2
+        if action_value == "partial_exit":
+            percentage = float(advanced_exit_decision.exit_percentage or 0.0)
+            if _execute_partial_exit(percentage):
+                logger.info(
+                    "ADVANCED_EXIT_LIVE_ENFORCED: partial exit completed (%.0f%%) score=%.3f ev=%+.4f",
+                    percentage * 100,
+                    advanced_exit_decision.scores.total_exit_score,
+                    advanced_exit_decision.ev.expected_hold_value_usdt,
+                )
+            else:
+                logger.warning(
+                    "ADVANCED_EXIT_LIVE_ENFORCED: partial exit skipped (%.0f%% below min or no position).",
+                    percentage * 100,
+                )
 
     _log_hold_position(latest_zscore)
     return kill_switch

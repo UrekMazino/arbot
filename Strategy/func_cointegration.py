@@ -49,6 +49,10 @@ from shared_cointegration_validator import (
     count_mean_reversion_crossings,
     evaluate_cointegration,
 )
+try:
+    from advanced_pair_ranking import apply_advanced_pair_ranking
+except ImportError:
+    from Strategy.advanced_pair_ranking import apply_advanced_pair_ranking
 
 
 def _env_int(name, default, minimum=None):
@@ -922,6 +926,15 @@ def _sort_cointegrated_pair_frame(df):
     output = df.copy()
     sort_columns = []
     ascending = []
+    if "advanced_rank_live_applied" in output.columns and "advanced_final_score" in output.columns:
+        live_rank = output["advanced_rank_live_applied"].astype(str).str.lower().isin(("1", "true", "yes"))
+        if bool(live_rank.any()):
+            output["_sort_advanced_final_score"] = pd.to_numeric(
+                output["advanced_final_score"],
+                errors="coerce",
+            ).fillna(0.0)
+            sort_columns.append("_sort_advanced_final_score")
+            ascending.append(False)
     if "zero_crossing" in output.columns:
         output["_sort_zero_crossing"] = pd.to_numeric(output["zero_crossing"], errors="coerce").fillna(-1)
         sort_columns.append("_sort_zero_crossing")
@@ -932,7 +945,13 @@ def _sort_cointegrated_pair_frame(df):
         ascending.append(True)
     if sort_columns:
         output = output.sort_values(by=sort_columns, ascending=ascending, kind="stable")
-    return output.drop(columns=[col for col in ("_sort_zero_crossing", "_sort_p_value") if col in output.columns])
+    return output.drop(
+        columns=[
+            col
+            for col in ("_sort_advanced_final_score", "_sort_zero_crossing", "_sort_p_value")
+            if col in output.columns
+        ]
+    )
 
 
 def _accumulate_cointegrated_pair_supply(previous_df, latest_df, max_rows=None):
@@ -2467,11 +2486,26 @@ def get_cointegrated_pairs(
             active_max_supply_pairs = max(int(max_supply_pairs or 10), 1)
         if active_max_supply_pairs <= 0:
             active_max_supply_pairs = None
+
+    advanced_pair_ranking_summary = {}
+    if not df_coint.empty:
+        df_coint, advanced_pair_ranking_summary = apply_advanced_pair_ranking(
+            df_coint,
+            logger=logger,
+        )
+
     if active_max_supply_pairs and not df_coint.empty and len(df_coint) > active_max_supply_pairs:
         before = len(df_coint)
-        sort_columns = [col for col in ("zero_crossing", "p_value") if col in df_coint.columns]
+        sort_columns = []
+        if (
+            "advanced_rank_live_applied" in df_coint.columns
+            and "advanced_final_score" in df_coint.columns
+            and bool(df_coint["advanced_rank_live_applied"].astype(str).str.lower().isin(("1", "true", "yes")).any())
+        ):
+            sort_columns.append("advanced_final_score")
+        sort_columns.extend([col for col in ("zero_crossing", "p_value") if col in df_coint.columns])
         if sort_columns:
-            ascending = [False if col == "zero_crossing" else True for col in sort_columns]
+            ascending = [False if col in ("advanced_final_score", "zero_crossing") else True for col in sort_columns]
             df_coint = df_coint.sort_values(by=sort_columns, ascending=ascending)
         df_coint = df_coint.head(active_max_supply_pairs).copy()
         filtered_breakdown["supply_cap"] = before - len(df_coint)
@@ -2586,6 +2620,7 @@ def get_cointegrated_pairs(
         "restricted_removed": restricted_removed,
         "pairs_kept": len(df_coint),
     }
+    summary.update(advanced_pair_ranking_summary)
 
     if len(df_coint) > 0 and "zero_crossing" in df_coint.columns:
         summary["zero_crossing"] = {

@@ -100,6 +100,30 @@ def _coerce_int_or_default(value, default):
         return default
 
 
+def _parse_float_list(raw, default=()):
+    if raw is None or str(raw).strip() == "":
+        raw = ",".join(str(item) for item in default)
+    values = []
+    for item in str(raw).split(","):
+        text = item.strip()
+        if not text:
+            continue
+        try:
+            values.append(float(text))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _parse_int_list(raw, default=()):
+    values = []
+    for value in _parse_float_list(raw, default=default):
+        item = int(value)
+        if item > 0:
+            values.append(item)
+    return values
+
+
 def _read_json_object(path):
     if not path.exists():
         return {}
@@ -212,6 +236,41 @@ def calculate_cointegration_from_log(series_1_log, series_2_log):
     metrics = evaluate_cointegration(
         series_1_log,
         series_2_log,
+        window=z_score_window,
+        pvalue_threshold=shared_coint_pvalue_threshold,
+        zero_cross_threshold_ratio=cointegration_zero_cross_threshold_ratio,
+        already_logged=True,
+    )
+    if not metrics.get("critical_value"):
+        return 0, None, None, None, None, 0
+    return (
+        int(metrics.get("coint_flag", 0) or 0),
+        float(metrics.get("p_value", 1.0)),
+        float(metrics.get("adf_stat", 0.0)),
+        float(metrics.get("critical_value", 0.0)),
+        float(metrics.get("hedge_ratio", 0.0)),
+        int(metrics.get("zero_crossings", 0) or 0),
+    )
+
+
+def calculate_cointegration_from_log_window(series_1_log, series_2_log, window_bars):
+    try:
+        active_window = int(float(window_bars))
+    except (TypeError, ValueError):
+        active_window = 0
+    if active_window <= 1:
+        return 0, None, None, None, None, 0
+
+    series_1_arr = np.asarray(series_1_log, dtype=float)
+    series_2_arr = np.asarray(series_2_log, dtype=float)
+    min_len = min(series_1_arr.size, series_2_arr.size)
+    if min_len < active_window:
+        return 0, None, None, None, None, 0
+    series_1_arr = series_1_arr[-active_window:]
+    series_2_arr = series_2_arr[-active_window:]
+    metrics = evaluate_cointegration(
+        series_1_arr,
+        series_2_arr,
         window=z_score_window,
         pvalue_threshold=shared_coint_pvalue_threshold,
         zero_cross_threshold_ratio=cointegration_zero_cross_threshold_ratio,
@@ -1086,6 +1145,7 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "orderbook_cache",
         "validation_tiers",
         "accuracy_budget",
+        "multi_window",
         "zero_crossing",
     ]
     scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
@@ -1470,6 +1530,37 @@ def get_cointegrated_pairs(
         if item.strip()
     }
     reject_sample_seed = os.getenv("STATBOT_STRATEGY_REJECT_SAMPLE_SEED", "accuracy-budget-v1")
+    multi_window_enabled = _env_bool("STATBOT_STRATEGY_MULTI_WINDOW_CONFIRM", True)
+    multi_window_ratios = [
+        value
+        for value in _parse_float_list(
+            os.getenv("STATBOT_STRATEGY_MULTI_WINDOW_RATIOS"),
+            default=(0.75,),
+        )
+        if value > 0
+    ]
+    multi_window_explicit_bars = _parse_int_list(os.getenv("STATBOT_STRATEGY_MULTI_WINDOW_BARS"), default=())
+    multi_window_min_bars = _env_int(
+        "STATBOT_STRATEGY_MULTI_WINDOW_MIN_BARS",
+        max(int(z_score_window) * 3, 120),
+        minimum=2,
+    )
+    multi_window_max_pvalue = _env_float(
+        "STATBOT_STRATEGY_MULTI_WINDOW_MAX_PVALUE",
+        0.50,
+        minimum=0.0,
+    )
+    if multi_window_max_pvalue > 1.0:
+        multi_window_max_pvalue = 1.0
+    multi_window_min_crossings = _env_int(
+        "STATBOT_STRATEGY_MULTI_WINDOW_MIN_ZERO_CROSSINGS",
+        1,
+        minimum=0,
+    )
+    multi_window_require_cointegrated = _env_bool(
+        "STATBOT_STRATEGY_MULTI_WINDOW_REQUIRE_COINTEGRATED",
+        False,
+    )
 
     # Load pair exclusions so hospital/graveyard pairs do not stay in supply.
     excluded_pair_reasons = {}
@@ -1535,6 +1626,24 @@ def get_cointegrated_pairs(
         "reason_breakdown": {},
         "examples": [],
     }
+    multi_window = {
+        "enabled": bool(multi_window_enabled),
+        "checked_pairs": 0,
+        "passed_pairs": 0,
+        "filtered_pairs": 0,
+        "skipped_pairs": 0,
+        "window_checks": 0,
+        "unavailable_windows": 0,
+        "failed_examples": [],
+        "settings": {
+            "ratios": multi_window_ratios,
+            "explicit_bars": multi_window_explicit_bars,
+            "min_bars": multi_window_min_bars,
+            "max_pvalue": multi_window_max_pvalue,
+            "min_zero_crossings": multi_window_min_crossings,
+            "require_cointegrated": bool(multi_window_require_cointegrated),
+        },
+    }
 
     def _record_tier0_filter(reason):
         filtered_breakdown[reason] = filtered_breakdown.get(reason, 0) + 1
@@ -1592,6 +1701,77 @@ def get_cointegrated_pairs(
                 hedge_abs = abs(float(hedge_ratio))
                 if hedge_abs < min_hedge_ratio or hedge_abs > max_hedge_ratio:
                     return False
+        return True
+
+    def _multi_window_specs(total_len):
+        specs = []
+        seen = set()
+        for bars in multi_window_explicit_bars:
+            if bars in seen:
+                continue
+            seen.add(bars)
+            specs.append({"label": f"{bars}bars", "bars": int(bars)})
+        if not multi_window_explicit_bars:
+            for ratio in multi_window_ratios:
+                bars = int(round(float(total_len) * float(ratio)))
+                if bars in seen:
+                    continue
+                seen.add(bars)
+                specs.append({"label": f"{ratio:.3g}x", "bars": int(bars)})
+        return specs
+
+    def _multi_window_failure_reason(metrics):
+        coint_flag, p_value, _adf_statistic, _critical_values, _hedge_ratio, zero_crossings = metrics
+        if p_value is None:
+            return "missing_p_value"
+        if p_value > multi_window_max_pvalue:
+            return "p_value"
+        if multi_window_require_cointegrated and int(coint_flag or 0) != 1:
+            return "not_cointegrated"
+        if multi_window_min_crossings and multi_window_min_crossings > 0:
+            if int(zero_crossings or 0) < multi_window_min_crossings:
+                return "zero_crossing"
+        return None
+
+    def _confirm_multi_window_pair(sym_1, sym_2, pair_key):
+        if not multi_window_enabled:
+            return True
+        series_1_log = log_series_by_symbol.get(sym_1)
+        series_2_log = log_series_by_symbol.get(sym_2)
+        total_len = min(
+            int(series_1_log.size) if series_1_log is not None else 0,
+            int(series_2_log.size) if series_2_log is not None else 0,
+        )
+        multi_window["checked_pairs"] += 1
+        checked_any = False
+        for spec in _multi_window_specs(total_len):
+            bars = int(spec.get("bars") or 0)
+            label = str(spec.get("label") or bars)
+            if bars < multi_window_min_bars or bars >= total_len:
+                multi_window["unavailable_windows"] += 1
+                continue
+            checked_any = True
+            multi_window["window_checks"] += 1
+            metrics = calculate_cointegration_from_log_window(series_1_log, series_2_log, bars)
+            reason = _multi_window_failure_reason(metrics)
+            if reason:
+                multi_window["filtered_pairs"] += 1
+                if len(multi_window["failed_examples"]) < 5:
+                    multi_window["failed_examples"].append(
+                        {
+                            "pair": pair_key,
+                            "window": label,
+                            "bars": bars,
+                            "reason": reason,
+                            "p_value": _metric_value_or_none(metrics[1]),
+                            "zero_crossing": int(metrics[5] or 0),
+                        }
+                    )
+                return False
+        if checked_any:
+            multi_window["passed_pairs"] += 1
+        else:
+            multi_window["skipped_pairs"] += 1
         return True
 
     def _pair_capital_profile(sym_1, sym_2):
@@ -2124,6 +2304,10 @@ def get_cointegrated_pairs(
             if zero_crossings > 0:
                 raw_pairs_with_crossings += 1
 
+            if not _confirm_multi_window_pair(sym_1, sym_2, pair_key):
+                filtered_breakdown["multi_window"] = filtered_breakdown.get("multi_window", 0) + 1
+                continue
+
             # Orderbook depth check - ensure sufficient USDT liquidity
             orderbook_check_passed = True
             orderbook_reject_reason = None
@@ -2364,6 +2548,7 @@ def get_cointegrated_pairs(
         "orderbook_cache": orderbook_cache_stats,
         "validation_tiers": validation_tiers,
         "accuracy_budget": accuracy_budget,
+        "multi_window": multi_window,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),

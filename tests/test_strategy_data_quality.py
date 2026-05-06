@@ -315,3 +315,47 @@ def test_accuracy_budget_samples_rejects_without_promoting_them(monkeypatch):
     assert summary["accuracy_budget"]["missed_stat_candidates"] == 1
     assert summary["accuracy_budget"]["reason_breakdown"]["tier0_liquidity_min"]["sampled_rejects"] == 1
     assert summary["accuracy_budget"]["examples"][0]["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+
+
+def test_multi_window_confirmation_rejects_fragile_main_window_pass(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setenv("STATBOT_STRATEGY_MULTI_WINDOW_CONFIRM", "1")
+    monkeypatch.setenv("STATBOT_STRATEGY_MULTI_WINDOW_RATIOS", "0.75")
+    monkeypatch.setenv("STATBOT_STRATEGY_MULTI_WINDOW_MIN_BARS", "20")
+    monkeypatch.setenv("STATBOT_STRATEGY_MULTI_WINDOW_MAX_PVALUE", "0.5")
+
+    def pass_main(*_args, **_kwargs):
+        return 1, 0.001, -4.0, -3.0, 1.0, 5
+
+    def fail_adjacent(*_args, **_kwargs):
+        return 0, 0.9, -1.0, -3.0, 1.0, 0
+
+    def fail_orderbook(*_args, **_kwargs):
+        raise AssertionError("multi-window reject should happen before orderbook")
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", pass_main)
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log_window", fail_adjacent)
+    monkeypatch.setattr(fc.market_session, "get_orderbook", fail_orderbook)
+
+    timestamps = list(range(160))
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.0 + idx * 0.01 for idx in timestamps], timestamps),
+        "BBB-USDT-SWAP": _symbol([11.0 + idx * 0.01 for idx in timestamps], timestamps),
+    }
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=False,
+    )
+
+    assert df.empty
+    assert summary["filtered_breakdown"]["multi_window"] == 1
+    assert summary["multi_window"]["checked_pairs"] == 1
+    assert summary["multi_window"]["filtered_pairs"] == 1
+    assert summary["multi_window"]["window_checks"] == 1
+    assert summary["multi_window"]["failed_examples"][0]["reason"] == "p_value"

@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeAlias, runtime_checkable
+
+
+PairIdentity: TypeAlias = Any
+OrderBookSnapshot: TypeAlias = Any
 
 
 class PairState(str, Enum):
@@ -32,13 +36,13 @@ class BotAdapterSpec:
 
 @runtime_checkable
 class ExistingBotAdapter(Protocol):
-    def get_pair_state(self, pair: "PairIdentity") -> PairState:
+    def get_pair_state(self, pair: PairIdentity) -> PairState:
         ...
 
-    def get_orderbook_snapshot(self, symbol: str) -> "OrderBookSnapshot | None":
+    def get_orderbook_snapshot(self, symbol: str) -> OrderBookSnapshot | None:
         ...
 
-    def get_current_position(self, pair: "PairIdentity") -> dict[str, Any] | None:
+    def get_current_position(self, pair: PairIdentity) -> dict[str, Any] | None:
         ...
 
     def get_trade_lifecycle_event(self) -> dict[str, Any] | None:
@@ -49,7 +53,7 @@ class ExistingBotAdapter(Protocol):
 
     def submit_exit_order(
         self,
-        pair: "PairIdentity",
+        pair: PairIdentity,
         exit_percentage: float,
         order_style: str,
         reason: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import pytest
 
@@ -9,6 +10,7 @@ from core.ev.hold_exit_ev import ExitAction
 from core.regime.regime_types import RegimeName
 from core.trade_management.probabilistic_exit_manager import (
     ProbabilisticExitManager,
+    PostTradeShadowReport,
     ShadowDecisionRecord,
     compute_drawdown_risk_score,
     compute_execution_risk_score,
@@ -54,6 +56,7 @@ class FakeExistingBotAdapter:
 
 def _config() -> AdvancedMLConfig:
     config = AdvancedMLConfig()
+    config.pipeline.enabled = True
     config.pipeline.shadow_mode = True
     config.microstructure.max_allowed_slippage_bps = 10.0
     config.microstructure.max_book_age_ms = 1_000.0
@@ -114,6 +117,23 @@ def test_manager_requires_existing_bot_adapter_protocol_only():
 
     manager = ProbabilisticExitManager(FakeExistingBotAdapter(), _config())
     assert isinstance(manager.adapter, FakeExistingBotAdapter)
+
+
+def test_disabled_advanced_exit_noops_and_does_not_submit_order():
+    adapter = FakeExistingBotAdapter()
+    config = _config()
+    config.pipeline.enabled = False
+    manager = ProbabilisticExitManager(adapter, config, shadow_mode=False)
+
+    decision = manager.evaluate_exit(
+        Pair(),
+        _features(current_z=5.5, entry_z=2.0, catastrophic_divergence_sigma=1.0),
+    )
+
+    assert decision.action == ExitAction.HOLD
+    assert decision.reason == "advanced exit disabled by config"
+    assert decision.metadata["advanced_enabled"] is False
+    assert adapter.submitted == []
 
 
 def test_trend_continuation_risk_formula_is_exact():
@@ -230,6 +250,71 @@ def test_shadow_decision_record_has_no_post_trade_only_fields():
     assert "would_have_exited_later" not in field_names
     assert "would_have_exited_earlier_count" not in field_names
     assert "would_have_exited_later_count" not in field_names
+
+
+def test_post_trade_shadow_report_computes_counterfactual_metrics_after_close():
+    adapter = FakeExistingBotAdapter()
+    manager = ProbabilisticExitManager(adapter, _config(), shadow_mode=True)
+    pair = Pair()
+
+    manager.evaluate_exit(
+        pair,
+        _features(
+            trade_id="trade-1",
+            current_z=5.5,
+            entry_z=2.0,
+            catastrophic_divergence_sigma=1.0,
+        ),
+        old_action="hold",
+        old_reason="legacy hold",
+    )
+    manager.shadow_records[0] = ShadowDecisionRecord(
+        **{
+            **manager.shadow_records[0].__dict__,
+            "timestamp": 100.0,
+        }
+    )
+
+    report = manager.generate_post_trade_shadow_report(
+        pair,
+        trade_id="trade-1",
+        actual_exit_timestamp=160.0,
+        actual_pnl_usdt=-12.0,
+    )
+
+    assert report.would_have_exited_earlier_count == 1
+    assert report.would_have_exited_later_count == 0
+    assert report.avoided_loss_estimate_usdt == pytest.approx(12.0)
+    assert report.missed_profit_estimate_usdt == pytest.approx(0.0)
+    assert report.net_policy_delta_usdt == pytest.approx(12.0)
+    assert report.exit_time_distribution_shift_seconds == pytest.approx(-60.0)
+    json.dumps(report.to_dict(), default=str)
+
+
+def test_shadow_circuit_breakers_use_configured_eval_window():
+    adapter = FakeExistingBotAdapter()
+    config = _config()
+    config.pipeline.shadow_eval_window = 2
+    config.pipeline.max_shadow_disagreement_rate = 0.25
+    config.pipeline.min_shadow_policy_delta_usdt = 0.0
+    manager = ProbabilisticExitManager(adapter, config, shadow_mode=True)
+    pair = Pair()
+    manager.post_trade_shadow_reports.extend(
+        [
+            PostTradeShadowReport(pair, "old", 1.0, 0.0, 0, 0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0),
+            PostTradeShadowReport(pair, "recent-1", 0.0, 1.0, 1, 0, 0.0, 5.0, -5.0, 1.0, 0.0, -10.0),
+            PostTradeShadowReport(pair, "recent-2", 0.0, 1.0, 1, 0, 0.0, 5.0, -5.0, 1.0, 0.0, -20.0),
+        ]
+    )
+
+    status = manager.shadow_circuit_breaker_status()
+
+    assert status["window"] == 2
+    assert status["evaluated_reports"] == 2
+    assert status["mean_disagreement_rate"] == pytest.approx(1.0)
+    assert status["mean_net_policy_delta_usdt"] == pytest.approx(-5.0)
+    assert status["disable_advanced_live_exits"] is True
+    assert status["keep_shadow_mode_enabled"] is True
 
 
 def test_soft_partial_exit_executes_only_when_live():

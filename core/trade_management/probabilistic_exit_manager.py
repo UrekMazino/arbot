@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from core.adapters.bot_adapter_types import ExistingBotAdapter
@@ -96,6 +96,25 @@ class ShadowDecisionRecord:
     trade_features: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PostTradeShadowReport:
+    pair: Any
+    trade_id: str
+    agreement_rate: float
+    disagreement_rate: float
+    would_have_exited_earlier_count: int
+    would_have_exited_later_count: int
+    avoided_loss_estimate_usdt: float
+    missed_profit_estimate_usdt: float
+    net_policy_delta_usdt: float
+    false_exit_rate_estimate: float
+    late_exit_rate_estimate: float
+    exit_time_distribution_shift_seconds: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class ProbabilisticExitManager:
     def __init__(
         self,
@@ -117,6 +136,7 @@ class ProbabilisticExitManager:
         self.ev_calculator = ev_calculator or HoldExitEVCalculator(self.config)
         self.microstructure_analyzer = microstructure_analyzer or MicrostructureAnalyzer(self.config)
         self.shadow_records: list[ShadowDecisionRecord] = []
+        self.post_trade_shadow_reports: list[PostTradeShadowReport] = []
 
     def evaluate_exit(
         self,
@@ -127,6 +147,8 @@ class ProbabilisticExitManager:
         old_reason: str = "",
     ) -> ExitDecision:
         features = dict(trade_features)
+        if not self.shadow_mode and not self.config.pipeline.enabled:
+            return self._disabled_decision(pair, features)
         hard_kill = self.check_hard_kill(pair, features)
         if hard_kill.triggered:
             decision = self._hard_kill_decision(pair, features, hard_kill)
@@ -232,6 +254,101 @@ class ProbabilisticExitManager:
         self._execute_or_shadow(pair, decision, features, old_action, old_reason)
         return decision
 
+    def generate_post_trade_shadow_report(
+        self,
+        pair: Any,
+        *,
+        trade_id: str,
+        actual_exit_timestamp: float,
+        actual_pnl_usdt: float,
+    ) -> PostTradeShadowReport:
+        records = [
+            record
+            for record in self.shadow_records
+            if _pair_key(record.pair) == _pair_key(pair)
+            and str(record.trade_features.get("trade_id", trade_id)) == str(trade_id)
+        ]
+        total = max(len(records), 1)
+        agreements = sum(1 for record in records if record.old_action == record.new_action)
+        would_have_exited_earlier = [
+            record
+            for record in records
+            if _is_exit_action(record.new_action)
+            and not _is_exit_action(record.old_action)
+            and record.timestamp <= float(actual_exit_timestamp)
+        ]
+        would_have_exited_later = [
+            record
+            for record in records
+            if _is_exit_action(record.old_action)
+            and not _is_exit_action(record.new_action)
+        ]
+        earlier_count = len(would_have_exited_earlier)
+        later_count = len(would_have_exited_later)
+        pnl = float(actual_pnl_usdt)
+        avoided_loss_estimate_usdt = max(-pnl, 0.0) * (earlier_count / total)
+        missed_profit_estimate_usdt = max(pnl, 0.0) * (earlier_count / total)
+        net_policy_delta_usdt = avoided_loss_estimate_usdt - missed_profit_estimate_usdt
+        signed_shifts = [
+            float(record.timestamp) - float(actual_exit_timestamp)
+            for record in would_have_exited_earlier
+        ] + [
+            float(actual_exit_timestamp) - float(record.timestamp)
+            for record in would_have_exited_later
+        ]
+        exit_time_distribution_shift_seconds = (
+            sum(signed_shifts) / len(signed_shifts)
+            if signed_shifts
+            else 0.0
+        )
+        report = PostTradeShadowReport(
+            pair=pair,
+            trade_id=str(trade_id),
+            agreement_rate=agreements / total,
+            disagreement_rate=(total - agreements) / total,
+            would_have_exited_earlier_count=earlier_count,
+            would_have_exited_later_count=later_count,
+            avoided_loss_estimate_usdt=avoided_loss_estimate_usdt,
+            missed_profit_estimate_usdt=missed_profit_estimate_usdt,
+            net_policy_delta_usdt=net_policy_delta_usdt,
+            false_exit_rate_estimate=(
+                (earlier_count / total)
+                if pnl > 0.0
+                else 0.0
+            ),
+            late_exit_rate_estimate=later_count / total,
+            exit_time_distribution_shift_seconds=exit_time_distribution_shift_seconds,
+        )
+        self.post_trade_shadow_reports.append(report)
+        return report
+
+    def shadow_circuit_breaker_status(self) -> dict[str, Any]:
+        window = max(int(self.config.pipeline.shadow_eval_window), 1)
+        recent = self.post_trade_shadow_reports[-window:]
+        if not recent:
+            return {
+                "evaluated_reports": 0,
+                "window": window,
+                "disable_advanced_live_exits": False,
+                "keep_shadow_mode_enabled": True,
+                "mean_disagreement_rate": 0.0,
+                "mean_net_policy_delta_usdt": 0.0,
+            }
+        mean_disagreement = sum(report.disagreement_rate for report in recent) / len(recent)
+        mean_delta = sum(report.net_policy_delta_usdt for report in recent) / len(recent)
+        return {
+            "evaluated_reports": len(recent),
+            "window": window,
+            "disable_advanced_live_exits": (
+                mean_disagreement > self.config.pipeline.max_shadow_disagreement_rate
+            ),
+            "keep_shadow_mode_enabled": (
+                mean_delta < self.config.pipeline.min_shadow_policy_delta_usdt
+            ),
+            "mean_disagreement_rate": mean_disagreement,
+            "mean_net_policy_delta_usdt": mean_delta,
+        }
+
     def check_hard_kill(self, pair: Any, features: dict[str, Any]) -> HardKillResult:
         del pair
         time_in_trade_seconds = _float_feature(features, "time_in_trade_seconds", 0.0)
@@ -309,6 +426,38 @@ class ProbabilisticExitManager:
                 "pair": pair,
                 "shadow_mode": self.shadow_mode,
                 "hard_kill_severity": hard_kill.severity,
+            },
+        )
+
+    def _disabled_decision(self, pair: Any, features: dict[str, Any]) -> ExitDecision:
+        del pair
+        hard_kill = HardKillResult(False, ExitAction.HOLD, 0.0, "advanced exit disabled", 0.0)
+        return ExitDecision(
+            action=ExitAction.HOLD,
+            exit_percentage=0.0,
+            reason="advanced exit disabled by config",
+            scores=ExitScores(
+                take_profit_score=0.0,
+                stall_score=0.0,
+                regime_break_score=0.0,
+                liquidity_risk_score=0.0,
+                execution_risk_score=0.0,
+                mean_reversion_score=0.0,
+                trend_continuation_risk=0.0,
+                drawdown_risk_score=0.0,
+                time_risk_score=0.0,
+                trailing_stop_pressure=0.0,
+                risk_pressure_score=0.0,
+                pre_microstructure_exit_score=0.0,
+                total_exit_score=0.0,
+            ),
+            ev=_placeholder_ev(hard_kill),
+            microstructure=_placeholder_microstructure(features, hard_kill),
+            hard_kill_triggered=False,
+            blocked_by_net_profit_guard=False,
+            metadata={
+                "shadow_mode": self.shadow_mode,
+                "advanced_enabled": False,
             },
         )
 
@@ -607,11 +756,25 @@ def _float_feature(features: dict[str, Any], name: str, default: float) -> float
     return value
 
 
+def _is_exit_action(action: Any) -> bool:
+    value = str(action).lower()
+    return value in {
+        ExitAction.PARTIAL_EXIT.value,
+        ExitAction.FULL_EXIT.value,
+    }
+
+
+def _pair_key(pair: Any) -> str:
+    key = getattr(pair, "key", None)
+    return str(key if key is not None else pair)
+
+
 __all__ = [
     "ExitDecision",
     "ExitRiskWeights",
     "ExitScores",
     "HardKillResult",
+    "PostTradeShadowReport",
     "ProbabilisticExitManager",
     "ShadowDecisionRecord",
     "clamp",

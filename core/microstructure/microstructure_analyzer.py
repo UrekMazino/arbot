@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from core.config.advanced_ml_config import AdvancedMLConfig
 from core.regime.regime_types import RegimeName

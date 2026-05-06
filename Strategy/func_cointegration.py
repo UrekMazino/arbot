@@ -1014,6 +1014,7 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "timestamp_alignment_filtered",
         "pair_metric_cache",
         "validation_tiers",
+        "accuracy_budget",
         "zero_crossing",
     ]
     scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
@@ -1340,6 +1341,20 @@ def get_cointegrated_pairs(
         minimum=0.0,
     )
     prefilter_vol_ratio_enabled = bool(prefilter_vol_ratio_max and prefilter_vol_ratio_max > 0)
+    reject_sample_pct = _env_float("STATBOT_STRATEGY_REJECT_SAMPLE_PCT", 0.01, minimum=0.0)
+    if reject_sample_pct > 1.0:
+        reject_sample_pct = 1.0
+    reject_sample_max = _env_int("STATBOT_STRATEGY_REJECT_SAMPLE_MAX", 500, minimum=0)
+    reject_sample_reasons_raw = os.getenv(
+        "STATBOT_STRATEGY_REJECT_SAMPLE_REASONS",
+        "corr,tier0_liquidity_min,tier0_min_capital,tier0_min_equity,tier0_vol_ratio",
+    )
+    reject_sample_reasons = {
+        item.strip()
+        for item in str(reject_sample_reasons_raw).split(",")
+        if item.strip()
+    }
+    reject_sample_seed = os.getenv("STATBOT_STRATEGY_REJECT_SAMPLE_SEED", "accuracy-budget-v1")
 
     # Load pair exclusions so hospital/graveyard pairs do not stay in supply.
     excluded_pair_reasons = {}
@@ -1389,12 +1404,80 @@ def get_cointegrated_pairs(
             "cache_misses": 0,
         },
     }
+    accuracy_budget = {
+        "enabled": bool(reject_sample_pct > 0 and reject_sample_max != 0 and reject_sample_reasons),
+        "sample_pct": reject_sample_pct,
+        "max_samples": reject_sample_max,
+        "eligible_reasons": sorted(reject_sample_reasons),
+        "eligible_rejects": 0,
+        "sampled_rejects": 0,
+        "shadow_computed": 0,
+        "shadow_cache_hits": 0,
+        "shadow_cache_misses": 0,
+        "missed_cointegrated": 0,
+        "missed_with_crossings": 0,
+        "missed_stat_candidates": 0,
+        "reason_breakdown": {},
+        "examples": [],
+    }
 
     def _record_tier0_filter(reason):
         filtered_breakdown[reason] = filtered_breakdown.get(reason, 0) + 1
         tier0 = validation_tiers["tier_0"]
         tier0["filtered_pairs"] += 1
         tier0["filtered_breakdown"][reason] = tier0["filtered_breakdown"].get(reason, 0) + 1
+
+    def _accuracy_reason_stats(reason):
+        reason_text = str(reason or "unknown")
+        breakdown = accuracy_budget["reason_breakdown"]
+        if reason_text not in breakdown:
+            breakdown[reason_text] = {
+                "eligible_rejects": 0,
+                "sampled_rejects": 0,
+                "missed_cointegrated": 0,
+                "missed_with_crossings": 0,
+                "missed_stat_candidates": 0,
+            }
+        return breakdown[reason_text]
+
+    def _reject_sample_score(pair_key, reason):
+        payload = f"{reject_sample_seed}|{reason}|{pair_key}".encode("utf-8")
+        digest = hashlib.blake2b(payload, digest_size=8).digest()
+        return int.from_bytes(digest, "big") / float(2**64)
+
+    def _should_shadow_sample_reject(pair_key, reason):
+        if not accuracy_budget["enabled"] or reason not in reject_sample_reasons:
+            return False
+        stats = _accuracy_reason_stats(reason)
+        stats["eligible_rejects"] += 1
+        accuracy_budget["eligible_rejects"] += 1
+        if reject_sample_max and accuracy_budget["sampled_rejects"] >= reject_sample_max:
+            return False
+        if _reject_sample_score(pair_key, reason) >= reject_sample_pct:
+            return False
+        stats["sampled_rejects"] += 1
+        accuracy_budget["sampled_rejects"] += 1
+        return True
+
+    def _metrics_pass_final_stat_filters(metrics):
+        coint_flag, p_value, _adf_statistic, _critical_values, hedge_ratio, zero_crossings = metrics
+        if int(coint_flag or 0) != 1:
+            return False
+        if active_min_p_value is not None and active_max_p_value is not None:
+            if active_min_p_value > 0 and active_max_p_value > 0 and active_min_p_value < active_max_p_value:
+                if p_value is None or p_value < active_min_p_value or p_value > active_max_p_value:
+                    return False
+        if active_zero_crossings and active_zero_crossings > 0:
+            if int(zero_crossings or 0) < active_zero_crossings:
+                return False
+        if min_hedge_ratio is not None and max_hedge_ratio is not None:
+            if min_hedge_ratio >= 0 and max_hedge_ratio > 0 and min_hedge_ratio <= max_hedge_ratio:
+                if hedge_ratio is None:
+                    return False
+                hedge_abs = abs(float(hedge_ratio))
+                if hedge_abs < min_hedge_ratio or hedge_abs > max_hedge_ratio:
+                    return False
+        return True
 
     def _pair_capital_profile(sym_1, sym_2):
         min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
@@ -1602,51 +1685,10 @@ def get_cointegrated_pairs(
             orderbook_cache[ticker] = result
             return result
 
-    for sym_1, sym_2 in combinations(symbols, 2):
+    def _get_pair_metrics(sym_1, sym_2, *, purpose):
+        nonlocal metric_cache_dirty
         series_1_log = log_series_by_symbol[sym_1]
         series_2_log = log_series_by_symbol[sym_2]
-
-        total_comparisons += 1
-        validation_tiers["tier_0"]["checked_pairs"] += 1
-        _emit_coint_progress()
-
-        # Skip hospital/graveyard pairs
-        pair_key = f"{sym_1}/{sym_2}"
-        pair_state_key = _normalize_pair_key_text(pair_key)
-        exclusion_reason = excluded_pair_reasons.get(pair_state_key)
-        if exclusion_reason:
-            _record_tier0_filter(exclusion_reason)
-            continue
-
-        if timestamps_by_symbol.get(sym_1) != timestamps_by_symbol.get(sym_2):
-            _record_tier0_filter("timestamp_alignment")
-            continue
-
-        if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):
-            _record_tier0_filter("order_capacity")
-            continue
-
-        ret_1 = returns_by_symbol.get(sym_1)
-        ret_2 = returns_by_symbol.get(sym_2)
-        corr_value = None
-        if ret_1 is not None and ret_2 is not None:
-            corr_value = _corrcoef_fast(ret_1, ret_2)
-
-        if corr_min and corr_min > 0:
-            if corr_value is None or not np.isfinite(corr_value):
-                _record_tier0_filter("corr")
-                continue
-            if abs(corr_value) < corr_min:
-                _record_tier0_filter("corr")
-                continue
-
-        tier0_reason = _tier0_prefilter_pair(sym_1, sym_2)
-        if tier0_reason:
-            _record_tier0_filter(tier0_reason)
-            continue
-
-        validation_tiers["tier_0"]["passed_pairs"] += 1
-        validation_tiers["tier_2"]["checked_pairs"] += 1
         cache_key = None
         cached_metrics = None
         if metric_cache_enabled:
@@ -1664,41 +1706,118 @@ def get_cointegrated_pairs(
 
         if cached_metrics is not None:
             metric_cache_stats["hits"] += 1
-            validation_tiers["tier_2"]["cache_hits"] += 1
             metric_cache_entries[cache_key]["used_at"] = scan_unix
             metric_cache_dirty = True
-            coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = cached_metrics
-        else:
+            if purpose == "validation":
+                validation_tiers["tier_2"]["cache_hits"] += 1
+            elif purpose == "accuracy_budget":
+                accuracy_budget["shadow_cache_hits"] += 1
+            return cached_metrics
+
+        if purpose == "validation":
             validation_tiers["tier_2"]["computed_pairs"] += 1
-            if metric_cache_enabled:
-                metric_cache_stats["misses"] += 1
+        elif purpose == "accuracy_budget":
+            accuracy_budget["shadow_computed"] += 1
+
+        if metric_cache_enabled:
+            metric_cache_stats["misses"] += 1
+            if purpose == "validation":
                 validation_tiers["tier_2"]["cache_misses"] += 1
-            # Check for cointegration using precomputed logs
-            coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
-                calculate_cointegration_from_log(series_1_log, series_2_log)
-            )
-            if metric_cache_enabled and cache_key:
-                metric_cache_entries[cache_key] = {
-                    "sym_1": sym_1,
-                    "sym_2": sym_2,
-                    "series_1_hash": symbol_signatures[sym_1]["hash"],
-                    "series_2_hash": symbol_signatures[sym_2]["hash"],
-                    "config_hash": metric_config_hash,
-                    "result": _encode_pair_metric_result(
-                        (
-                            coint_flag,
-                            p_value,
-                            adf_statistic,
-                            critical_values,
-                            hedge_ratio,
-                            zero_crossings,
-                        )
-                    ),
-                    "updated_at_unix": scan_unix,
-                    "used_at": scan_unix,
-                }
-                metric_cache_stats["writes"] += 1
-                metric_cache_dirty = True
+            elif purpose == "accuracy_budget":
+                accuracy_budget["shadow_cache_misses"] += 1
+
+        metrics = calculate_cointegration_from_log(series_1_log, series_2_log)
+        if metric_cache_enabled and cache_key:
+            metric_cache_entries[cache_key] = {
+                "sym_1": sym_1,
+                "sym_2": sym_2,
+                "series_1_hash": symbol_signatures[sym_1]["hash"],
+                "series_2_hash": symbol_signatures[sym_2]["hash"],
+                "config_hash": metric_config_hash,
+                "result": _encode_pair_metric_result(metrics),
+                "updated_at_unix": scan_unix,
+                "used_at": scan_unix,
+            }
+            metric_cache_stats["writes"] += 1
+            metric_cache_dirty = True
+        return metrics
+
+    def _maybe_shadow_validate_reject(sym_1, sym_2, pair_key, reason):
+        if not _should_shadow_sample_reject(pair_key, reason):
+            return
+        metrics = _get_pair_metrics(sym_1, sym_2, purpose="accuracy_budget")
+        coint_flag, p_value, _adf_statistic, _critical_values, hedge_ratio, zero_crossings = metrics
+        stats = _accuracy_reason_stats(reason)
+        if int(coint_flag or 0) == 1:
+            stats["missed_cointegrated"] += 1
+            accuracy_budget["missed_cointegrated"] += 1
+            if int(zero_crossings or 0) > 0:
+                stats["missed_with_crossings"] += 1
+                accuracy_budget["missed_with_crossings"] += 1
+            if _metrics_pass_final_stat_filters(metrics):
+                stats["missed_stat_candidates"] += 1
+                accuracy_budget["missed_stat_candidates"] += 1
+            if len(accuracy_budget["examples"]) < 5:
+                accuracy_budget["examples"].append(
+                    {
+                        "pair": pair_key,
+                        "reason": reason,
+                        "p_value": _metric_value_or_none(p_value),
+                        "hedge_ratio": _metric_value_or_none(hedge_ratio),
+                        "zero_crossing": int(zero_crossings or 0),
+                        "final_stat_pass": bool(_metrics_pass_final_stat_filters(metrics)),
+                    }
+                )
+
+    def _handle_tier0_reject(sym_1, sym_2, pair_key, reason):
+        _record_tier0_filter(reason)
+        _maybe_shadow_validate_reject(sym_1, sym_2, pair_key, reason)
+
+    for sym_1, sym_2 in combinations(symbols, 2):
+        total_comparisons += 1
+        validation_tiers["tier_0"]["checked_pairs"] += 1
+        _emit_coint_progress()
+
+        # Skip hospital/graveyard pairs
+        pair_key = f"{sym_1}/{sym_2}"
+        pair_state_key = _normalize_pair_key_text(pair_key)
+        exclusion_reason = excluded_pair_reasons.get(pair_state_key)
+        if exclusion_reason:
+            _handle_tier0_reject(sym_1, sym_2, pair_key, exclusion_reason)
+            continue
+
+        if timestamps_by_symbol.get(sym_1) != timestamps_by_symbol.get(sym_2):
+            _handle_tier0_reject(sym_1, sym_2, pair_key, "timestamp_alignment")
+            continue
+
+        if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):
+            _handle_tier0_reject(sym_1, sym_2, pair_key, "order_capacity")
+            continue
+
+        ret_1 = returns_by_symbol.get(sym_1)
+        ret_2 = returns_by_symbol.get(sym_2)
+        corr_value = None
+        if ret_1 is not None and ret_2 is not None:
+            corr_value = _corrcoef_fast(ret_1, ret_2)
+
+        if corr_min and corr_min > 0:
+            if corr_value is None or not np.isfinite(corr_value):
+                _handle_tier0_reject(sym_1, sym_2, pair_key, "corr")
+                continue
+            if abs(corr_value) < corr_min:
+                _handle_tier0_reject(sym_1, sym_2, pair_key, "corr")
+                continue
+
+        tier0_reason = _tier0_prefilter_pair(sym_1, sym_2)
+        if tier0_reason:
+            _handle_tier0_reject(sym_1, sym_2, pair_key, tier0_reason)
+            continue
+
+        validation_tiers["tier_0"]["passed_pairs"] += 1
+        validation_tiers["tier_2"]["checked_pairs"] += 1
+        coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
+            _get_pair_metrics(sym_1, sym_2, purpose="validation")
+        )
 
         if coint_flag == 1:
             if zero_crossings > 0:
@@ -1928,6 +2047,7 @@ def get_cointegrated_pairs(
         "data_quality": data_quality,
         "pair_metric_cache": metric_cache_stats,
         "validation_tiers": validation_tiers,
+        "accuracy_budget": accuracy_budget,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),

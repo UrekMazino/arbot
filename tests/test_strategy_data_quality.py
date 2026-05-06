@@ -23,6 +23,7 @@ def isolate_strategy_output(monkeypatch, tmp_path):
     strategy_file.parent.mkdir(parents=True, exist_ok=True)
     strategy_file.write_text("# isolated test module path\n", encoding="utf-8")
     monkeypatch.setattr(fc, "__file__", str(strategy_file))
+    monkeypatch.setenv("STATBOT_STRATEGY_REJECT_SAMPLE_PCT", "0")
 
 
 def _kline(ts: int, close: float) -> dict:
@@ -272,3 +273,45 @@ def test_optional_tier0_vol_ratio_prefilter_is_config_gated(monkeypatch):
     assert summary["filtered_breakdown"]["tier0_vol_ratio"] == 1
     assert summary["validation_tiers"]["tier_0"]["settings"]["vol_ratio_max"] == 1.1
     assert summary["validation_tiers"]["tier_2"]["checked_pairs"] == 0
+
+
+def test_accuracy_budget_samples_rejects_without_promoting_them(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setenv("STATBOT_STRATEGY_REJECT_SAMPLE_PCT", "1.0")
+    monkeypatch.setenv("STATBOT_STRATEGY_REJECT_SAMPLE_MAX", "10")
+
+    calls = {"count": 0}
+
+    def fake_cointegration(*_args, **_kwargs):
+        calls["count"] += 1
+        return 1, 0.001, -4.0, -3.0, 1.0, 5
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fake_cointegration)
+    timestamps = [idx for idx in range(5)]
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.0, 10.1, 10.2, 10.3, 10.4], timestamps),
+        "BBB-USDT-SWAP": _symbol([11.0, 11.1, 11.2, 11.3, 11.4], timestamps),
+    }
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_avg_quote_volume_override=2_000.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=False,
+    )
+
+    assert df.empty
+    assert calls["count"] == 1
+    assert summary["pairs_kept"] == 0
+    assert summary["validation_tiers"]["tier_2"]["checked_pairs"] == 0
+    assert summary["accuracy_budget"]["eligible_rejects"] == 1
+    assert summary["accuracy_budget"]["sampled_rejects"] == 1
+    assert summary["accuracy_budget"]["missed_cointegrated"] == 1
+    assert summary["accuracy_budget"]["missed_with_crossings"] == 1
+    assert summary["accuracy_budget"]["missed_stat_candidates"] == 1
+    assert summary["accuracy_budget"]["reason_breakdown"]["tier0_liquidity_min"]["sampled_rejects"] == 1
+    assert summary["accuracy_budget"]["examples"][0]["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"

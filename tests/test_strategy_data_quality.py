@@ -210,3 +210,65 @@ def test_pair_metric_cache_reuses_only_unchanged_content(monkeypatch):
     assert calls["count"] == 2
     assert third_summary["pair_metric_cache"]["hits"] == 0
     assert third_summary["pair_metric_cache"]["misses"] == 1
+
+
+def test_tier0_liquidity_prefilter_skips_expensive_stats(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+
+    def fail_cointegration(*_args, **_kwargs):
+        raise AssertionError("pair failing deterministic liquidity floor should skip stats")
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fail_cointegration)
+    timestamps = [idx for idx in range(4)]
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.0, 10.1, 10.2, 10.3], timestamps),
+        "BBB-USDT-SWAP": _symbol([11.0, 11.1, 11.2, 11.3], timestamps),
+    }
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_avg_quote_volume_override=2_000.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=False,
+    )
+
+    assert df.empty
+    assert summary["filtered_breakdown"]["tier0_liquidity_min"] == 1
+    assert summary["validation_tiers"]["tier_0"]["checked_pairs"] == 1
+    assert summary["validation_tiers"]["tier_0"]["filtered_pairs"] == 1
+    assert summary["validation_tiers"]["tier_2"]["checked_pairs"] == 0
+    assert summary["pair_metric_cache"]["misses"] == 0
+
+
+def test_optional_tier0_vol_ratio_prefilter_is_config_gated(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setenv("STATBOT_STRATEGY_PREFILTER_VOL_RATIO_MAX", "1.1")
+
+    def fail_cointegration(*_args, **_kwargs):
+        raise AssertionError("configured volatility-ratio prefilter should skip stats")
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fail_cointegration)
+    timestamps = [idx for idx in range(5)]
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol([10.0, 10.1, 10.2, 10.3, 10.4], timestamps),
+        "BBB-USDT-SWAP": _symbol([20.0, 21.0, 19.0, 24.0, 18.0], timestamps),
+    }
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=False,
+    )
+
+    assert df.empty
+    assert summary["filtered_breakdown"]["tier0_vol_ratio"] == 1
+    assert summary["validation_tiers"]["tier_0"]["settings"]["vol_ratio_max"] == 1.1
+    assert summary["validation_tiers"]["tier_2"]["checked_pairs"] == 0

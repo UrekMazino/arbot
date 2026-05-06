@@ -86,6 +86,20 @@ def _env_bool(name, default=False):
     return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _coerce_float_or_default(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int_or_default(value, default):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _read_json_object(path):
     if not path.exists():
         return {}
@@ -999,6 +1013,7 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "data_quality",
         "timestamp_alignment_filtered",
         "pair_metric_cache",
+        "validation_tiers",
         "zero_crossing",
     ]
     scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
@@ -1194,6 +1209,7 @@ def get_cointegrated_pairs(
         if corr_lookback and corr_lookback > 0 and returns.size > corr_lookback:
             returns = returns[-corr_lookback:]
         returns_by_symbol[sym] = returns
+        return_std = float(np.std(returns)) if returns.size >= 2 else None
 
         info = data.get('symbol_info', {}) if isinstance(data, dict) else {}
         min_sz = info.get('min_sz') if isinstance(info, dict) else None
@@ -1233,6 +1249,7 @@ def get_cointegrated_pairs(
             "max_market_notional": max_market_notional,
             "max_stop_notional": max_stop_notional,
             "order_capacity_usdt": order_capacity_usdt,
+            "return_std": return_std,
             "instrument_info": info,
         }
 
@@ -1282,6 +1299,48 @@ def get_cointegrated_pairs(
     else:
         corr_min = corr_min_filter if fast_path_enabled else 0.0
 
+    active_liquidity_pct = liquidity_pct
+    if liquidity_pct_override is not None:
+        active_liquidity_pct = _coerce_float_or_default(liquidity_pct_override, active_liquidity_pct)
+    active_min_avg_quote_volume = min_avg_quote_volume
+    if min_avg_quote_volume_override is not None:
+        active_min_avg_quote_volume = _coerce_float_or_default(
+            min_avg_quote_volume_override,
+            active_min_avg_quote_volume,
+        )
+
+    active_min_p_value = min_p_value_filter
+    if min_p_value_override is not None:
+        active_min_p_value = _coerce_float_or_default(min_p_value_override, active_min_p_value)
+    active_max_p_value = max_p_value_filter
+    if max_p_value_override is not None:
+        active_max_p_value = _coerce_float_or_default(max_p_value_override, active_max_p_value)
+
+    active_zero_crossings = min_zero_crossings
+    if min_zero_crossings_override is not None:
+        active_zero_crossings = _coerce_int_or_default(min_zero_crossings_override, active_zero_crossings)
+
+    active_min_capital_per_leg = min_capital_per_leg
+    if min_capital_per_leg_override is not None:
+        active_min_capital_per_leg = _coerce_float_or_default(
+            min_capital_per_leg_override,
+            active_min_capital_per_leg,
+        )
+
+    active_min_equity_filter = min_equity_filter_usdt
+    if min_equity_filter_override is not None:
+        active_min_equity_filter = _coerce_float_or_default(
+            min_equity_filter_override,
+            active_min_equity_filter,
+        )
+
+    prefilter_vol_ratio_max = _env_float(
+        "STATBOT_STRATEGY_PREFILTER_VOL_RATIO_MAX",
+        0.0,
+        minimum=0.0,
+    )
+    prefilter_vol_ratio_enabled = bool(prefilter_vol_ratio_max and prefilter_vol_ratio_max > 0)
+
     # Load pair exclusions so hospital/graveyard pairs do not stay in supply.
     excluded_pair_reasons = {}
     try:
@@ -1308,6 +1367,81 @@ def get_cointegrated_pairs(
     orderbook_cache = {}
     orderbook_soft_pass_tickers = set()
     order_capacity_logged = set()
+    validation_tiers = {
+        "tier_0": {
+            "checked_pairs": 0,
+            "passed_pairs": 0,
+            "filtered_pairs": 0,
+            "filtered_breakdown": {},
+            "settings": {
+                "corr_min": corr_min,
+                "min_avg_quote_volume": active_min_avg_quote_volume,
+                "min_capital_per_leg": active_min_capital_per_leg,
+                "min_equity_filter_usdt": active_min_equity_filter,
+                "order_capacity_min_usdt": min_order_capacity_usdt,
+                "vol_ratio_max": prefilter_vol_ratio_max if prefilter_vol_ratio_enabled else None,
+            },
+        },
+        "tier_2": {
+            "checked_pairs": 0,
+            "computed_pairs": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+        },
+    }
+
+    def _record_tier0_filter(reason):
+        filtered_breakdown[reason] = filtered_breakdown.get(reason, 0) + 1
+        tier0 = validation_tiers["tier_0"]
+        tier0["filtered_pairs"] += 1
+        tier0["filtered_breakdown"][reason] = tier0["filtered_breakdown"].get(reason, 0) + 1
+
+    def _pair_capital_profile(sym_1, sym_2):
+        min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
+        min_cap_2 = symbol_meta.get(sym_2, {}).get("min_capital", 0.0) or 0.0
+        required_floor = max(min_cap_1, min_cap_2) if min_cap_1 > 0 and min_cap_2 > 0 else None
+        min_equity = required_floor * 2 if required_floor else None
+        return min_cap_1, min_cap_2, required_floor, min_equity
+
+    def _pair_liquidity_profile(sym_1, sym_2):
+        avg_vol_1 = symbol_meta.get(sym_1, {}).get("avg_quote_volume")
+        avg_vol_2 = symbol_meta.get(sym_2, {}).get("avg_quote_volume")
+        pair_liquidity = None
+        if avg_vol_1 is not None and avg_vol_2 is not None:
+            pair_liquidity = min(avg_vol_1, avg_vol_2)
+        return avg_vol_1, avg_vol_2, pair_liquidity
+
+    def _tier0_prefilter_pair(sym_1, sym_2):
+        if active_min_avg_quote_volume and active_min_avg_quote_volume > 0:
+            avg_vol_1, avg_vol_2, _pair_liquidity = _pair_liquidity_profile(sym_1, sym_2)
+            if (
+                avg_vol_1 is None
+                or avg_vol_2 is None
+                or avg_vol_1 < active_min_avg_quote_volume
+                or avg_vol_2 < active_min_avg_quote_volume
+            ):
+                return "tier0_liquidity_min"
+
+        if active_min_capital_per_leg is not None and active_min_capital_per_leg > 0:
+            _min_cap_1, _min_cap_2, required_floor, _min_equity = _pair_capital_profile(sym_1, sym_2)
+            if required_floor is None or required_floor < active_min_capital_per_leg:
+                return "tier0_min_capital"
+
+        if active_min_equity_filter and active_min_equity_filter > 0:
+            _min_cap_1, _min_cap_2, _required_floor, min_equity = _pair_capital_profile(sym_1, sym_2)
+            if min_equity is not None and min_equity > active_min_equity_filter:
+                return "tier0_min_equity"
+
+        if prefilter_vol_ratio_enabled:
+            vol_1 = symbol_meta.get(sym_1, {}).get("return_std")
+            vol_2 = symbol_meta.get(sym_2, {}).get("return_std")
+            if vol_1 is None or vol_2 is None or vol_1 <= 0 or vol_2 <= 0:
+                return "tier0_vol_ratio"
+            vol_ratio = max(vol_1, vol_2) / min(vol_1, vol_2)
+            if vol_ratio > prefilter_vol_ratio_max:
+                return "tier0_vol_ratio"
+
+        return None
 
     def _order_capacity_passes(ticker):
         if not min_order_capacity_usdt or min_order_capacity_usdt <= 0:
@@ -1473,6 +1607,7 @@ def get_cointegrated_pairs(
         series_2_log = log_series_by_symbol[sym_2]
 
         total_comparisons += 1
+        validation_tiers["tier_0"]["checked_pairs"] += 1
         _emit_coint_progress()
 
         # Skip hospital/graveyard pairs
@@ -1480,17 +1615,15 @@ def get_cointegrated_pairs(
         pair_state_key = _normalize_pair_key_text(pair_key)
         exclusion_reason = excluded_pair_reasons.get(pair_state_key)
         if exclusion_reason:
-            filtered_breakdown[exclusion_reason] = filtered_breakdown.get(exclusion_reason, 0) + 1
+            _record_tier0_filter(exclusion_reason)
             continue
 
         if timestamps_by_symbol.get(sym_1) != timestamps_by_symbol.get(sym_2):
-            filtered_breakdown["timestamp_alignment"] = (
-                filtered_breakdown.get("timestamp_alignment", 0) + 1
-            )
+            _record_tier0_filter("timestamp_alignment")
             continue
 
         if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):
-            filtered_breakdown["order_capacity"] = filtered_breakdown.get("order_capacity", 0) + 1
+            _record_tier0_filter("order_capacity")
             continue
 
         ret_1 = returns_by_symbol.get(sym_1)
@@ -1501,12 +1634,19 @@ def get_cointegrated_pairs(
 
         if corr_min and corr_min > 0:
             if corr_value is None or not np.isfinite(corr_value):
-                filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
+                _record_tier0_filter("corr")
                 continue
             if abs(corr_value) < corr_min:
-                filtered_breakdown["corr"] = filtered_breakdown.get("corr", 0) + 1
+                _record_tier0_filter("corr")
                 continue
 
+        tier0_reason = _tier0_prefilter_pair(sym_1, sym_2)
+        if tier0_reason:
+            _record_tier0_filter(tier0_reason)
+            continue
+
+        validation_tiers["tier_0"]["passed_pairs"] += 1
+        validation_tiers["tier_2"]["checked_pairs"] += 1
         cache_key = None
         cached_metrics = None
         if metric_cache_enabled:
@@ -1524,12 +1664,15 @@ def get_cointegrated_pairs(
 
         if cached_metrics is not None:
             metric_cache_stats["hits"] += 1
+            validation_tiers["tier_2"]["cache_hits"] += 1
             metric_cache_entries[cache_key]["used_at"] = scan_unix
             metric_cache_dirty = True
             coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = cached_metrics
         else:
+            validation_tiers["tier_2"]["computed_pairs"] += 1
             if metric_cache_enabled:
                 metric_cache_stats["misses"] += 1
+                validation_tiers["tier_2"]["cache_misses"] += 1
             # Check for cointegration using precomputed logs
             coint_flag, p_value, adf_statistic, critical_values, hedge_ratio, zero_crossings = (
                 calculate_cointegration_from_log(series_1_log, series_2_log)
@@ -1586,15 +1729,8 @@ def get_cointegrated_pairs(
                     )
                 continue  # Skip this pair
 
-            min_cap_1 = symbol_meta.get(sym_1, {}).get("min_capital", 0.0) or 0.0
-            min_cap_2 = symbol_meta.get(sym_2, {}).get("min_capital", 0.0) or 0.0
-            required_floor = max(min_cap_1, min_cap_2) if min_cap_1 > 0 and min_cap_2 > 0 else None
-            min_equity = required_floor * 2 if required_floor else None
-            avg_vol_1 = symbol_meta.get(sym_1, {}).get("avg_quote_volume")
-            avg_vol_2 = symbol_meta.get(sym_2, {}).get("avg_quote_volume")
-            pair_liquidity = None
-            if avg_vol_1 is not None and avg_vol_2 is not None:
-                pair_liquidity = min(avg_vol_1, avg_vol_2)
+            min_cap_1, min_cap_2, required_floor, min_equity = _pair_capital_profile(sym_1, sym_2)
+            avg_vol_1, avg_vol_2, pair_liquidity = _pair_liquidity_profile(sym_1, sym_2)
             max_market_1 = symbol_meta.get(sym_1, {}).get("max_market_notional")
             max_market_2 = symbol_meta.get(sym_2, {}).get("max_market_notional")
             max_stop_1 = symbol_meta.get(sym_1, {}).get("max_stop_notional")
@@ -1643,46 +1779,6 @@ def get_cointegrated_pairs(
         df_coint = df_coint.sort_values(by=['zero_crossing'], ascending=[False])
     filtered_count = 0
     liquidity_pct_cutoff = None
-    active_liquidity_pct = (
-        liquidity_pct_override if liquidity_pct_override is not None else liquidity_pct
-    )
-    active_min_avg_quote_volume = (
-        min_avg_quote_volume_override if min_avg_quote_volume_override is not None else min_avg_quote_volume
-    )
-
-    active_min_p_value = min_p_value_filter
-    active_max_p_value = max_p_value_filter
-    if min_p_value_override is not None:
-        try:
-            active_min_p_value = float(min_p_value_override)
-        except (TypeError, ValueError):
-            pass
-    if max_p_value_override is not None:
-        try:
-            active_max_p_value = float(max_p_value_override)
-        except (TypeError, ValueError):
-            pass
-
-    active_zero_crossings = min_zero_crossings
-    if min_zero_crossings_override is not None:
-        try:
-            active_zero_crossings = int(float(min_zero_crossings_override))
-        except (TypeError, ValueError):
-            pass
-
-    active_min_capital_per_leg = min_capital_per_leg
-    if min_capital_per_leg_override is not None:
-        try:
-            active_min_capital_per_leg = float(min_capital_per_leg_override)
-        except (TypeError, ValueError):
-            pass
-
-    active_min_equity_filter = min_equity_filter_usdt
-    if min_equity_filter_override is not None:
-        try:
-            active_min_equity_filter = float(min_equity_filter_override)
-        except (TypeError, ValueError):
-            pass
 
     if not df_coint.empty:
         if active_min_p_value is not None and active_max_p_value is not None:
@@ -1831,6 +1927,7 @@ def get_cointegrated_pairs(
         "filtered_breakdown": filtered_breakdown,
         "data_quality": data_quality,
         "pair_metric_cache": metric_cache_stats,
+        "validation_tiers": validation_tiers,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),

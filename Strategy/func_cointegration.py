@@ -488,6 +488,7 @@ def extract_close_prices(klines):
 
 
 _PAIR_METRIC_CACHE_VERSION = 1
+_ORDERBOOK_LIQUIDITY_CACHE_VERSION = 1
 
 
 def _stable_float_array(values):
@@ -622,6 +623,75 @@ def _write_pair_metric_cache(path, entries, *, max_entries=None, logger=None):
             logger.warning("Failed to write pair metric cache: %s", exc)
         return {"entries": len(entries), "pruned": pruned, "write_error": str(exc)}
     return {"entries": len(entries), "pruned": pruned, "write_error": None}
+
+
+def _load_orderbook_liquidity_cache(path):
+    data = _read_json_object(path)
+    if data.get("version") != _ORDERBOOK_LIQUIDITY_CACHE_VERSION:
+        return {}, 0
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return {}, 0
+    return entries, len(entries)
+
+
+def _write_orderbook_liquidity_cache(path, entries, *, max_entries=None, logger=None):
+    if not isinstance(entries, dict):
+        entries = {}
+    pruned = 0
+    if max_entries is not None and max_entries >= 0 and len(entries) > max_entries:
+        def _entry_used_at(item):
+            entry = item[1] if isinstance(item[1], dict) else {}
+            return float(entry.get("used_at") or entry.get("fetched_at_unix") or 0)
+
+        sorted_entries = sorted(entries.items(), key=_entry_used_at, reverse=True)
+        pruned = len(entries) - max_entries
+        entries = dict(sorted_entries[:max_entries])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": _ORDERBOOK_LIQUIDITY_CACHE_VERSION,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "entries": entries,
+    }
+    temp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        temp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        temp_path.replace(path)
+    except Exception as exc:
+        if logger:
+            logger.warning("Failed to write orderbook liquidity cache: %s", exc)
+        return {"entries": len(entries), "pruned": pruned, "write_error": str(exc)}
+    return {"entries": len(entries), "pruned": pruned, "write_error": None}
+
+
+def _orderbook_spread_bps(bids, asks):
+    best_bid = _safe_float(bids[0][0]) if bids and len(bids[0]) > 0 else None
+    best_ask = _safe_float(asks[0][0]) if asks and len(asks[0]) > 0 else None
+    if best_bid is None or best_ask is None or best_bid <= 0 or best_ask <= 0:
+        return None
+    mid = (best_bid + best_ask) / 2.0
+    if mid <= 0 or best_ask < best_bid:
+        return None
+    return ((best_ask - best_bid) / mid) * 10_000.0
+
+
+def _orderbook_quality_score(weak_depth_usdt, hard_depth_usdt, imbalance, max_imbalance, age_seconds, ttl_seconds):
+    depth_score = 1.0
+    if hard_depth_usdt and hard_depth_usdt > 0:
+        depth_score = max(0.0, min(float(weak_depth_usdt or 0.0) / float(hard_depth_usdt), 1.0))
+
+    imbalance_score = 1.0
+    if imbalance is None or not np.isfinite(imbalance):
+        imbalance_score = 0.0
+    elif max_imbalance and max_imbalance > 1:
+        imbalance_score = max(0.0, min((float(max_imbalance) - float(imbalance)) / (float(max_imbalance) - 1.0), 1.0))
+
+    freshness_score = 1.0
+    if ttl_seconds and ttl_seconds > 0:
+        freshness_score = max(0.0, min(1.0 - (float(age_seconds or 0.0) / float(ttl_seconds)), 1.0))
+
+    return round((0.55 * depth_score) + (0.30 * imbalance_score) + (0.15 * freshness_score), 4)
 
 
 def _parse_quote_ccy(inst_id):
@@ -1013,6 +1083,7 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "data_quality",
         "timestamp_alignment_filtered",
         "pair_metric_cache",
+        "orderbook_cache",
         "validation_tiers",
         "accuracy_budget",
         "zero_crossing",
@@ -1134,6 +1205,50 @@ def get_cointegrated_pairs(
     metric_cache_dirty = False
     scan_time = time.time()
     scan_unix = int(scan_time)
+
+    orderbook_cache_path = output_dir / "orderbook_liquidity_cache.json"
+    orderbook_cache_ttl_seconds = _env_float(
+        "STATBOT_STRATEGY_ORDERBOOK_CACHE_TTL_SECONDS",
+        15.0,
+        minimum=0.0,
+    )
+    orderbook_persistent_cache_enabled = _env_bool(
+        "STATBOT_STRATEGY_ORDERBOOK_CACHE",
+        True,
+    ) and orderbook_cache_ttl_seconds > 0
+    orderbook_cache_max_entries = _env_int(
+        "STATBOT_STRATEGY_ORDERBOOK_CACHE_MAX_ENTRIES",
+        5000,
+        minimum=0,
+    )
+    orderbook_persistent_entries = {}
+    orderbook_cache_loaded_entries = 0
+    if orderbook_persistent_cache_enabled:
+        orderbook_persistent_entries, orderbook_cache_loaded_entries = _load_orderbook_liquidity_cache(
+            orderbook_cache_path
+        )
+    orderbook_cache_dirty = False
+    orderbook_quality_samples = []
+    orderbook_cache_stats = {
+        "enabled": bool(orderbook_persistent_cache_enabled),
+        "persisted": bool(orderbook_persistent_cache_enabled and write_output),
+        "path": str(orderbook_cache_path),
+        "ttl_seconds": orderbook_cache_ttl_seconds,
+        "loaded_entries": orderbook_cache_loaded_entries,
+        "hits": 0,
+        "misses": 0,
+        "stale_entries": 0,
+        "live_fetches": 0,
+        "writes": 0,
+        "recheck_needed": 0,
+        "entries": orderbook_cache_loaded_entries,
+        "pruned": 0,
+        "write_error": None,
+        "source_counts": {},
+        "pass_modes": {},
+        "quality_score_min": None,
+        "quality_score_avg": None,
+    }
 
     bar_ms = _parse_timeframe_ms(time_frame)
     closed_candle_only = _env_bool("STATBOT_STRATEGY_CLOSED_CANDLE_ONLY", True)
@@ -1544,10 +1659,113 @@ def get_cointegrated_pairs(
             order_capacity_logged.add(ticker)
         return False
 
+    def _record_orderbook_status(status):
+        source = str(status.get("source") or "unknown")
+        orderbook_cache_stats["source_counts"][source] = (
+            orderbook_cache_stats["source_counts"].get(source, 0) + 1
+        )
+        pass_mode = str(status.get("pass_mode") or "unknown")
+        orderbook_cache_stats["pass_modes"][pass_mode] = (
+            orderbook_cache_stats["pass_modes"].get(pass_mode, 0) + 1
+        )
+        quality_score = _metric_value_or_none(status.get("quality_score"))
+        if quality_score is not None:
+            orderbook_quality_samples.append(quality_score)
+
+    def _cached_orderbook_status(entry, now_unix, *, source):
+        if not isinstance(entry, dict):
+            return None, None
+        fetched_at = _metric_value_or_none(entry.get("fetched_at_unix"))
+        if fetched_at is None:
+            return None, None
+        age_seconds = max(float(now_unix) - fetched_at, 0.0)
+        if orderbook_cache_ttl_seconds > 0 and age_seconds > orderbook_cache_ttl_seconds:
+            return None, age_seconds
+        status = dict(entry)
+        status["source"] = source
+        status["age_seconds"] = age_seconds
+        status["fresh"] = True
+        status["cache_ttl_seconds"] = orderbook_cache_ttl_seconds
+        status["quality_score"] = _orderbook_quality_score(
+            status.get("weak_depth_usdt"),
+            min_orderbook_depth_usdt,
+            status.get("orderbook_imbalance"),
+            max_orderbook_imbalance,
+            age_seconds,
+            orderbook_cache_ttl_seconds,
+        )
+        status["used_at"] = int(now_unix)
+        return status, age_seconds
+
+    def _persist_orderbook_status(ticker, status):
+        nonlocal orderbook_cache_dirty
+        orderbook_cache[ticker] = status
+        if not orderbook_persistent_cache_enabled or not status.get("cacheable"):
+            return
+        numeric_keys = {
+            "bid_depth_usdt",
+            "ask_depth_usdt",
+            "weak_depth_usdt",
+            "orderbook_imbalance",
+            "spread_bps",
+            "quality_score",
+            "fetched_at_unix",
+            "cache_ttl_seconds",
+        }
+        entry = {}
+        for key in (
+            "ok",
+            "reason",
+            "detail",
+            "bid_levels",
+            "ask_levels",
+            "bid_depth_usdt",
+            "ask_depth_usdt",
+            "weak_depth_usdt",
+            "orderbook_imbalance",
+            "pass_mode",
+            "spread_bps",
+            "quality_score",
+            "fetched_at_unix",
+            "cache_ttl_seconds",
+            "fresh",
+        ):
+            if key not in status:
+                continue
+            entry[key] = _metric_value_or_none(status.get(key)) if key in numeric_keys else status.get(key)
+        entry["used_at"] = int(time.time())
+        orderbook_persistent_entries[ticker] = entry
+        orderbook_cache_stats["writes"] += 1
+        orderbook_cache_dirty = True
+
     def _get_orderbook_liquidity_status(ticker):
+        now_unix = time.time()
         cached = orderbook_cache.get(ticker)
         if cached is not None:
-            return cached
+            cached_status, _age = _cached_orderbook_status(cached, now_unix, source=cached.get("source") or "scan_cache")
+            if cached_status is not None:
+                _record_orderbook_status(cached_status)
+                return cached_status
+            orderbook_cache_stats["stale_entries"] += 1
+
+        stale_cache_age = None
+        if orderbook_persistent_cache_enabled:
+            persistent_status, stale_cache_age = _cached_orderbook_status(
+                orderbook_persistent_entries.get(ticker),
+                now_unix,
+                source="persistent_cache",
+            )
+            if persistent_status is not None:
+                orderbook_cache_stats["hits"] += 1
+                orderbook_cache[ticker] = persistent_status
+                orderbook_persistent_entries[ticker]["used_at"] = int(now_unix)
+                _record_orderbook_status(persistent_status)
+                return persistent_status
+            if stale_cache_age is not None:
+                orderbook_cache_stats["stale_entries"] += 1
+
+        orderbook_cache_stats["misses"] += 1
+        orderbook_cache_stats["live_fetches"] += 1
 
         meta = symbol_meta.get(ticker, {})
         instrument_info = meta.get("instrument_info") or {}
@@ -1556,24 +1774,60 @@ def get_cointegrated_pairs(
         try:
             orderbook_res = market_session.get_orderbook(instId=ticker, sz=50)
             if orderbook_res.get("code") != "0":
+                if stale_cache_age is not None:
+                    result = {
+                        "ok": False,
+                        "reason": "orderbook_needs_recheck",
+                        "detail": orderbook_res.get("msg") or "stale_cache_refetch_failed",
+                        "stale_age_seconds": stale_cache_age,
+                        "source": "stale_cache_refetch_failed",
+                        "fresh": False,
+                        "cache_ttl_seconds": orderbook_cache_ttl_seconds,
+                    }
+                    orderbook_cache_stats["recheck_needed"] += 1
+                    orderbook_cache[ticker] = result
+                    _record_orderbook_status(result)
+                    return result
                 result = {
                     "ok": False,
                     "reason": "orderbook_fetch_error",
                     "detail": orderbook_res.get("msg") or "unknown_error",
+                    "source": "live",
+                    "fresh": True,
+                    "fetched_at_unix": now_unix,
                 }
                 logger.warning("Failed to fetch orderbook for %s: %s", ticker, result["detail"])
                 orderbook_cache[ticker] = result
+                _record_orderbook_status(result)
                 return result
 
             data = orderbook_res.get("data", [])
             if not data:
+                if stale_cache_age is not None:
+                    result = {
+                        "ok": False,
+                        "reason": "orderbook_needs_recheck",
+                        "detail": "empty_data_after_stale_cache",
+                        "stale_age_seconds": stale_cache_age,
+                        "source": "stale_cache_refetch_failed",
+                        "fresh": False,
+                        "cache_ttl_seconds": orderbook_cache_ttl_seconds,
+                    }
+                    orderbook_cache_stats["recheck_needed"] += 1
+                    orderbook_cache[ticker] = result
+                    _record_orderbook_status(result)
+                    return result
                 result = {
                     "ok": False,
                     "reason": "orderbook_fetch_error",
                     "detail": "empty_data",
+                    "source": "live",
+                    "fresh": True,
+                    "fetched_at_unix": now_unix,
                 }
                 logger.warning("Failed to fetch orderbook for %s: empty response data", ticker)
                 orderbook_cache[ticker] = result
+                _record_orderbook_status(result)
                 return result
 
             bids = data[0].get("bids", [])
@@ -1584,6 +1838,12 @@ def get_cointegrated_pairs(
                     "reason": "orderbook_levels",
                     "bid_levels": len(bids),
                     "ask_levels": len(asks),
+                    "source": "live",
+                    "fresh": True,
+                    "cacheable": True,
+                    "fetched_at_unix": now_unix,
+                    "cache_ttl_seconds": orderbook_cache_ttl_seconds,
+                    "pass_mode": "fail",
                 }
                 logger.info(
                     "Skipping thin orderbook: %s (bids=%d, asks=%d levels)",
@@ -1591,7 +1851,8 @@ def get_cointegrated_pairs(
                     len(bids),
                     len(asks),
                 )
-                orderbook_cache[ticker] = result
+                _persist_orderbook_status(ticker, result)
+                _record_orderbook_status(result)
                 return result
 
             try:
@@ -1612,9 +1873,13 @@ def get_cointegrated_pairs(
                     "ok": False,
                     "reason": "orderbook_calc_error",
                     "detail": str(exc),
+                    "source": "live",
+                    "fresh": True,
+                    "fetched_at_unix": now_unix,
                 }
                 logger.warning("Error calculating orderbook depth for %s: %s", ticker, exc)
                 orderbook_cache[ticker] = result
+                _record_orderbook_status(result)
                 return result
 
             weak_depth_usdt = min(bid_depth_usdt, ask_depth_usdt)
@@ -1635,6 +1900,15 @@ def get_cointegrated_pairs(
                 )
             )
             pass_mode = "strict" if hard_ok else ("soft" if soft_ok else "fail")
+            spread_bps = _orderbook_spread_bps(bids, asks)
+            quality_score = _orderbook_quality_score(
+                weak_depth_usdt,
+                min_orderbook_depth_usdt,
+                imbalance,
+                max_orderbook_imbalance,
+                0.0,
+                orderbook_cache_ttl_seconds,
+            )
             result = {
                 "ok": hard_ok or soft_ok,
                 "reason": "orderbook_depth",
@@ -1643,6 +1917,14 @@ def get_cointegrated_pairs(
                 "weak_depth_usdt": weak_depth_usdt,
                 "orderbook_imbalance": imbalance,
                 "pass_mode": pass_mode,
+                "spread_bps": spread_bps,
+                "quality_score": quality_score,
+                "source": "live",
+                "fresh": True,
+                "cacheable": True,
+                "fetched_at_unix": now_unix,
+                "age_seconds": 0.0,
+                "cache_ttl_seconds": orderbook_cache_ttl_seconds,
             }
             if not result["ok"]:
                 logger.info(
@@ -1673,16 +1955,35 @@ def get_cointegrated_pairs(
                     bid_depth_usdt,
                     ask_depth_usdt,
                 )
-            orderbook_cache[ticker] = result
+            _persist_orderbook_status(ticker, result)
+            _record_orderbook_status(result)
             return result
         except Exception as exc:
+            if stale_cache_age is not None:
+                result = {
+                    "ok": False,
+                    "reason": "orderbook_needs_recheck",
+                    "detail": str(exc),
+                    "stale_age_seconds": stale_cache_age,
+                    "source": "stale_cache_refetch_failed",
+                    "fresh": False,
+                    "cache_ttl_seconds": orderbook_cache_ttl_seconds,
+                }
+                orderbook_cache_stats["recheck_needed"] += 1
+                orderbook_cache[ticker] = result
+                _record_orderbook_status(result)
+                return result
             result = {
                 "ok": False,
                 "reason": "orderbook_fetch_error",
                 "detail": str(exc),
+                "source": "live",
+                "fresh": True,
+                "fetched_at_unix": now_unix,
             }
             logger.warning("Error checking orderbook depth for %s: %s", ticker, exc)
             orderbook_cache[ticker] = result
+            _record_orderbook_status(result)
             return result
 
     def _get_pair_metrics(sym_1, sym_2, *, purpose):
@@ -2030,6 +2331,20 @@ def get_cointegrated_pairs(
         )
     else:
         metric_cache_stats["entries"] = len(metric_cache_entries)
+    if orderbook_quality_samples:
+        orderbook_cache_stats["quality_score_min"] = float(min(orderbook_quality_samples))
+        orderbook_cache_stats["quality_score_avg"] = float(sum(orderbook_quality_samples) / len(orderbook_quality_samples))
+    if orderbook_persistent_cache_enabled and orderbook_cache_dirty and write_output:
+        orderbook_cache_stats.update(
+            _write_orderbook_liquidity_cache(
+                orderbook_cache_path,
+                orderbook_persistent_entries,
+                max_entries=orderbook_cache_max_entries,
+                logger=logger,
+            )
+        )
+    else:
+        orderbook_cache_stats["entries"] = len(orderbook_persistent_entries)
     summary = {
         "total_pairs": total_comparisons,
         "cointegrated_pairs": len(coint_pair_list),
@@ -2046,6 +2361,7 @@ def get_cointegrated_pairs(
         "filtered_breakdown": filtered_breakdown,
         "data_quality": data_quality,
         "pair_metric_cache": metric_cache_stats,
+        "orderbook_cache": orderbook_cache_stats,
         "validation_tiers": validation_tiers,
         "accuracy_budget": accuracy_budget,
         "corr_min": corr_min,

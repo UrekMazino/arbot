@@ -23,6 +23,7 @@ def isolate_strategy_output(monkeypatch, tmp_path):
     strategy_file.parent.mkdir(parents=True, exist_ok=True)
     strategy_file.write_text("# isolated test module path\n", encoding="utf-8")
     monkeypatch.setattr(fc, "__file__", str(strategy_file))
+    monkeypatch.setenv("STATBOT_STRATEGY_REJECT_SAMPLE_PCT", "0")
 
 
 def _build_symbol(inst_id: str, closes: list[float], *, ct_val: float) -> dict:
@@ -110,6 +111,124 @@ def test_get_cointegrated_pairs_caches_orderbook_by_ticker(monkeypatch):
     assert calls.count("AAA-USDT-SWAP") == 1
     assert calls.count("BBB-USDT-SWAP") == 1
     assert calls.count("CCC-USDT-SWAP") == 1
+
+
+def test_fresh_persistent_orderbook_cache_reuses_snapshot(monkeypatch):
+    now = {"value": 1_000.0}
+    calls: list[str] = []
+
+    def fake_get_orderbook(instId: str, sz: int = 50):
+        calls.append(instId)
+        levels = [["100", "100", "0", "1"]] * 10
+        return {"code": "0", "data": [{"bids": levels, "asks": levels}]}
+
+    json_symbols = {
+        "AAA-USDT-SWAP": _build_symbol("AAA-USDT-SWAP", [10.0, 10.1, 10.2, 10.3], ct_val=1.0),
+        "BBB-USDT-SWAP": _build_symbol("BBB-USDT-SWAP", [11.0, 11.1, 11.2, 11.3], ct_val=1.0),
+    }
+
+    monkeypatch.setattr(fc.time, "time", lambda: now["value"])
+    monkeypatch.setenv("STATBOT_STRATEGY_ORDERBOOK_CACHE_TTL_SECONDS", "60")
+    monkeypatch.setenv("STATBOT_STRATEGY_PAIR_METRIC_CACHE", "0")
+    monkeypatch.setattr(
+        fc,
+        "calculate_cointegration_from_log",
+        lambda *_args, **_kwargs: (1, 0.001, -4.0, -3.0, 1.0, 5),
+    )
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=fake_get_orderbook))
+    monkeypatch.setattr(fc, "min_orderbook_levels", 7)
+    monkeypatch.setattr(fc, "min_orderbook_depth_usdt", 1000.0)
+
+    first_df, first_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+
+    assert len(first_df) == 1
+    assert calls == ["AAA-USDT-SWAP", "BBB-USDT-SWAP"]
+    assert first_summary["orderbook_cache"]["live_fetches"] == 2
+    assert first_summary["orderbook_cache"]["writes"] == 2
+
+    now["value"] = 1_005.0
+
+    def fail_get_orderbook(instId: str, sz: int = 50):
+        raise AssertionError("fresh persistent orderbook cache should avoid live fetch")
+
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=fail_get_orderbook))
+
+    second_df, second_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+
+    assert len(second_df) == 1
+    assert second_summary["orderbook_cache"]["hits"] == 2
+    assert second_summary["orderbook_cache"]["live_fetches"] == 0
+    assert second_summary["orderbook_cache"]["source_counts"]["persistent_cache"] == 2
+
+
+def test_stale_orderbook_cache_requires_recheck_when_refetch_fails(monkeypatch):
+    now = {"value": 2_000.0}
+
+    def good_get_orderbook(instId: str, sz: int = 50):
+        levels = [["100", "100", "0", "1"]] * 10
+        return {"code": "0", "data": [{"bids": levels, "asks": levels}]}
+
+    json_symbols = {
+        "AAA-USDT-SWAP": _build_symbol("AAA-USDT-SWAP", [10.0, 10.1, 10.2, 10.3], ct_val=1.0),
+        "BBB-USDT-SWAP": _build_symbol("BBB-USDT-SWAP", [11.0, 11.1, 11.2, 11.3], ct_val=1.0),
+    }
+
+    monkeypatch.setattr(fc.time, "time", lambda: now["value"])
+    monkeypatch.setenv("STATBOT_STRATEGY_ORDERBOOK_CACHE_TTL_SECONDS", "1")
+    monkeypatch.setenv("STATBOT_STRATEGY_PAIR_METRIC_CACHE", "0")
+    monkeypatch.setattr(
+        fc,
+        "calculate_cointegration_from_log",
+        lambda *_args, **_kwargs: (1, 0.001, -4.0, -3.0, 1.0, 5),
+    )
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=good_get_orderbook))
+    monkeypatch.setattr(fc, "min_orderbook_levels", 7)
+    monkeypatch.setattr(fc, "min_orderbook_depth_usdt", 1000.0)
+
+    first_df, first_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+    assert len(first_df) == 1
+    assert first_summary["orderbook_cache"]["writes"] == 2
+
+    now["value"] = 2_010.0
+
+    def failed_refetch(instId: str, sz: int = 50):
+        return {"code": "500", "msg": "temporary orderbook outage", "data": []}
+
+    monkeypatch.setattr(fc, "market_session", SimpleNamespace(get_orderbook=failed_refetch))
+
+    second_df, second_summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+    )
+
+    assert second_df.empty
+    assert second_summary["filtered_breakdown"]["orderbook_needs_recheck"] == 1
+    assert second_summary["orderbook_cache"]["stale_entries"] >= 1
+    assert second_summary["orderbook_cache"]["recheck_needed"] == 1
+    assert second_summary["orderbook_cache"]["live_fetches"] == 1
 
 
 def test_pair_supply_caps_canonical_pairs_at_configured_max(monkeypatch, tmp_path):

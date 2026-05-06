@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+STRATEGY_ROOT = ROOT / "Strategy"
+if str(STRATEGY_ROOT) not in sys.path:
+    sys.path.insert(0, str(STRATEGY_ROOT))
+
+import func_cointegration as fc
+
+
+BAR_MS = 60_000
+BASE_TS = 1_800_000_000_000
+
+
+@pytest.fixture(autouse=True)
+def isolate_strategy_output(monkeypatch, tmp_path):
+    strategy_file = tmp_path / "Strategy" / "func_cointegration.py"
+    strategy_file.parent.mkdir(parents=True, exist_ok=True)
+    strategy_file.write_text("# isolated test module path\n", encoding="utf-8")
+    monkeypatch.setattr(fc, "__file__", str(strategy_file))
+
+
+def _kline(ts: int, close: float) -> dict:
+    return {
+        "timestamp": str(ts),
+        "open": close,
+        "high": close,
+        "low": close,
+        "close": close,
+        "volume": 100.0,
+        "volume_ccy": 100.0,
+    }
+
+
+def _symbol(closes: list[float], timestamps: list[int]) -> dict:
+    return {
+        "symbol_info": {
+            "min_sz": 1.0,
+            "lot_sz": 1.0,
+            "ctVal": 1.0,
+            "ctMult": 1.0,
+            "ctValCcy": "USDT",
+            "maxMktSz": 100000.0,
+            "maxStopSz": 100000.0,
+        },
+        "klines": [_kline(ts, close) for ts, close in zip(timestamps, closes)],
+    }
+
+
+def test_validate_kline_series_drops_forming_epoch_candle():
+    rows = [
+        _kline(BASE_TS + (idx * BAR_MS), close)
+        for idx, close in enumerate([10.0, 10.1, 10.2, 10.3])
+    ]
+
+    quality = fc.validate_kline_series(
+        rows,
+        bar_ms=BAR_MS,
+        now_ms=BASE_TS + (3 * BAR_MS) + 30_000,
+        closed_candle_only=True,
+        max_stale_bars=5,
+    )
+
+    assert quality["tier"] == "tier_1"
+    assert quality["dropped_forming_candles"] == 1
+    assert quality["close_prices"] == [10.0, 10.1, 10.2]
+    assert quality["timestamps"] == [BASE_TS + BAR_MS, BASE_TS + (2 * BAR_MS), BASE_TS + (3 * BAR_MS)]
+    assert "forming_candle_dropped" in quality["reason_codes"]
+
+
+def test_validate_kline_series_marks_small_gap_analysis_only():
+    timestamps = [BASE_TS, BASE_TS + BAR_MS, BASE_TS + (3 * BAR_MS), BASE_TS + (4 * BAR_MS)]
+    rows = [_kline(ts, 10.0 + idx) for idx, ts in enumerate(timestamps)]
+
+    quality = fc.validate_kline_series(
+        rows,
+        bar_ms=BAR_MS,
+        now_ms=BASE_TS + (5 * BAR_MS),
+        closed_candle_only=True,
+        max_missing_bars=2,
+        max_stale_bars=5,
+    )
+
+    assert quality["tier"] == "tier_2"
+    assert quality["missing_bars"] == 1
+    assert "missing_bars" in quality["reason_codes"]
+    assert quality["close_prices"] == [10.0, 11.0, 12.0, 13.0]
+
+
+def test_validate_kline_series_excludes_duplicate_timestamp():
+    rows = [
+        _kline(BASE_TS, 10.0),
+        _kline(BASE_TS, 10.1),
+        _kline(BASE_TS + BAR_MS, 10.2),
+    ]
+
+    quality = fc.validate_kline_series(
+        rows,
+        bar_ms=BAR_MS,
+        now_ms=BASE_TS + (3 * BAR_MS),
+        closed_candle_only=True,
+    )
+
+    assert quality["tier"] == "tier_3"
+    assert quality["duplicate_timestamps"] == 1
+    assert quality["reason_codes"] == ["duplicate_timestamp"]
+
+
+def test_get_cointegrated_pairs_skips_timestamp_mismatch_before_stats(monkeypatch):
+    monkeypatch.setattr(fc, "time_frame", "1m")
+    monkeypatch.setattr(fc.time, "time", lambda: (BASE_TS + (6 * BAR_MS)) / 1000)
+    monkeypatch.setattr(fc, "_load_restricted_tickers", lambda: set())
+
+    def fail_cointegration(*_args, **_kwargs):
+        raise AssertionError("timestamp-misaligned pair should not reach stats")
+
+    monkeypatch.setattr(fc, "calculate_cointegration_from_log", fail_cointegration)
+
+    json_symbols = {
+        "AAA-USDT-SWAP": _symbol(
+            [10.0, 10.1, 10.2, 10.3],
+            [BASE_TS, BASE_TS + BAR_MS, BASE_TS + (2 * BAR_MS), BASE_TS + (3 * BAR_MS)],
+        ),
+        "BBB-USDT-SWAP": _symbol(
+            [11.0, 11.1, 11.2, 11.3],
+            [BASE_TS + BAR_MS, BASE_TS + (2 * BAR_MS), BASE_TS + (3 * BAR_MS), BASE_TS + (4 * BAR_MS)],
+        ),
+    }
+
+    df, summary = fc.get_cointegrated_pairs(
+        json_symbols,
+        corr_min_override=0.0,
+        min_p_value_override=0.0,
+        max_p_value_override=0.01,
+        min_zero_crossings_override=1,
+        write_output=False,
+    )
+
+    assert df.empty
+    assert summary["total_pairs"] == 1
+    assert summary["filtered_breakdown"]["timestamp_alignment"] == 1
+    assert summary["timestamp_alignment_filtered"] == 1
+    assert summary["data_quality"]["tradable_symbols"] == 2

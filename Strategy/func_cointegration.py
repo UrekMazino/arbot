@@ -22,6 +22,7 @@ from config_strategy_api import (
     fast_path_enabled,
     corr_min_filter,
     corr_lookback,
+    time_frame,
     market_session,
 )
 import time
@@ -75,6 +76,13 @@ def _env_float(name, default, minimum=None):
     if minimum is not None and value < minimum:
         return minimum
     return value
+
+
+def _env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 def _read_json_object(path):
@@ -227,26 +235,241 @@ def _corrcoef_fast(series_a, series_b):
     return float((a * b).sum() / denom)
 
 
-# Put close prices into a list
-def extract_close_prices(klines):
-    close_prices = []
-    for price_values in klines:
-        if math.isnan(price_values["close"]):
-            return []
-        close_prices.append(price_values["close"])
-
-    # Filter out symbols with zero variance
-    if len(set(close_prices)) == 1:
-        return []
-
-    return close_prices
-
-
 def _safe_float(value):
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+_EPOCH_MS_MIN = 1_000_000_000_000
+
+
+def _parse_timeframe_ms(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    idx = 0
+    while idx < len(text) and text[idx].isdigit():
+        idx += 1
+    if idx == 0:
+        return None
+    try:
+        amount = int(text[:idx])
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    unit = text[idx:]
+    if unit == "m":
+        return amount * 60_000
+    if unit in ("H", "h"):
+        return amount * 60 * 60_000
+    if unit in ("D", "d"):
+        return amount * 24 * 60 * 60_000
+    if unit in ("W", "w"):
+        return amount * 7 * 24 * 60 * 60_000
+    return None
+
+
+def _coerce_timestamp_ms(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _empty_quality_result(tier, reasons, **extra):
+    result = {
+        "tier": tier,
+        "reason_codes": list(reasons),
+        "close_prices": [],
+        "timestamps": [],
+        "raw_timestamps": [],
+        "dropped_forming_candles": 0,
+        "missing_bars": 0,
+        "duplicate_timestamps": 0,
+        "epoch_timestamps": False,
+    }
+    result.update(extra)
+    return result
+
+
+def validate_kline_series(
+    klines,
+    *,
+    bar_ms=None,
+    now_ms=None,
+    closed_candle_only=None,
+    max_missing_bars=None,
+    max_stale_bars=None,
+):
+    """
+    Validate one symbol's candle series for discovery.
+
+    Tier 1 is tradable. Tier 2 is clean enough for analysis-only diagnostics
+    but excluded from tradable pair generation. Tier 3 is excluded.
+    """
+    if closed_candle_only is None:
+        closed_candle_only = _env_bool("STATBOT_STRATEGY_CLOSED_CANDLE_ONLY", True)
+    if max_missing_bars is None:
+        max_missing_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_MISSING_BARS_ANALYSIS", 2, minimum=0)
+    if max_stale_bars is None:
+        max_stale_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_STALE_BARS", 5, minimum=0)
+    close_grace_ms = _env_int("STATBOT_STRATEGY_CANDLE_CLOSE_GRACE_MS", 0, minimum=0)
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+
+    if not klines:
+        return _empty_quality_result("tier_3", ["no_klines"])
+
+    rows = []
+    reasons = []
+    invalid_close_count = 0
+    missing_timestamp_count = 0
+    invalid_row_count = 0
+    for idx, row in enumerate(klines):
+        if not isinstance(row, dict):
+            invalid_row_count += 1
+            continue
+
+        close = _safe_float(row.get("close"))
+        if close is None or not np.isfinite(close) or close <= 0:
+            invalid_close_count += 1
+            continue
+
+        timestamp = _coerce_timestamp_ms(row.get("timestamp"))
+        if timestamp is None:
+            missing_timestamp_count += 1
+
+        rows.append(
+            {
+                "index": idx,
+                "timestamp": timestamp,
+                "close": close,
+            }
+        )
+
+    if invalid_row_count:
+        reasons.append("invalid_row")
+    if invalid_close_count:
+        reasons.append("invalid_close")
+    if missing_timestamp_count:
+        reasons.append("missing_timestamp")
+    if invalid_row_count or invalid_close_count or missing_timestamp_count:
+        return _empty_quality_result(
+            "tier_3",
+            reasons,
+            invalid_rows=invalid_row_count,
+            invalid_closes=invalid_close_count,
+            missing_timestamps=missing_timestamp_count,
+        )
+    if len(rows) < 2:
+        return _empty_quality_result("tier_3", ["too_few_candles"])
+
+    original_timestamps = [row["timestamp"] for row in rows]
+    timestamp_set = set(original_timestamps)
+    duplicate_count = len(original_timestamps) - len(timestamp_set)
+    if duplicate_count:
+        return _empty_quality_result(
+            "tier_3",
+            ["duplicate_timestamp"],
+            duplicate_timestamps=duplicate_count,
+        )
+
+    rows = sorted(rows, key=lambda item: item["timestamp"])
+    if [row["timestamp"] for row in rows] != original_timestamps:
+        reasons.append("sorted_timestamps")
+
+    raw_timestamps = [row["timestamp"] for row in rows]
+    epoch_timestamps = bool(raw_timestamps and max(raw_timestamps) >= _EPOCH_MS_MIN)
+    dropped_forming = 0
+    if closed_candle_only and epoch_timestamps and bar_ms and bar_ms > 0:
+        closed_cutoff = int(now_ms) - int(bar_ms) - close_grace_ms
+        closed_rows = [row for row in rows if row["timestamp"] <= closed_cutoff]
+        dropped_forming = len(rows) - len(closed_rows)
+        if dropped_forming:
+            reasons.append("forming_candle_dropped")
+        rows = closed_rows
+        if len(rows) < 2:
+            return _empty_quality_result(
+                "tier_3",
+                ["no_closed_candles"],
+                dropped_forming_candles=dropped_forming,
+                epoch_timestamps=epoch_timestamps,
+            )
+
+    raw_timestamps = [row["timestamp"] for row in rows]
+    alignment_timestamps = [
+        timestamp + int(bar_ms)
+        if epoch_timestamps and bar_ms and bar_ms > 0
+        else timestamp
+        for timestamp in raw_timestamps
+    ]
+
+    missing_bars = 0
+    bad_gap = False
+    if epoch_timestamps and bar_ms and bar_ms > 0:
+        for prev_ts, next_ts in zip(raw_timestamps, raw_timestamps[1:]):
+            gap = next_ts - prev_ts
+            if gap <= 0:
+                bad_gap = True
+                continue
+            if gap == bar_ms:
+                continue
+            if gap % bar_ms != 0:
+                bad_gap = True
+                continue
+            missing_bars += max((gap // bar_ms) - 1, 0)
+        if bad_gap:
+            reasons.append("bad_alignment")
+        if missing_bars:
+            reasons.append("missing_bars")
+
+        if max_stale_bars and max_stale_bars > 0:
+            last_close_ts = raw_timestamps[-1] + int(bar_ms)
+            stale_cutoff = int(max_stale_bars) * int(bar_ms)
+            if int(now_ms) - last_close_ts > stale_cutoff:
+                reasons.append("stale")
+
+    close_prices = [row["close"] for row in rows]
+    if len(set(close_prices)) == 1:
+        reasons.append("zero_variance")
+
+    tier = "tier_1"
+    if any(reason in reasons for reason in ("bad_alignment", "stale", "zero_variance")):
+        tier = "tier_3"
+    elif missing_bars:
+        tier = "tier_2" if missing_bars <= max_missing_bars else "tier_3"
+
+    if tier == "tier_3":
+        close_prices = []
+        alignment_timestamps = []
+        raw_timestamps = []
+
+    return {
+        "tier": tier,
+        "reason_codes": reasons,
+        "close_prices": close_prices,
+        "timestamps": alignment_timestamps,
+        "raw_timestamps": raw_timestamps,
+        "dropped_forming_candles": dropped_forming,
+        "missing_bars": int(missing_bars),
+        "duplicate_timestamps": 0,
+        "epoch_timestamps": epoch_timestamps,
+    }
+
+
+# Put close prices into a list
+def extract_close_prices(klines):
+    quality = validate_kline_series(
+        klines,
+        closed_candle_only=False,
+        max_stale_bars=0,
+    )
+    if quality.get("tier") == "tier_3":
+        return []
+    return quality.get("close_prices") or []
 
 
 def _parse_quote_ccy(inst_id):
@@ -635,6 +858,8 @@ def _write_cointegration_status_summary(output_path, summary, logger=None):
         "unusable_liquidity_pairs_filtered",
         "zero_crossing_min",
         "filtered_breakdown",
+        "data_quality",
+        "timestamp_alignment_filtered",
         "zero_crossing",
     ]
     scan_summary = {key: summary.get(key) for key in summary_keys if key in summary}
@@ -724,12 +949,62 @@ def get_cointegrated_pairs(
     restricted_tickers = _load_restricted_tickers()
     restricted_removed = 0
 
+    bar_ms = _parse_timeframe_ms(time_frame)
+    closed_candle_only = _env_bool("STATBOT_STRATEGY_CLOSED_CANDLE_ONLY", True)
+    max_missing_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_MISSING_BARS_ANALYSIS", 2, minimum=0)
+    max_stale_bars = _env_int("STATBOT_STRATEGY_DATA_MAX_STALE_BARS", 5, minimum=0)
+    now_ms = int(time.time() * 1000)
+    data_quality = {
+        "total_symbols": len(json_symbols),
+        "tradable_symbols": 0,
+        "analysis_only_symbols": 0,
+        "excluded_symbols": 0,
+        "tier_counts": {"tier_1": 0, "tier_2": 0, "tier_3": 0},
+        "reason_counts": {},
+        "closed_candle_only": bool(closed_candle_only),
+        "timeframe": time_frame,
+        "bar_ms": bar_ms,
+        "max_missing_bars_analysis_only": max_missing_bars,
+        "max_stale_bars": max_stale_bars,
+    }
+
+    def _record_quality(quality):
+        tier = str(quality.get("tier") or "tier_3")
+        if tier not in data_quality["tier_counts"]:
+            data_quality["tier_counts"][tier] = 0
+        data_quality["tier_counts"][tier] += 1
+        if tier == "tier_1":
+            data_quality["tradable_symbols"] += 1
+        elif tier == "tier_2":
+            data_quality["analysis_only_symbols"] += 1
+        else:
+            data_quality["excluded_symbols"] += 1
+        for reason in quality.get("reason_codes") or ["unknown"]:
+            reason_text = str(reason or "unknown")
+            data_quality["reason_counts"][reason_text] = (
+                data_quality["reason_counts"].get(reason_text, 0) + 1
+            )
+
     series_by_symbol = {}
     log_series_by_symbol = {}
     returns_by_symbol = {}
+    timestamps_by_symbol = {}
     symbol_meta = {}
     for sym, data in json_symbols.items():
-        series = extract_close_prices(data['klines'])
+        klines = data.get('klines', []) if isinstance(data, dict) else []
+        quality = validate_kline_series(
+            klines,
+            bar_ms=bar_ms,
+            now_ms=now_ms,
+            closed_candle_only=closed_candle_only,
+            max_missing_bars=max_missing_bars,
+            max_stale_bars=max_stale_bars,
+        )
+        _record_quality(quality)
+        if quality.get("tier") != "tier_1":
+            continue
+
+        series = quality.get("close_prices") or []
         if not series:
             continue
         series = np.array(series, dtype=float)
@@ -741,13 +1016,13 @@ def get_cointegrated_pairs(
 
         series_by_symbol[sym] = series
         log_series_by_symbol[sym] = log_series
+        timestamps_by_symbol[sym] = tuple(quality.get("timestamps") or ())
         returns = np.diff(log_series)
         if corr_lookback and corr_lookback > 0 and returns.size > corr_lookback:
             returns = returns[-corr_lookback:]
         returns_by_symbol[sym] = returns
 
         info = data.get('symbol_info', {}) if isinstance(data, dict) else {}
-        klines = data.get('klines', []) if isinstance(data, dict) else []
         min_sz = info.get('min_sz') if isinstance(info, dict) else None
         lot_sz = info.get('lot_sz') if isinstance(info, dict) else None
         if min_sz is None and isinstance(info, dict):
@@ -1033,6 +1308,12 @@ def get_cointegrated_pairs(
         exclusion_reason = excluded_pair_reasons.get(pair_state_key)
         if exclusion_reason:
             filtered_breakdown[exclusion_reason] = filtered_breakdown.get(exclusion_reason, 0) + 1
+            continue
+
+        if timestamps_by_symbol.get(sym_1) != timestamps_by_symbol.get(sym_2):
+            filtered_breakdown["timestamp_alignment"] = (
+                filtered_breakdown.get("timestamp_alignment", 0) + 1
+            )
             continue
 
         if not _order_capacity_passes(sym_1) or not _order_capacity_passes(sym_2):
@@ -1321,9 +1602,11 @@ def get_cointegrated_pairs(
         "crossing_rejected_by_orderbook": max(raw_pairs_with_crossings - pairs_with_crossings, 0),
         "crossing_reject_examples": crossing_reject_examples,
         "filtered_breakdown": filtered_breakdown,
+        "data_quality": data_quality,
         "corr_min": corr_min,
         "corr_lookback": corr_lookback,
         "corr_filtered": filtered_breakdown.get("corr", 0),
+        "timestamp_alignment_filtered": filtered_breakdown.get("timestamp_alignment", 0),
         "p_value_min": active_min_p_value,
         "p_value_max": active_max_p_value,
         "zero_crossing_min": active_zero_crossings,

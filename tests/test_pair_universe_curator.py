@@ -107,6 +107,31 @@ def test_pair_universe_curator_writes_ranked_advisory_report(monkeypatch, tmp_pa
     assert report["top_pairs"][0]["reasons"]
 
 
+def test_pair_universe_curator_defaults_to_strategy_kline_limit(monkeypatch, tmp_path):
+    pairs_path, price_path = _write_sample_inputs(tmp_path)
+    report_path = tmp_path / "pair_universe_curator.json"
+    state_path = tmp_path / "pair_universe_curator_control.json"
+    status_path = tmp_path / "2_cointegrated_pairs_status.json"
+    supply_state_path = tmp_path / "pair_supply_control.json"
+
+    monkeypatch.setattr(curator, "COINT_CSV", pairs_path)
+    monkeypatch.setattr(curator, "PRICE_JSON", price_path)
+    monkeypatch.setattr(curator, "STATUS_JSON", status_path)
+    monkeypatch.setattr(curator, "CURATOR_REPORT_JSON", report_path)
+    monkeypatch.setattr(curator, "CURATOR_STATE_JSON", state_path)
+    monkeypatch.setattr(curator, "PAIR_SUPPLY_STATE_JSON", supply_state_path)
+    monkeypatch.setattr(curator, "EXECUTION_ENV_FILE", tmp_path / ".env")
+    monkeypatch.setattr(curator, "EXECUTION_STATE_ROOT", tmp_path)
+    monkeypatch.delenv("STATBOT_PAIR_CURATOR_KLINE_LIMIT", raising=False)
+    monkeypatch.setenv("STATBOT_STRATEGY_KLINE_LIMIT", "130")
+    monkeypatch.setenv("STATBOT_PAIR_CURATOR_STALE_SECONDS", "999999")
+    monkeypatch.setenv("STATBOT_STRATEGY_Z_SCORE_WINDOW", "20")
+
+    report = curator.run_curator_once()
+
+    assert report["settings"]["kline_limit"] == 130
+
+
 def test_pair_universe_curator_marks_pair_supply_generation_ready(monkeypatch, tmp_path):
     pairs_path, price_path = _write_sample_inputs(tmp_path)
     report_path = tmp_path / "pair_universe_curator.json"

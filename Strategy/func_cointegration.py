@@ -1239,6 +1239,10 @@ def get_cointegrated_pairs(
     output_dir.mkdir(parents=True, exist_ok=True)
     metric_cache_path = output_dir / "pair_metric_cache.json"
     metric_cache_enabled = _env_bool("STATBOT_STRATEGY_PAIR_METRIC_CACHE", True)
+    metric_cache_persist = metric_cache_enabled and _env_bool(
+        "STATBOT_STRATEGY_PAIR_METRIC_CACHE_PERSIST",
+        True,
+    )
     metric_cache_max_entries = _env_int("STATBOT_STRATEGY_PAIR_METRIC_CACHE_MAX_ENTRIES", 50000, minimum=0)
     metric_cache_entries = {}
     metric_cache_loaded_entries = 0
@@ -1250,7 +1254,7 @@ def get_cointegrated_pairs(
     metric_config_hash, metric_config = _metric_config_signature()
     metric_cache_stats = {
         "enabled": bool(metric_cache_enabled),
-        "persisted": bool(metric_cache_enabled and write_output),
+        "persisted": bool(metric_cache_persist),
         "path": str(metric_cache_path),
         "loaded_entries": metric_cache_loaded_entries,
         "hits": 0,
@@ -2504,7 +2508,7 @@ def get_cointegrated_pairs(
     accumulation_cap_filtered = int(output_status.get("accumulation_cap_filtered") or 0)
     if accumulation_cap_filtered:
         filtered_breakdown["accumulation_cap"] = accumulation_cap_filtered
-    if metric_cache_enabled and metric_cache_dirty and write_output:
+    if metric_cache_enabled and metric_cache_dirty and metric_cache_persist:
         metric_cache_stats.update(
             _write_pair_metric_cache(
                 metric_cache_path,

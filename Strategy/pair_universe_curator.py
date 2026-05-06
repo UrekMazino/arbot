@@ -589,10 +589,11 @@ def run_curator_once() -> dict[str, Any]:
     previous_pairs = previous_pairs if isinstance(previous_pairs, dict) else {}
     lifecycle = _load_pair_lifecycle_state(time.time())
 
+    strategy_kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 2880, minimum=100)
     settings = {
         "critical_p": _env_float("STATBOT_P_VALUE_CRITICAL", 0.15, minimum=0.000001),
         "z_window": _env_int("STATBOT_STRATEGY_Z_SCORE_WINDOW", 60, minimum=2),
-        "kline_limit": _env_int("STATBOT_PAIR_CURATOR_KLINE_LIMIT", 720, minimum=100),
+        "kline_limit": _env_int("STATBOT_PAIR_CURATOR_KLINE_LIMIT", strategy_kline_limit, minimum=100),
         "min_crossings": _env_int("STATBOT_PAIR_CURATOR_MIN_CROSSINGS", 3, minimum=0),
         "target_crossings": _env_int("STATBOT_PAIR_CURATOR_TARGET_CROSSINGS", 20, minimum=1),
         "min_liquidity": _env_float("STATBOT_PAIR_CURATOR_MIN_LIQUIDITY_USDT", 1000.0, minimum=0.0),

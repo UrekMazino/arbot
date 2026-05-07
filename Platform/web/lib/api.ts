@@ -571,6 +571,7 @@ export type CointegratedPairPoint = {
   actual_exit_label?: string | null;
   actual_exit_count?: number;
   actual_exit_pnl_usdt?: number | null;
+  actual_markers?: ChartAuditActualMarker[];
   z_upper: number;
   z_lower: number;
   z_mid: number;
@@ -599,6 +600,58 @@ export type CointegratedPairDetail = {
       legend?: Record<string, string>;
     };
   };
+};
+
+export type ChartAuditActualMarkerType =
+  | "actual_entry"
+  | "actual_exit"
+  | "actual_partial_exit"
+  | "actual_blocked_signal"
+  | "actual_regime_exit"
+  | "actual_manual_exit"
+  | "actual_advanced_ml_shadow_recommendation";
+
+export type ChartAuditActualMarker = {
+  timestamp: number | string;
+  original_event_timestamp?: number | string | null;
+  timestamp_alignment?: "exact" | "snapped_to_nearest_candle" | string;
+  marker_category?: "actual" | string;
+  marker_type: ChartAuditActualMarkerType;
+  trade_id?: string | null;
+  entry_id?: string | null;
+  side?: string | null;
+  z_score?: number | null;
+  spread?: number | null;
+  pnl_usdt?: number | null;
+  fees_usdt?: number | null;
+  slippage_usdt?: number | null;
+  reason?: string | null;
+  block_reasons?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type ChartAuditStatisticalMarker = {
+  timestamp: number | string;
+  marker_category?: "statistical" | string;
+  marker_type: string;
+  spread?: number | null;
+  zscore?: number | null;
+  label?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type PairDecisionAuditChart = {
+  pair: string;
+  timeframe: string | null;
+  start_ts: number | null;
+  end_ts: number | null;
+  zscore_series: Array<Record<string, unknown>>;
+  statistical_markers: ChartAuditStatisticalMarker[];
+  replay_markers: Array<Record<string, unknown>>;
+  actual_markers: ChartAuditActualMarker[];
+  counterfactual_exit_studies: Array<Record<string, unknown>>;
+  counterfactuals_lazy_load: boolean;
+  decision_score_timeline: Array<Record<string, unknown>>;
 };
 
 export type PairSupplyStatus = {
@@ -973,6 +1026,22 @@ export async function getCointegratedPairDetail(
 ): Promise<CointegratedPairDetail> {
   const params = new URLSearchParams({ sym_1: sym1, sym_2: sym2, limit: String(limit) });
   return apiRequest<CointegratedPairDetail>(`/admin/cointegrated-pairs/detail?${params.toString()}`, { method: "GET" });
+}
+
+export async function getPairDecisionAuditChart(
+  pair: string,
+  timeframe = "1m",
+  startTs?: string | number | null,
+  endTs?: string | number | null,
+): Promise<PairDecisionAuditChart> {
+  const params = new URLSearchParams({ pair, timeframe });
+  if (startTs !== null && startTs !== undefined && String(startTs).trim()) {
+    params.set("start_ts", String(startTs));
+  }
+  if (endTs !== null && endTs !== undefined && String(endTs).trim()) {
+    params.set("end_ts", String(endTs));
+  }
+  return apiRequest<PairDecisionAuditChart>(`/admin/cointegrated-pairs/decision-audit?${params.toString()}`, { method: "GET" });
 }
 
 export async function removeCointegratedPair(sym1: string, sym2: string): Promise<RemoveCointegratedPairResult> {

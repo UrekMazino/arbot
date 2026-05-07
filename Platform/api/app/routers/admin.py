@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -44,6 +46,15 @@ from ..services.run_runtime import get_run_runtime_snapshot
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 API_ENV_KEYS = {"OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"}
+
+
+def _get_pair_decision_audit_chart_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.chart_audit.chart_audit_service import get_pair_decision_audit_chart
+
+    return get_pair_decision_audit_chart
 
 
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
@@ -334,6 +345,25 @@ def admin_cointegrated_pair_detail(
 ):
     try:
         return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/decision-audit")
+def admin_cointegrated_pair_decision_audit(
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: str | None = Query(default=None),
+    end_ts: str | None = Query(default=None),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_decision_audit_chart_service()
+        return service(pair=pair, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

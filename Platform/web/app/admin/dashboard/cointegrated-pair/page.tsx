@@ -16,15 +16,18 @@ import {
 import {
   AdminPairsHealth,
   ApiError,
+  ChartAuditActualMarker,
   CointegratedPair,
   CointegratedPairDetail,
   CointegratedPairsResponse,
   PairSupplyStatus,
+  PairDecisionAuditChart,
   UserRecord,
   getCointegratedPairDetail,
   getCointegratedPairs,
   getAdminPairsHealth,
   getMe,
+  getPairDecisionAuditChart,
   getPairSupplyStatus,
   isUnauthorizedError,
   removeCointegratedPair,
@@ -70,6 +73,26 @@ function fmtTick(iso: string): string {
   const dt = new Date(iso);
   if (Number.isNaN(dt.getTime())) return iso;
   return dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseTimestampSeconds(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? value / 1000 : value;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? numeric / 1000 : numeric;
+  const parsed = new Date(text).getTime();
+  if (!Number.isFinite(parsed)) return null;
+  return parsed / 1000;
+}
+
+function fmtMarkerTimestamp(value: number | string | null | undefined): string {
+  const seconds = parseTimestampSeconds(value);
+  if (seconds === null) return "n/a";
+  return new Date(seconds * 1000).toLocaleString();
 }
 
 function statusNumber(status: Record<string, unknown> | undefined, key: string): number | null {
@@ -299,6 +322,38 @@ function ChartEmpty({ message }: { message: string }) {
 }
 
 type PairChartPoint = CointegratedPairDetail["points"][number];
+const EMPTY_PAIR_CHART_POINTS: CointegratedPairDetail["points"] = [];
+
+type MarkerLayerSettings = {
+  statistical: boolean;
+  replay: boolean;
+  actual: boolean;
+  counterfactual: boolean;
+  decisionScore: boolean;
+};
+
+const DEFAULT_MARKER_LAYERS: MarkerLayerSettings = {
+  statistical: true,
+  replay: true,
+  actual: true,
+  counterfactual: false,
+  decisionScore: false,
+};
+
+const MARKER_LAYER_OPTIONS: Array<{ key: keyof MarkerLayerSettings; label: string }> = [
+  { key: "statistical", label: "Statistical" },
+  { key: "replay", label: "Replay" },
+  { key: "actual", label: "Actual" },
+  { key: "counterfactual", label: "Counterfactual" },
+  { key: "decisionScore", label: "Scores" },
+];
+
+type MarkerDotProps = {
+  cx?: number;
+  cy?: number;
+  payload?: PairChartPoint;
+  value?: number | string | null;
+};
 
 type PairTooltipItem = {
   color?: string;
@@ -308,30 +363,188 @@ type PairTooltipItem = {
   value?: number | string | null;
 };
 
+function actualMarkerTitle(marker: ChartAuditActualMarker): string {
+  const titles: Record<string, string> = {
+    actual_entry: "Actual entry",
+    actual_exit: "Actual exit",
+    actual_partial_exit: "Actual partial exit",
+    actual_blocked_signal: "Actual blocked signal",
+    actual_regime_exit: "Actual regime exit",
+    actual_manual_exit: "Actual manual exit",
+    actual_advanced_ml_shadow_recommendation: "Advanced ML shadow recommendation",
+  };
+  return titles[marker.marker_type] || marker.marker_type.replace(/_/g, " ");
+}
+
+function actualMarkerSummary(marker: ChartAuditActualMarker): string {
+  const pieces = [
+    marker.side,
+    marker.z_score !== null && marker.z_score !== undefined ? `Z=${fmtNumber(marker.z_score, 2)}` : null,
+    marker.pnl_usdt !== null && marker.pnl_usdt !== undefined ? `PnL ${marker.pnl_usdt >= 0 ? "+" : ""}${fmtNumber(marker.pnl_usdt, 2)} USDT` : null,
+    marker.reason,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return pieces.length ? `${actualMarkerTitle(marker)} ${pieces.join(" | ")}` : actualMarkerTitle(marker);
+}
+
+function appendMarkerLabel(existing: string | null | undefined, label: string): string {
+  const current = String(existing || "").trim();
+  return current ? `${current} | ${label}` : label;
+}
+
+function markerPlotValue(marker: ChartAuditActualMarker, point: PairChartPoint): number | null {
+  if (typeof marker.z_score === "number" && Number.isFinite(marker.z_score)) return marker.z_score;
+  if (typeof point.zscore === "number" && Number.isFinite(point.zscore)) return point.zscore;
+  return null;
+}
+
+function nearestChartPointIndex(points: PairChartPoint[], marker: ChartAuditActualMarker): number | null {
+  const markerTs = parseTimestampSeconds(marker.timestamp);
+  if (markerTs === null || !points.length) return null;
+  let bestIndex: number | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    const pointTs = parseTimestampSeconds(point.ts);
+    if (pointTs === null) return;
+    const delta = Math.abs(pointTs - markerTs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function mergeActualMarkersIntoChartData(
+  points: CointegratedPairDetail["points"],
+  actualMarkers: ChartAuditActualMarker[],
+): CointegratedPairDetail["points"] {
+  if (!actualMarkers.length) return points;
+  const merged = points.map((point) => ({ ...point, actual_markers: [...(point.actual_markers || [])] }));
+  actualMarkers.forEach((marker) => {
+    const index = nearestChartPointIndex(merged, marker);
+    if (index === null) return;
+    const point = merged[index];
+    const plotValue = markerPlotValue(marker, point);
+    point.actual_markers = [...(point.actual_markers || []), marker];
+    const label = actualMarkerSummary(marker);
+    if (marker.marker_type === "actual_entry") {
+      point.actual_entry_z = plotValue;
+      point.actual_entry_label = appendMarkerLabel(point.actual_entry_label, label);
+      point.actual_entry_count = (point.actual_entry_count || 0) + 1;
+      return;
+    }
+    if (
+      marker.marker_type === "actual_exit" ||
+      marker.marker_type === "actual_partial_exit" ||
+      marker.marker_type === "actual_regime_exit" ||
+      marker.marker_type === "actual_manual_exit"
+    ) {
+      point.actual_exit_z = plotValue;
+      point.actual_exit_label = appendMarkerLabel(point.actual_exit_label, label);
+      point.actual_exit_count = (point.actual_exit_count || 0) + 1;
+      if (typeof marker.pnl_usdt === "number" && Number.isFinite(marker.pnl_usdt)) {
+        point.actual_exit_pnl_usdt = marker.pnl_usdt;
+      }
+      return;
+    }
+    if (marker.marker_type === "actual_blocked_signal") {
+      point.blocked_entry_z = plotValue;
+      point.blocked_entry_label = appendMarkerLabel(point.blocked_entry_label, label);
+      point.blocked_entry_count = (point.blocked_entry_count || 0) + 1;
+      point.blocked_entry_reason = marker.reason || point.blocked_entry_reason || null;
+    }
+  });
+  return merged;
+}
+
+function actualMarkerTooltipRows(marker: ChartAuditActualMarker): Array<[string, string]> {
+  return [
+    ["trade_id", marker.trade_id || "n/a"],
+    ["side", marker.side || "n/a"],
+    ["z_score", fmtNumber(marker.z_score, 3)],
+    ["spread", fmtNumber(marker.spread, 5)],
+    ["pnl_usdt", fmtNumber(marker.pnl_usdt, 2)],
+    ["fees_usdt", fmtNumber(marker.fees_usdt, 4)],
+    ["slippage_usdt", fmtNumber(marker.slippage_usdt, 4)],
+    ["reason", marker.reason || "n/a"],
+    ["original_event_timestamp", fmtMarkerTimestamp(marker.original_event_timestamp ?? marker.timestamp)],
+  ];
+}
+
+function markerPointCoordinates(props: MarkerDotProps): { cx: number; cy: number } | null {
+  const cx = Number(props.cx);
+  const cy = Number(props.cy);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  return { cx, cy };
+}
+
+function renderActualEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
+      fill="#22c55e"
+      stroke="#dcfce7"
+      strokeWidth={1.8}
+    />
+  );
+}
+
+function renderActualExitDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx + size} ${coords.cy} L ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy} Z`}
+      fill="#3b82f6"
+      stroke="#dbeafe"
+      strokeWidth={1.8}
+    />
+  );
+}
+
+function renderActualBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <g stroke="#f59e0b" strokeLinecap="round" strokeWidth={fullscreen ? 4 : 3.2}>
+      <line x1={coords.cx - size} y1={coords.cy - size} x2={coords.cx + size} y2={coords.cy + size} />
+      <line x1={coords.cx + size} y1={coords.cy - size} x2={coords.cx - size} y2={coords.cy + size} />
+    </g>
+  );
+}
+
 function PairChartTooltip({
   active,
   label,
   payload,
+  markerLayers,
 }: {
   active?: boolean;
   label?: string | number;
   payload?: PairTooltipItem[];
+  markerLayers: MarkerLayerSettings;
 }) {
   if (!active || !payload?.length) return null;
   const point = payload.find((item) => item.payload)?.payload;
   if (!point) return null;
 
   const markerRows = [
-    ["Chart crossing", point.crossing_label],
-    ["Replay entry", point.replay_entry_label],
-    ["Replay exit", point.replay_exit_label],
-    ["Blocked entry", point.blocked_entry_label],
-    ["Actual entry", point.actual_entry_label],
-    ["Actual exit", point.actual_exit_label],
-  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].trim().length > 0);
+    markerLayers.statistical ? ["Chart crossing", point.crossing_label] : null,
+    markerLayers.replay ? ["Replay entry", point.replay_entry_label] : null,
+    markerLayers.replay ? ["Replay exit", point.replay_exit_label] : null,
+    markerLayers.actual ? ["Blocked entry", point.blocked_entry_label] : null,
+    markerLayers.actual ? ["Actual entry", point.actual_entry_label] : null,
+    markerLayers.actual ? ["Actual exit", point.actual_exit_label] : null,
+  ].filter((row): row is [string, string] => typeof row?.[1] === "string" && row[1].trim().length > 0);
+  const actualMarkers = markerLayers.actual ? point.actual_markers || [] : [];
 
   return (
-    <div className="max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-gray-800 dark:bg-gray-950">
+    <div className="max-w-sm rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-gray-800 dark:bg-gray-950">
       <p className="font-medium text-gray-900 dark:text-white">{fmtDate(String(label ?? point.ts))}</p>
       <div className="mt-1 space-y-0.5 text-gray-600 dark:text-gray-300">
         <p>Spread: {fmtNumber(point.spread, 5)}</p>
@@ -343,6 +556,20 @@ function PairChartTooltip({
             <p key={`${name}-${value}`} className="text-gray-700 dark:text-gray-200">
               <span className="font-medium">{name}:</span> {value}
             </p>
+          ))}
+        </div>
+      ) : null}
+      {actualMarkers.length ? (
+        <div className="mt-2 space-y-2 border-t border-gray-200 pt-2 dark:border-gray-800">
+          {actualMarkers.map((marker, index) => (
+            <div key={`${marker.marker_type}-${marker.trade_id || marker.timestamp}-${index}`} className="space-y-0.5 text-gray-700 dark:text-gray-200">
+              <p className="font-semibold">{actualMarkerTitle(marker)}</p>
+              {actualMarkerTooltipRows(marker).map(([name, value]) => (
+                <p key={name}>
+                  <span className="font-medium">{name}:</span> {value}
+                </p>
+              ))}
+            </div>
           ))}
         </div>
       ) : null}
@@ -368,14 +595,54 @@ function activeMarkerDot(fullscreen: boolean, fill: string, stroke = "#f8fafc") 
   };
 }
 
+function MarkerLayerControls({
+  layers,
+  available,
+  onChange,
+}: {
+  layers: MarkerLayerSettings;
+  available: Record<keyof MarkerLayerSettings, boolean>;
+  onChange: (key: keyof MarkerLayerSettings, enabled: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {MARKER_LAYER_OPTIONS.map((option) => {
+        const isAvailable = available[option.key];
+        return (
+          <label
+            key={option.key}
+            className={[
+              "inline-flex h-8 select-none items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold",
+              isAvailable
+                ? "cursor-pointer border-gray-200 bg-white text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300"
+                : "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-600",
+            ].join(" ")}
+          >
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+              checked={isAvailable ? layers[option.key] : false}
+              disabled={!isAvailable}
+              onChange={(event) => onChange(option.key, event.target.checked)}
+            />
+            <span>{option.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function PairUniverseCharts({
   chartData,
   fullscreen = false,
   selectedPair,
+  markerLayers,
 }: {
   chartData: CointegratedPairDetail["points"];
   fullscreen?: boolean;
   selectedPair: CointegratedPair;
+  markerLayers: MarkerLayerSettings;
 }) {
   const priceHeight = fullscreen ? 360 : 280;
   const spreadHeight = fullscreen ? 420 : 300;
@@ -413,7 +680,7 @@ function PairUniverseCharts({
             <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
             <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-            <Tooltip content={<PairChartTooltip />} />
+            <Tooltip content={<PairChartTooltip markerLayers={markerLayers} />} />
             <Legend />
             <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} {...lineAnimation} />
             <Line
@@ -427,85 +694,95 @@ function PairUniverseCharts({
               dot={false}
               {...lineAnimation}
             />
-            <Line
-              yAxisId="spread"
-              type="linear"
-              dataKey="crossing_spread"
-              name="Chart crossing"
-              legendType="circle"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#facc15")}
-              activeDot={activeMarkerDot(fullscreen, "#facc15", "#fef3c7")}
-              isAnimationActive={false}
-            />
+            {markerLayers.statistical ? (
+              <Line
+                yAxisId="spread"
+                type="linear"
+                dataKey="crossing_spread"
+                name="Chart crossing"
+                legendType="circle"
+                stroke="transparent"
+                strokeWidth={0}
+                connectNulls={false}
+                dot={markerDot(fullscreen, "#facc15")}
+                activeDot={activeMarkerDot(fullscreen, "#facc15", "#fef3c7")}
+                isAnimationActive={false}
+              />
+            ) : null}
             <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} {...lineAnimation} />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="replay_entry_z"
-              name="Replay entry"
-              legendType="triangle"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#06b6d4")}
-              activeDot={activeMarkerDot(fullscreen, "#06b6d4")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="replay_exit_z"
-              name="Replay exit"
-              legendType="diamond"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#8b5cf6")}
-              activeDot={activeMarkerDot(fullscreen, "#8b5cf6")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="blocked_entry_z"
-              name="Blocked entry"
-              legendType="cross"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#f59e0b", "#7f1d1d")}
-              activeDot={activeMarkerDot(fullscreen, "#f59e0b", "#fef3c7")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="actual_entry_z"
-              name="Actual entry"
-              legendType="star"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#22c55e")}
-              activeDot={activeMarkerDot(fullscreen, "#22c55e")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="actual_exit_z"
-              name="Actual exit"
-              legendType="square"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#e11d48")}
-              activeDot={activeMarkerDot(fullscreen, "#e11d48")}
-              isAnimationActive={false}
-            />
+            {markerLayers.replay ? (
+              <>
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_entry_z"
+                  name="Replay entry"
+                  legendType="triangle"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={markerDot(fullscreen, "#06b6d4")}
+                  activeDot={activeMarkerDot(fullscreen, "#06b6d4")}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_exit_z"
+                  name="Replay exit"
+                  legendType="diamond"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={markerDot(fullscreen, "#8b5cf6")}
+                  activeDot={activeMarkerDot(fullscreen, "#8b5cf6")}
+                  isAnimationActive={false}
+                />
+              </>
+            ) : null}
+            {markerLayers.actual ? (
+              <>
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="blocked_entry_z"
+                  name="Blocked entry"
+                  legendType="cross"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualBlockedDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderActualBlockedDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="actual_entry_z"
+                  name="Actual entry"
+                  legendType="triangle"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="actual_exit_z"
+                  name="Actual exit"
+                  legendType="diamond"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualExitDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderActualExitDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+              </>
+            ) : null}
             <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} {...lineAnimation} />
@@ -541,6 +818,8 @@ export default function CointegratedPairPage() {
   } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
+  const [auditChart, setAuditChart] = useState<PairDecisionAuditChart | null>(null);
+  const [markerLayers, setMarkerLayers] = useState<MarkerLayerSettings>(DEFAULT_MARKER_LAYERS);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
   const [showGraph, setShowGraph] = useState(true);
   const [query, setQuery] = useState("");
@@ -553,6 +832,9 @@ export default function CointegratedPairPage() {
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
   const auth = useMemo(() => ({ email: getStoredAdminEmail(), hasToken: true }), []);
+  const updateMarkerLayer = useCallback((key: keyof MarkerLayerSettings, enabled: boolean) => {
+    setMarkerLayers((current) => ({ ...current, [key]: enabled }));
+  }, []);
 
   useEffect(() => {
     getMe()
@@ -642,7 +924,39 @@ export default function CointegratedPairPage() {
   const curatorWatchCount = Number(curatorCounts.watch || 0) + Number(curatorCounts.degraded || 0) + Number(curatorCounts.hospital_candidate || 0);
   const detailMatchesSelection = Boolean(selectedPair && detail && detail.pair.id === selectedPair.id);
   const detailPairMismatch = Boolean(selectedPair && detail && detail.pair.id !== selectedPair.id);
-  const chartData = detailMatchesSelection ? detail?.points || [] : [];
+  const rawChartPoints = detailMatchesSelection ? detail?.points || EMPTY_PAIR_CHART_POINTS : EMPTY_PAIR_CHART_POINTS;
+  const chartData = useMemo(() => {
+    if (!detailMatchesSelection || !rawChartPoints.length) return [];
+    const auditMatchesSelection = auditChart?.pair === selectedPair?.pair;
+    return mergeActualMarkersIntoChartData(
+      rawChartPoints,
+      auditMatchesSelection ? auditChart?.actual_markers || [] : [],
+    );
+  }, [auditChart, detailMatchesSelection, rawChartPoints, selectedPair?.pair]);
+  const markerLayerAvailability = useMemo<Record<keyof MarkerLayerSettings, boolean>>(
+    () => ({
+      statistical:
+        rawChartPoints.some((point) => point.crossing_spread !== null && point.crossing_spread !== undefined) ||
+        Boolean(auditChart?.statistical_markers?.length),
+      replay:
+        rawChartPoints.some(
+          (point) =>
+            (point.replay_entry_z !== null && point.replay_entry_z !== undefined) ||
+            (point.replay_exit_z !== null && point.replay_exit_z !== undefined),
+        ) || Boolean(auditChart?.replay_markers?.length),
+      actual:
+        chartData.some(
+          (point) =>
+            Boolean(point.actual_markers?.length) ||
+            (point.actual_entry_z !== null && point.actual_entry_z !== undefined) ||
+            (point.actual_exit_z !== null && point.actual_exit_z !== undefined) ||
+            (point.blocked_entry_z !== null && point.blocked_entry_z !== undefined),
+        ) || Boolean(auditChart?.actual_markers?.length),
+      counterfactual: Boolean(auditChart?.counterfactual_exit_studies?.length),
+      decisionScore: Boolean(auditChart?.decision_score_timeline?.length),
+    }),
+    [auditChart, chartData, rawChartPoints],
+  );
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
@@ -675,17 +989,30 @@ export default function CointegratedPairPage() {
       foregroundDetailRequestIdRef.current = requestId;
       setDetailLoading(true);
       setError(null);
+      setAuditChart(null);
     }
     try {
       const data = await getCointegratedPairDetail(sym1, sym2, 720);
       if (detailRequestIdRef.current !== requestId) return;
       if (options.expectedPairId && selectedPairRef.current?.id !== options.expectedPairId) return;
       setDetail(data);
+      const firstPoint = data.points[0];
+      const lastPoint = data.points[data.points.length - 1];
+      const auditData = await getPairDecisionAuditChart(
+        `${sym1}/${sym2}`,
+        "1m",
+        firstPoint?.ts,
+        lastPoint?.ts,
+      ).catch(() => null);
+      if (detailRequestIdRef.current !== requestId) return;
+      if (options.expectedPairId && selectedPairRef.current?.id !== options.expectedPairId) return;
+      setAuditChart(auditData);
     } catch (err) {
       if (detailRequestIdRef.current !== requestId) return;
       if (!background) {
         setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load selected pair graph");
         setDetail(null);
+        setAuditChart(null);
       }
     } finally {
       if (background) {
@@ -744,6 +1071,7 @@ export default function CointegratedPairPage() {
   useEffect(() => {
     if (!selectedSym1 || !selectedSym2) {
       setDetail(null);
+      setAuditChart(null);
       setGraphFullscreen(false);
       return;
     }
@@ -928,6 +1256,13 @@ export default function CointegratedPairPage() {
                 <p className="font-mono text-sm font-semibold text-white sm:text-base">{selectedPair.pair}</p>
                 <p className="mt-1 text-xs text-gray-400">Pair Universe fullscreen chart</p>
               </div>
+              <div className="hidden min-w-0 flex-1 justify-end sm:flex">
+                <MarkerLayerControls
+                  layers={markerLayers}
+                  available={markerLayerAvailability}
+                  onChange={updateMarkerLayer}
+                />
+              </div>
               <button
                 type="button"
                 className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white hover:bg-white/15"
@@ -939,7 +1274,13 @@ export default function CointegratedPairPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-4 custom-scrollbar sm:p-6">
-              <PairUniverseCharts key={`fullscreen-${selectedPair.id}`} chartData={chartData} selectedPair={selectedPair} fullscreen />
+              <PairUniverseCharts
+                key={`fullscreen-${selectedPair.id}`}
+                chartData={chartData}
+                selectedPair={selectedPair}
+                markerLayers={markerLayers}
+                fullscreen
+              />
             </div>
           </div>
         </div>
@@ -1311,7 +1652,19 @@ export default function CointegratedPairPage() {
               ) : !chartData.length ? (
                 <ChartEmpty message="No chart data available for this pair." />
               ) : (
-                <PairUniverseCharts key={selectedPair.id} chartData={chartData} selectedPair={selectedPair} />
+                <div className="space-y-4">
+                  <MarkerLayerControls
+                    layers={markerLayers}
+                    available={markerLayerAvailability}
+                    onChange={updateMarkerLayer}
+                  />
+                  <PairUniverseCharts
+                    key={selectedPair.id}
+                    chartData={chartData}
+                    selectedPair={selectedPair}
+                    markerLayers={markerLayers}
+                  />
+                </div>
               )}
             </PanelCard>
 

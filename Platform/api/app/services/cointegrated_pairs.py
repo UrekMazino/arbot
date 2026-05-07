@@ -978,7 +978,7 @@ def _entry_replay_settings() -> dict[str, float | int]:
         "min_persist": min_persist,
         "min_qualified": min_qualified,
         "clean_bars": clean_bars,
-        "min_continuous_seconds": _env_int("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", 60, minimum=0),
+        "min_continuous_seconds": _env_int("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", 0, minimum=0),
     }
 
 

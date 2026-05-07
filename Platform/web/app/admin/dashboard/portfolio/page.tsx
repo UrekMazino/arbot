@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import {
@@ -41,9 +41,11 @@ const BUCKET_OPTIONS: Array<{ value: PortfolioEquityBucket; label: string }> = [
 ];
 
 const BASIS_OPTIONS: Array<{ value: PortfolioEquityBasis; label: string }> = [
-  { value: "realized", label: "Realized" },
   { value: "live", label: "Live" },
+  { value: "realized", label: "Realized" },
 ];
+
+const AUTO_REFRESH_MS = 15_000;
 
 function fmtNumber(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
@@ -94,8 +96,11 @@ export default function PortfolioPage() {
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<PortfolioEquityRange>("7d");
   const [bucket, setBucket] = useState<PortfolioEquityBucket>("auto");
-  const [basis, setBasis] = useState<PortfolioEquityBasis>("realized");
+  const [basis, setBasis] = useState<PortfolioEquityBasis>("live");
   const [curve, setCurve] = useState<PortfolioEquityCurve | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const hasLoadedCurveRef = useRef(false);
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
 
@@ -133,27 +138,37 @@ export default function PortfolioPage() {
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      await Promise.resolve();
-      if (cancelled) return;
-      setCurveLoading(true);
+
+    const loadCurve = async (isPoll = false) => {
+      const showSpinner = !isPoll || !hasLoadedCurveRef.current;
+      if (showSpinner) setCurveLoading(true);
       setError(null);
       try {
         const data = await getPortfolioEquityCurve(range, bucket, basis);
-        if (!cancelled) setCurve(data);
+        if (!cancelled) {
+          setCurve(data);
+          setLastRefreshedAt(new Date().toISOString());
+          hasLoadedCurveRef.current = true;
+        }
       } catch (err) {
         if (cancelled) return;
         setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load portfolio equity curve");
         setCurve(null);
       } finally {
-        if (!cancelled) setCurveLoading(false);
+        if (!cancelled && showSpinner) setCurveLoading(false);
       }
-    })();
+    };
+
+    void loadCurve(false);
+    const intervalId = window.setInterval(() => {
+      void loadCurve(true);
+    }, AUTO_REFRESH_MS);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
-  }, [range, bucket, basis]);
+  }, [range, bucket, basis, refreshNonce]);
 
   if (loading) {
     return <div className="p-8 text-center text-gray-500">Loading...</div>;
@@ -164,10 +179,13 @@ export default function PortfolioPage() {
   const chartData = curve?.points || [];
   const activeBucketLabel = curve ? bucketLabel(curve.bucket) : bucketLabel(bucket);
   const activeBasis = curve?.basis || basis;
+  const refreshCaption = lastRefreshedAt
+    ? `Updated ${fmtDate(lastRefreshedAt)} | refreshes every ${Math.round(AUTO_REFRESH_MS / 1000)}s`
+    : `Refreshes every ${Math.round(AUTO_REFRESH_MS / 1000)}s`;
   const caption =
     activeBasis === "realized"
-      ? `${rangeLabel(range)} range | Realized trade closes | ${stats?.closed_trade_count ?? 0} closed trades | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)}`
-      : `${rangeLabel(range)} range | ${bucket === "auto" ? `Auto -> ${activeBucketLabel}` : activeBucketLabel} | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)}`;
+      ? `${rangeLabel(range)} range | Closed trades only | ${stats?.closed_trade_count ?? 0} closed trades | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)} | ${refreshCaption}`
+      : `${rangeLabel(range)} range | ${bucket === "auto" ? `Auto -> ${activeBucketLabel}` : activeBucketLabel} | Includes open-position equity movement | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)} | ${refreshCaption}`;
 
   return (
     <DashboardShell
@@ -181,7 +199,7 @@ export default function PortfolioPage() {
       <div className="space-y-6">
         <PanelCard
           title="Portfolio Equity Curve"
-          subtitle={basis === "realized" ? "Built from closed-trade PnL, matching analytics and reports." : "Built from heartbeat account-equity events for live debugging."}
+          subtitle={basis === "realized" ? "Closed-trade PnL only, matching analytics and reports." : "Live account equity from heartbeat snapshots, including open-position movement."}
           titleRight={
             <div className="flex flex-wrap items-center justify-end gap-2">
               <select
@@ -190,7 +208,7 @@ export default function PortfolioPage() {
                 onChange={(event) => {
                   const newBasis = event.target.value as PortfolioEquityBasis;
                   setBasis(newBasis);
-                  if (newBasis === "live" && basis === "realized") {
+                  if (newBasis === "live") {
                     setBucket("auto");
                   }
                 }}
@@ -209,6 +227,15 @@ export default function PortfolioPage() {
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
+              <button
+                type="button"
+                className={rangeButtonClass(false)}
+                onClick={() => setRefreshNonce((value) => value + 1)}
+                disabled={curveLoading}
+                title="Refresh portfolio equity curve"
+              >
+                Refresh
+              </button>
             </div>
           }
         >
@@ -241,7 +268,7 @@ export default function PortfolioPage() {
           ) : (
             <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
               {basis === "realized"
-                ? "No closed trades found yet. Realized equity will plot after trades close."
+                ? "No closed trades found yet. Realized equity updates only after a position closes."
                 : "No equity samples found yet. Start a run and the dashboard will plot heartbeat equity here."}
             </p>
           )}

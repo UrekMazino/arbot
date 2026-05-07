@@ -22,6 +22,7 @@ interface ExtendedChartPoint {
   pnl_usdt?: number | null;
   pnl_pct?: number | null;
   run_key?: string | null;
+  source?: string | null;
   samples?: number;
 }
 
@@ -56,6 +57,15 @@ function formatDate(value: string | number, pattern: string): string {
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return String(value);
   return format(dt, pattern);
+}
+
+function formatSource(value: string | null | undefined): string {
+  if (!value) return "unknown";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export function PortfolioChart({
@@ -97,6 +107,7 @@ export function PortfolioChart({
             <p><span className="font-mono text-brand-600">Equity:</span> {formatMoney(point.equity)} USDT</p>
             <p><span className="font-mono text-success-600">Change:</span> {formatMoney(point.pnl_usdt)} USDT ({formatPct(point.pnl_pct)})</p>
             <p><span className="font-mono text-orange-600">Drawdown:</span> {formatMoney(point.drawdown)} USDT ({formatPct(point.drawdown_pct)})</p>
+            <p><span className="font-mono text-gray-600">Source:</span> {formatSource(point.source)}</p>
             {point.bucket_start ? <p><span className="font-mono text-gray-600">Bucket:</span> {formatDate(point.bucket_start, "MMM dd HH:mm")}</p> : null}
             {point.run_key ? <p><span className="font-mono text-gray-600">Run:</span> {point.run_key}</p> : null}
             {point.samples && point.samples > 1 ? <p><span className="font-mono text-gray-600">Samples:</span> {point.samples}</p> : null}

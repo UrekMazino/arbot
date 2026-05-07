@@ -384,6 +384,13 @@ from advanced_ml_runtime import (
     evaluate_probabilistic_exit,
     should_apply_live_advanced_exit,
 )
+from core.ev.hold_exit_ev import ExitAction
+from core.trade_management.exit_orchestrator import (
+    ExitCandidate,
+    ExitCandidateCategory,
+    ExitOrchestrator,
+    NetProfitGuardContext,
+)
 
 # Logger for trade management diagnostics
 logger = get_logger("func_trade_management")
@@ -1356,6 +1363,170 @@ def _resolve_adaptive_profit_target_usdt(entry_notional):
         base_target = notional_val * (target_pct / 100.0)
 
     return min(max(base_target, target_min), target_max)
+
+
+def _tm_exit_candidate(tm_result):
+    if not isinstance(tm_result, dict):
+        return None
+    action_text = str(tm_result.get("action") or "").strip().upper()
+    if action_text not in {"EXIT", "PARTIAL_EXIT"}:
+        return None
+
+    reason_code = str(tm_result.get("reason") or "trade_manager").strip().lower()
+    message = str(tm_result.get("message") or tm_result.get("reason") or "trade manager exit")
+    percentage = _finite_float(tm_result.get("percentage"), 1.0)
+    if percentage is None:
+        percentage = 1.0
+
+    hard_reasons = {"max_hold_time", "regime_break", "diverging"}
+    guarded_profit_reasons = {"take_profit", "partial_profit", "trailing_stop"}
+    priority_by_reason = {
+        "max_hold_time": 92,
+        "regime_break": 90,
+        "diverging": 82,
+        "take_profit": 76,
+        "trailing_stop": 70,
+        "partial_profit": 64,
+        "stall": 58,
+    }
+    category = (
+        ExitCandidateCategory.HARD
+        if reason_code in hard_reasons
+        else ExitCandidateCategory.PROFIT_RISK
+    )
+    action = ExitAction.PARTIAL_EXIT if action_text == "PARTIAL_EXIT" else ExitAction.FULL_EXIT
+    return ExitCandidate(
+        name=f"trade_manager_{reason_code}",
+        category=category,
+        action=action,
+        reason=message,
+        priority=priority_by_reason.get(reason_code, 50),
+        exit_percentage=percentage,
+        severity=1.0 if category == ExitCandidateCategory.HARD else 0.5,
+        net_profit_guard_applies=reason_code in guarded_profit_reasons,
+        metadata={
+            "source": "trade_manager",
+            "reason_code": reason_code,
+            "switch_reason": "" if action == ExitAction.FULL_EXIT else None,
+        },
+    )
+
+
+def _advanced_exit_candidate(advanced_exit_decision):
+    if advanced_exit_decision is None or not should_apply_live_advanced_exit(advanced_exit_decision):
+        return None
+    action_value = getattr(advanced_exit_decision.action, "value", str(advanced_exit_decision.action))
+    if action_value == "full_exit":
+        action = ExitAction.FULL_EXIT
+    elif action_value == "partial_exit":
+        action = ExitAction.PARTIAL_EXIT
+    else:
+        return None
+    hard_kill = bool(getattr(advanced_exit_decision, "hard_kill_triggered", False))
+    exit_percentage = _finite_float(getattr(advanced_exit_decision, "exit_percentage", 1.0), 1.0)
+    score = _finite_float(getattr(getattr(advanced_exit_decision, "scores", None), "total_exit_score", 0.0), 0.0)
+    ev_value = _finite_float(getattr(getattr(advanced_exit_decision, "ev", None), "expected_hold_value_usdt", 0.0), 0.0)
+    reason = (
+        "advanced hard kill"
+        if hard_kill
+        else "advanced probabilistic exit"
+    )
+    reason = f"{reason}: score={score:.3f} ev={ev_value:+.4f} detail={advanced_exit_decision.reason}"
+    return ExitCandidate(
+        name="advanced_ml_hard_kill" if hard_kill else "advanced_ml_soft_exit",
+        category=ExitCandidateCategory.HARD if hard_kill else ExitCandidateCategory.ADVANCED_ML,
+        action=action,
+        reason=reason,
+        priority=94 if hard_kill else 45,
+        exit_percentage=exit_percentage if exit_percentage is not None else 1.0,
+        severity=1.0 if hard_kill else score,
+        net_profit_guard_applies=not hard_kill,
+        metadata={
+            "source": "advanced_ml",
+            "switch_reason": "advanced_probabilistic_exit" if action == ExitAction.FULL_EXIT else None,
+            "decision": advanced_exit_decision,
+        },
+    )
+
+
+def _log_exit_orchestrator_decision(decision):
+    candidate = decision.selected_candidate
+    blocked = ",".join(block.candidate.name for block in decision.blocked_candidates) or "none"
+    candidate_names = ",".join(candidate.name for candidate in decision.candidates) or "none"
+    if candidate is None:
+        if decision.blocked_by_net_profit_guard:
+            logger.info(
+                "EXIT_ORCHESTRATOR_DECISION: action=hold reason=%s candidates=%s blocked=%s",
+                decision.reason,
+                candidate_names,
+                blocked,
+            )
+        return
+    logger.info(
+        "EXIT_ORCHESTRATOR_DECISION: action=%s selected=%s category=%s priority=%s "
+        "pct=%.2f hard=%d blocked=%s candidates=%s reason=%s",
+        candidate.action.value,
+        candidate.name,
+        candidate.category.value,
+        candidate.priority,
+        decision.exit_percentage,
+        1 if decision.hard_exit else 0,
+        blocked,
+        candidate_names,
+        candidate.reason,
+    )
+
+
+def _apply_exit_orchestrator_decision(decision, kill_switch):
+    candidate = decision.selected_candidate
+    if candidate is None:
+        return None
+
+    source = str(candidate.metadata.get("source") or "orchestrator")
+    switch_reason = candidate.metadata.get("switch_reason")
+    if candidate.action == ExitAction.FULL_EXIT:
+        msg = (
+            "EXIT_ORCHESTRATOR FULL_EXIT: category=%s candidate=%s source=%s reason=%s"
+            % (candidate.category.value, candidate.name, source, candidate.reason)
+        )
+        if candidate.category == ExitCandidateCategory.HARD:
+            logger.error(msg)
+        elif candidate.category == ExitCandidateCategory.QUALITY:
+            logger.warning(msg)
+        else:
+            logger.info(msg)
+        print(msg)
+        if switch_reason is not None:
+            set_last_switch_reason(str(switch_reason))
+        if bool(candidate.metadata.get("health_zero")):
+            set_last_health_score(0)
+        _close_trade_manager()
+        return 2
+
+    if candidate.action == ExitAction.PARTIAL_EXIT:
+        percentage = max(0.0, min(float(decision.exit_percentage or 0.0), 1.0))
+        if _execute_partial_exit(percentage):
+            if source == "trade_manager":
+                trade_manager.execute_partial_exit(pnl=0.0)
+            logger.info(
+                "EXIT_ORCHESTRATOR partial exit completed: candidate=%s pct=%.0f%% reason=%s",
+                candidate.name,
+                percentage * 100,
+                candidate.reason,
+            )
+        else:
+            logger.warning(
+                "EXIT_ORCHESTRATOR partial exit skipped: candidate=%s pct=%.0f%% reason=%s",
+                candidate.name,
+                percentage * 100,
+                candidate.reason,
+            )
+            if source == "trade_manager" and trade_manager.trade_state is not None:
+                trade_manager.trade_state.partial_exits.append({"time": time.time(), "skipped": True})
+        return kill_switch
+
+    return None
+
 
 def _z_history_values(z_history):
     values = []
@@ -3557,7 +3728,7 @@ def monitor_exit(
         clear_coint_lost_since_ts()
         clear_coint_lost_confirm_count()
 
-    # Advisory only while in position.
+    pair_health_exit_candidate = None
     if health_check_due:
         trade_pnl_pct = pnl_pct if pnl_pct is not None else 0.0
         should_switch, score, rec = check_pair_health(
@@ -3569,7 +3740,19 @@ def monitor_exit(
         )
         if should_switch:
             logger.warning("Pair health degraded (score=%s) while in position.", score)
-            logger.warning("Health checks stay advisory during open positions.")
+            pair_health_exit_candidate = ExitCandidate(
+                name="pair_health_failure",
+                category=ExitCandidateCategory.QUALITY,
+                action=ExitAction.FULL_EXIT,
+                reason=f"Pair health failure while in position: score={score} recommendation={rec}",
+                priority=52,
+                severity=0.70,
+                metadata={
+                    "source": "pair_health",
+                    "switch_reason": "health",
+                    "health_zero": True,
+                },
+            )
 
     profit_target_usdt = _resolve_adaptive_profit_target_usdt(entry_notional)
     hard_stop_loss_pct = _env_float("STATBOT_HARD_STOP_PNL_PCT", abs(HYBRID_EXIT_HARD_STOP_PNL_PCT))
@@ -3595,34 +3778,132 @@ def monitor_exit(
     if tier2_min_loss_pct is None or tier2_min_loss_pct <= 0:
         tier2_min_loss_pct = 1.5
 
-    # Tier 5: Profit take.
+    min_profit_exit_usdt = _resolve_net_profit_exit_floor_usdt(entry_notional_val)
+    net_profit_guard = NetProfitGuardContext(
+        enabled=_env_flag("STATBOT_ATM_NET_PROFIT_GUARD", True),
+        current_pnl_usdt=floating_pnl_usdt,
+        min_profit_usdt=min_profit_exit_usdt,
+        block_when_pnl_unknown=True,
+    )
+    exit_candidates = []
+    if pair_health_exit_candidate is not None:
+        exit_candidates.append(pair_health_exit_candidate)
+
+    freshness_ms = _finite_float(
+        metrics.get("freshness_ms"),
+        _finite_float(metrics.get("book_freshness_ms"), _finite_float(metrics.get("update_age_ms"))),
+    )
+    max_exit_book_age_ms = _env_float(
+        "STATBOT_EXIT_MAX_BOOK_AGE_MS",
+        _env_float("STATBOT_ADVANCED_ML_MAX_BOOK_AGE_MS", 1500.0),
+    )
+    if (
+        freshness_ms is not None
+        and max_exit_book_age_ms is not None
+        and max_exit_book_age_ms > 0
+        and freshness_ms > max_exit_book_age_ms
+    ):
+        exit_candidates.append(
+            ExitCandidate(
+                name="stale_orderbook",
+                category=ExitCandidateCategory.HARD,
+                action=ExitAction.FULL_EXIT,
+                reason="Stale orderbook: age=%.0fms > %.0fms" % (freshness_ms, max_exit_book_age_ms),
+                priority=88,
+                severity=0.75,
+                metadata={"source": "microstructure", "switch_reason": "stale_book"},
+            )
+        )
+
+    liquidity_score = _finite_float(metrics.get("liquidity_score"))
+    min_exit_liquidity_score = _env_float("STATBOT_EXIT_MIN_LIQUIDITY_SCORE", 0.10)
+    if (
+        liquidity_score is not None
+        and min_exit_liquidity_score is not None
+        and liquidity_score < min_exit_liquidity_score
+    ):
+        exit_candidates.append(
+            ExitCandidate(
+                name="liquidity_collapse",
+                category=ExitCandidateCategory.QUALITY,
+                action=ExitAction.FULL_EXIT,
+                reason="Liquidity collapse: score=%.3f < %.3f" % (liquidity_score, min_exit_liquidity_score),
+                priority=80,
+                severity=0.85,
+                metadata={
+                    "source": "microstructure",
+                    "switch_reason": "liquidity_collapse",
+                    "health_zero": True,
+                },
+            )
+        )
+
+    structural_regime = str(_decision_get(regime_decision, "regime", "") or "").strip().upper()
+    structural_confidence = _finite_float(_decision_get(regime_decision, "confidence", None), 0.0)
+    structural_break_threshold = _env_float("STATBOT_STRUCTURAL_BREAK_EXIT_CONFIDENCE", 0.80)
+    if (
+        structural_regime == "STRUCTURAL_BREAK"
+        and structural_break_threshold is not None
+        and structural_confidence is not None
+        and structural_confidence >= structural_break_threshold
+    ):
+        exit_candidates.append(
+            ExitCandidate(
+                name="structural_break",
+                category=ExitCandidateCategory.HARD,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "Structural break regime confirmed: confidence=%.3f >= %.3f"
+                    % (structural_confidence, structural_break_threshold)
+                ),
+                priority=98,
+                severity=1.0,
+                metadata={
+                    "source": "regime",
+                    "switch_reason": "structural_break",
+                    "health_zero": True,
+                },
+            )
+        )
+
     if floating_pnl_usdt is not None and floating_pnl_usdt >= profit_target_usdt:
-        msg = (
-            "HYBRID_EXIT Tier5 TAKE_PROFIT: floating_pnl=%.2f >= %.2f USDT (adaptive target)"
-            % (floating_pnl_usdt, profit_target_usdt)
+        exit_candidates.append(
+            ExitCandidate(
+                name="adaptive_profit_target",
+                category=ExitCandidateCategory.PROFIT_RISK,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "HYBRID_EXIT TAKE_PROFIT: floating_pnl=%.2f >= %.2f USDT "
+                    "(adaptive target)"
+                    % (floating_pnl_usdt, profit_target_usdt)
+                ),
+                priority=76,
+                severity=0.45,
+                net_profit_guard_applies=True,
+                metadata={"source": "legacy_profit_target", "switch_reason": ""},
+            )
         )
-        logger.info(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("")
-        _close_trade_manager()
-        return 2
 
-    # Tier 1: Hard stop.
     if pnl_pct is not None and pnl_pct <= hard_stop_threshold_pct:
-        msg = (
-            "HYBRID_EXIT Tier1 HARD_STOP: pnl_pct=%.2f%% basis=%s <= %.2f%%"
-            % (pnl_pct, hard_stop_basis, hard_stop_threshold_pct)
+        exit_candidates.append(
+            ExitCandidate(
+                name="pair_drawdown_hard_stop",
+                category=ExitCandidateCategory.HARD,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "HYBRID_EXIT HARD_STOP: pnl_pct=%.2f%% basis=%s <= %.2f%%"
+                    % (pnl_pct, hard_stop_basis, hard_stop_threshold_pct)
+                ),
+                priority=96,
+                severity=0.95,
+                metadata={
+                    "source": "hard_stop",
+                    "switch_reason": "exit_tier_1_stop_loss",
+                    "health_zero": True,
+                },
+            )
         )
-        logger.error(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("exit_tier_1_stop_loss")
-        set_last_health_score(0)
-        _close_trade_manager()
-        return 2
 
-    # Tier 1.5: Risk-off + cointegration-lost + losing trade (guarded early exit).
     if (
         enable_riskoff_coint_early_exit
         and str(regime_mode or "").strip().lower() == "active"
@@ -3635,28 +3916,34 @@ def monitor_exit(
         and coint_lost_seconds >= riskoff_coint_grace_seconds
         and coint_lost_confirm_count >= riskoff_coint_confirm_count
     ):
-        msg = (
-            "HYBRID_EXIT Tier1.5 RISKOFF_COINT_LOSS: pnl_pct=%.2f%% basis=%s floating_pnl=%.2f "
-            "coint_lost=%.1fs confirms=%d/%d min_loss=%.2f%%"
-            % (
-                pnl_pct,
-                hard_stop_basis,
-                floating_pnl_usdt,
-                coint_lost_seconds,
-                coint_lost_confirm_count,
-                riskoff_coint_confirm_count,
-                riskoff_coint_min_loss_pct,
+        exit_candidates.append(
+            ExitCandidate(
+                name="riskoff_cointegration_loss",
+                category=ExitCandidateCategory.QUALITY,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "HYBRID_EXIT RISKOFF_COINT_LOSS: pnl_pct=%.2f%% basis=%s floating_pnl=%.2f "
+                    "coint_lost=%.1fs confirms=%d/%d min_loss=%.2f%%"
+                    % (
+                        pnl_pct,
+                        hard_stop_basis,
+                        floating_pnl_usdt,
+                        coint_lost_seconds,
+                        coint_lost_confirm_count,
+                        riskoff_coint_confirm_count,
+                        riskoff_coint_min_loss_pct,
+                    )
+                ),
+                priority=82,
+                severity=0.80,
+                metadata={
+                    "source": "cointegration_quality",
+                    "switch_reason": "exit_tier_15_riskoff_coint_loss",
+                    "health_zero": True,
+                },
             )
         )
-        logger.warning(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("exit_tier_15_riskoff_coint_loss")
-        set_last_health_score(0)
-        _close_trade_manager()
-        return 2
 
-    # Tier 2-4: optional cointegration-driven exits (disabled by default).
     if (
         enable_coint_exit_tiers
         and coint_flag == 0
@@ -3666,82 +3953,82 @@ def monitor_exit(
             or pnl_pct <= -abs(tier2_min_loss_pct)
         )
     ):
-        msg = (
-            "HYBRID_EXIT Tier2 COINT_LOST_LOSING: pnl_pct=%.2f%% coint_flag=%s confirms=%d/%d min_loss=%.2f%%"
-            % (pnl_pct, coint_flag, coint_lost_confirm_count, tier2_confirmation_count, tier2_min_loss_pct)
+        exit_candidates.append(
+            ExitCandidate(
+                name="cointegration_lost_losing",
+                category=ExitCandidateCategory.QUALITY,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "HYBRID_EXIT COINT_LOST_LOSING: pnl_pct=%.2f%% coint_flag=%s "
+                    "confirms=%d/%d min_loss=%.2f%%"
+                    % (pnl_pct, coint_flag, coint_lost_confirm_count, tier2_confirmation_count, tier2_min_loss_pct)
+                ),
+                priority=74,
+                severity=0.72,
+                metadata={
+                    "source": "cointegration_quality",
+                    "switch_reason": "exit_tier_2_coint_losing",
+                    "health_zero": True,
+                },
+            )
         )
-        logger.warning(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("exit_tier_2_coint_losing")
-        set_last_health_score(0)
-        _close_trade_manager()
-        return 2
 
-    # Tier 3: Cointegration lost beyond grace period.
     if enable_coint_exit_tiers and coint_flag == 0 and coint_lost_seconds >= HYBRID_EXIT_COINT_GRACE_SECONDS:
-        msg = (
-            "HYBRID_EXIT Tier3 COINT_GRACE_TIMEOUT: coint_lost=%.1fs >= %ss"
-            % (coint_lost_seconds, HYBRID_EXIT_COINT_GRACE_SECONDS)
+        exit_candidates.append(
+            ExitCandidate(
+                name="cointegration_grace_timeout",
+                category=ExitCandidateCategory.QUALITY,
+                action=ExitAction.FULL_EXIT,
+                reason=(
+                    "HYBRID_EXIT COINT_GRACE_TIMEOUT: coint_lost=%.1fs >= %ss"
+                    % (coint_lost_seconds, HYBRID_EXIT_COINT_GRACE_SECONDS)
+                ),
+                priority=68,
+                severity=0.68,
+                metadata={
+                    "source": "cointegration_quality",
+                    "switch_reason": "exit_tier_3_coint_grace",
+                    "health_zero": True,
+                },
+            )
         )
-        logger.warning(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("exit_tier_3_coint_grace")
-        set_last_health_score(0)
-        _close_trade_manager()
-        return 2
 
-    # Tier 4: Cointegration lost and spread diverging from entry.
     if enable_coint_exit_tiers and coint_flag == 0 and entry_z is not None:
         try:
             divergence = abs(float(latest_zscore) - float(entry_z))
         except (TypeError, ValueError):
             divergence = 0.0
         if divergence > HYBRID_EXIT_DIVERGENCE_DELTA_Z:
-            msg = (
-                "HYBRID_EXIT Tier4 RUNAWAY_DIVERGENCE: |z-entry_z|=%.2f > %.2f"
-                % (divergence, HYBRID_EXIT_DIVERGENCE_DELTA_Z)
+            exit_candidates.append(
+                ExitCandidate(
+                    name="runaway_divergence",
+                    category=ExitCandidateCategory.QUALITY,
+                    action=ExitAction.FULL_EXIT,
+                    reason=(
+                        "HYBRID_EXIT RUNAWAY_DIVERGENCE: |z-entry_z|=%.2f > %.2f"
+                        % (divergence, HYBRID_EXIT_DIVERGENCE_DELTA_Z)
+                    ),
+                    priority=72,
+                    severity=0.76,
+                    metadata={
+                        "source": "cointegration_quality",
+                        "switch_reason": "exit_tier_4_divergence",
+                        "health_zero": True,
+                    },
+                )
             )
-            logger.warning(msg)
-            print(msg)
-            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-            set_last_switch_reason("exit_tier_4_divergence")
-            set_last_health_score(0)
-            _close_trade_manager()
-            return 2
 
-    # Tier 6: Advanced trade manager.
     if entry_z is not None:
         _apply_trade_manager_profile(entry_strategy)
         _ensure_trade_manager_state(entry_z, entry_time)
-        min_profit_exit_usdt = _resolve_net_profit_exit_floor_usdt(entry_notional_val)
         tm_result = trade_manager.update(
             latest_zscore,
             floating_pnl_usdt=floating_pnl_usdt,
             min_profit_usdt=min_profit_exit_usdt,
         )
-
-        if tm_result.get("action") == "EXIT":
-            msg = "KILL-SWITCH TRIGGERED: " + str(tm_result.get("message", tm_result.get("reason")))
-            logger.warning(msg)
-            print(msg)
-            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-            set_last_switch_reason("")
-            _close_trade_manager()
-            return 2
-
-        if tm_result.get("action") == "PARTIAL_EXIT":
-            percentage = tm_result.get("percentage", 0.0)
-            _evaluate_advanced_exit(old_action="partial_exit", old_reason=str(tm_result.get("reason", "legacy partial exit")))
-            if _execute_partial_exit(percentage):
-                trade_manager.execute_partial_exit(pnl=0.0)
-                logger.info("Partial exit completed (%.0f%%).", percentage * 100)
-            else:
-                logger.warning("Partial exit skipped (size below min or no position).")
-                if trade_manager.trade_state is not None:
-                    trade_manager.trade_state.partial_exits.append({"time": time.time(), "skipped": True})
-
+        tm_candidate = _tm_exit_candidate(tm_result)
+        if tm_candidate is not None:
+            exit_candidates.append(tm_candidate)
         if tm_result.get("action") == "WARNING":
             logger.warning(tm_result.get("reason", "Trade manager warning"))
         if tm_result.get("blocked_exit_reason"):
@@ -3750,73 +4037,68 @@ def monitor_exit(
         _close_trade_manager()
         logger.warning("No entry Z-score tracked (restart scenario). Current Z=%.2f", latest_zscore)
         if abs(latest_zscore) > 8.0:
-            msg = (
-                "KILL-SWITCH TRIGGERED: Catastrophic Z-score (%.2f) without entry context"
-                % latest_zscore
+            exit_candidates.append(
+                ExitCandidate(
+                    name="catastrophic_z_without_entry_context",
+                    category=ExitCandidateCategory.HARD,
+                    action=ExitAction.FULL_EXIT,
+                    reason="Catastrophic Z-score (%.2f) without entry context" % latest_zscore,
+                    priority=94,
+                    severity=0.95,
+                    metadata={"source": "no_entry_context", "switch_reason": ""},
+                )
             )
-            logger.error(msg)
-            print(msg)
-            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-            set_last_switch_reason("")
-            return 2
-        logger.info("Holding position (no entry context). Will close on mean reversion only.")
+        else:
+            logger.info("Holding position (no entry context). Will close on mean reversion only.")
 
-    # Funding bleed guard (lowest priority).
     if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:
         funding_ratio = (total_funding_cost / total_unrealized_pnl) * 100
         if funding_ratio > 30:
-            msg = (
-                "KILL-SWITCH TRIGGERED: Funding bleed - UPnL: +%.2f, Funding cost: %.2f (%.1f%% of profit)"
-                % (total_unrealized_pnl, total_funding_cost, funding_ratio)
+            exit_candidates.append(
+                ExitCandidate(
+                    name="funding_bleed",
+                    category=ExitCandidateCategory.PROFIT_RISK,
+                    action=ExitAction.FULL_EXIT,
+                    reason=(
+                        "Funding bleed - UPnL: +%.2f, Funding cost: %.2f (%.1f%% of profit)"
+                        % (total_unrealized_pnl, total_funding_cost, funding_ratio)
+                    ),
+                    priority=54,
+                    severity=0.50,
+                    metadata={"source": "funding_bleed", "switch_reason": ""},
+                )
             )
-            logger.warning(msg)
-            print(msg)
-            _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-            set_last_switch_reason("")
-            _close_trade_manager()
-            return 2
 
-    # Mean reversion when no entry context exists.
     if entry_z is None and abs(latest_zscore) <= EXIT_Z:
-        msg = "KILL-SWITCH TRIGGERED: Mean reversion exit (no entry context) - Z=%.4f" % latest_zscore
-        logger.info(msg)
-        print(msg)
-        _evaluate_advanced_exit(old_action="full_exit", old_reason=msg)
-        set_last_switch_reason("")
-        return 2
-
-    advanced_exit_decision = _evaluate_advanced_exit(old_action="hold", old_reason="legacy hold")
-    if should_apply_live_advanced_exit(advanced_exit_decision):
-        action_value = getattr(advanced_exit_decision.action, "value", str(advanced_exit_decision.action))
-        if action_value == "full_exit":
-            msg = (
-                "ADVANCED_EXIT_LIVE_ENFORCED: full exit requested "
-                "score=%.3f ev=%+.4f reason=%s"
-                % (
-                    advanced_exit_decision.scores.total_exit_score,
-                    advanced_exit_decision.ev.expected_hold_value_usdt,
-                    advanced_exit_decision.reason,
-                )
+        exit_candidates.append(
+            ExitCandidate(
+                name="mean_reversion_no_entry_context",
+                category=ExitCandidateCategory.PROFIT_RISK,
+                action=ExitAction.FULL_EXIT,
+                reason="Mean reversion exit (no entry context) - Z=%.4f" % latest_zscore,
+                priority=50,
+                severity=0.40,
+                metadata={"source": "mean_reversion", "switch_reason": ""},
             )
-            logger.warning(msg)
-            print(msg)
-            set_last_switch_reason("advanced_probabilistic_exit")
-            _close_trade_manager()
-            return 2
-        if action_value == "partial_exit":
-            percentage = float(advanced_exit_decision.exit_percentage or 0.0)
-            if _execute_partial_exit(percentage):
-                logger.info(
-                    "ADVANCED_EXIT_LIVE_ENFORCED: partial exit completed (%.0f%%) score=%.3f ev=%+.4f",
-                    percentage * 100,
-                    advanced_exit_decision.scores.total_exit_score,
-                    advanced_exit_decision.ev.expected_hold_value_usdt,
-                )
-            else:
-                logger.warning(
-                    "ADVANCED_EXIT_LIVE_ENFORCED: partial exit skipped (%.0f%% below min or no position).",
-                    percentage * 100,
-                )
+        )
+
+    orchestrator = ExitOrchestrator()
+    legacy_preview = orchestrator.decide(exit_candidates, net_profit_guard=net_profit_guard)
+    advanced_old_action = legacy_preview.action.value if legacy_preview.selected_candidate is not None else "hold"
+    advanced_old_reason = legacy_preview.reason if legacy_preview.selected_candidate is not None else "legacy hold"
+    advanced_exit_decision = _evaluate_advanced_exit(
+        old_action=advanced_old_action,
+        old_reason=advanced_old_reason,
+    )
+    advanced_candidate = _advanced_exit_candidate(advanced_exit_decision)
+    if advanced_candidate is not None:
+        exit_candidates.append(advanced_candidate)
+
+    exit_decision = orchestrator.decide(exit_candidates, net_profit_guard=net_profit_guard)
+    _log_exit_orchestrator_decision(exit_decision)
+    applied_kill_switch = _apply_exit_orchestrator_decision(exit_decision, kill_switch)
+    if applied_kill_switch is not None:
+        return applied_kill_switch
 
     _log_hold_position(latest_zscore)
     return kill_switch

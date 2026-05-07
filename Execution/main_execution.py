@@ -112,6 +112,7 @@ from func_pair_state import (
     set_last_switch_time,
     get_last_switch_time,
     get_switch_rate_limit_remaining,
+    clear_switch_rate_limit,
     record_trade_result,
     record_pair_trade_result,
     get_pair_history_stats,
@@ -1820,6 +1821,8 @@ def _apply_manual_pair_switch_request(request, in_position_or_orders):
             logger.warning("Failed to reset regime state after manual pair switch: %s", exc)
         reset_health_failure(curr_t1, curr_t2)
         set_last_switch_time()
+        if clear_switch_rate_limit(reset_events=True):
+            logger.info("Manual pair switch cleared automatic switch rate limiter state.")
         _mark_manual_pair_switch_request(request, "applied", f"Switched to {target_pair}")
         emit_event(
             "pair_switch",

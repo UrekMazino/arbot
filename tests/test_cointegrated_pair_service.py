@@ -237,6 +237,38 @@ def test_cointegrated_pair_catalog_and_detail(monkeypatch, tmp_path):
     assert crossing_points[0]["crossing_label"] == "#1"
     assert detail["stats"]["zscore_window"] == 3
     assert detail["stats"]["zscore_current"] is not None
+    assert detail["stats"]["markers"]["legend"]["replay_entry"].startswith("Hypothetical entry")
+
+
+def test_replay_trade_markers_use_rolling_zscore_rules(monkeypatch):
+    monkeypatch.setenv("STATBOT_ENTRY_Z", "2.0")
+    monkeypatch.setenv("STATBOT_ENTRY_Z_MAX", "3.0")
+    monkeypatch.setenv("STATBOT_EXIT_Z", "0.35")
+    monkeypatch.setenv("STATBOT_ENTRY_Z_TOLERANCE", "0.05")
+    monkeypatch.setenv("STATBOT_MIN_PERSIST_BARS", "3")
+    monkeypatch.setenv("STATBOT_ENTRY_MIN_QUALIFIED_BARS", "2")
+    monkeypatch.setenv("STATBOT_ENTRY_EXTREME_CLEAN_BARS", "2")
+    monkeypatch.setenv("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", "60")
+
+    base_ts = 1_776_700_000
+    zscores = [None, -1.0, -2.1, -2.2, -2.1, -0.2, 1.8, 2.05, 2.2, 0.1]
+    points = [
+        {
+            "ts": pd.Timestamp(base_ts + idx * 60, unit="s", tz="UTC").isoformat(),
+            "zscore": z,
+        }
+        for idx, z in enumerate(zscores)
+    ]
+
+    stats = cp._add_chart_trade_markers(points, pair_key="AAA-USDT-SWAP/BBB-USDT-SWAP")
+
+    replay_entries = [point for point in points if point.get("replay_entry_z") is not None]
+    replay_exits = [point for point in points if point.get("replay_exit_z") is not None]
+    assert stats["replay_entries"] == 2
+    assert stats["replay_exits"] == 2
+    assert replay_entries[0]["replay_entry_side"] == "BUY_SPREAD"
+    assert replay_entries[1]["replay_entry_side"] == "SELL_SPREAD"
+    assert "Replay exit BUY_SPREAD" in replay_exits[0]["replay_exit_label"]
 
 
 def test_cointegrated_pair_catalog_filters_hospital_and_graveyard(monkeypatch, tmp_path):

@@ -872,7 +872,439 @@ def _find_pair_row(df: pd.DataFrame, sym_1: str, sym_2: str) -> tuple[int, pd.Se
     raise FileNotFoundError(f"Pair not found in current cointegrated pairs CSV: {sym_1}/{sym_2}")
 
 
-def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> dict[str, Any]:
+def _coerce_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return _parse_iso_timestamp(raw)
+
+    if numeric > 10_000_000_000:
+        numeric /= 1000.0
+    try:
+        return datetime.fromtimestamp(numeric, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _point_ts(point: dict[str, Any]) -> datetime | None:
+    return _coerce_timestamp(point.get("ts"))
+
+
+def _chart_point_times(points: list[dict[str, Any]]) -> list[datetime | None]:
+    return [_point_ts(point) for point in points]
+
+
+def _nearest_point_index(times: list[datetime | None], ts: datetime | None) -> int | None:
+    if ts is None:
+        return None
+    best_idx: int | None = None
+    best_delta: float | None = None
+    for idx, point_ts in enumerate(times):
+        if point_ts is None:
+            continue
+        delta = abs((point_ts - ts).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_idx = idx
+    if best_idx is None or best_delta is None:
+        return None
+
+    finite_times = [item for item in times if item is not None]
+    intervals = [
+        abs((right - left).total_seconds())
+        for left, right in zip(finite_times, finite_times[1:])
+        if abs((right - left).total_seconds()) > 0
+    ]
+    median_interval = float(np.median(intervals)) if intervals else 60.0
+    max_delta = max(median_interval * 2.0, 120.0)
+    return best_idx if best_delta <= max_delta else None
+
+
+def _finite_point_z(point: dict[str, Any]) -> float | None:
+    return _safe_float(point.get("zscore"))
+
+
+def _set_marker(
+    point: dict[str, Any],
+    *,
+    value_key: str,
+    label_key: str,
+    value: float | None,
+    label: str,
+    count_key: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    marker_value = _safe_float(value)
+    if marker_value is None:
+        marker_value = _finite_point_z(point)
+    if marker_value is None:
+        return
+
+    point[value_key] = marker_value
+    existing_label = str(point.get(label_key) or "").strip()
+    if existing_label:
+        point[label_key] = f"{existing_label} | {label}"
+    else:
+        point[label_key] = label
+    if count_key:
+        point[count_key] = int(point.get(count_key) or 0) + 1
+    for key, item in (extra or {}).items():
+        if item is not None:
+            point[key] = item
+
+
+def _entry_replay_settings() -> dict[str, float | int]:
+    min_persist = _env_int("STATBOT_MIN_PERSIST_BARS", 4, minimum=1)
+    min_qualified = _env_int("STATBOT_ENTRY_MIN_QUALIFIED_BARS", 0, minimum=0)
+    if min_qualified <= 0:
+        min_qualified = max(min_persist - 1, 1)
+    min_qualified = min(max(min_qualified, 1), min_persist)
+    clean_bars = _env_int("STATBOT_ENTRY_EXTREME_CLEAN_BARS", 2, minimum=0)
+    clean_bars = min(max(clean_bars, 0), min_persist)
+    return {
+        "entry_z": _env_float("STATBOT_ENTRY_Z", 2.0, minimum=0.0),
+        "entry_z_max": _env_float("STATBOT_ENTRY_Z_MAX", 3.0, minimum=0.0),
+        "exit_z": _env_float("STATBOT_EXIT_Z", 0.35, minimum=0.0),
+        "tolerance": _env_float("STATBOT_ENTRY_Z_TOLERANCE", 0.05, minimum=0.0),
+        "min_persist": min_persist,
+        "min_qualified": min_qualified,
+        "clean_bars": clean_bars,
+        "min_continuous_seconds": _env_int("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", 60, minimum=0),
+    }
+
+
+def _qualified_replay_entry(z_value: float, side: str, entry_floor: float, entry_z_max: float) -> bool:
+    if side == "BUY_SPREAD":
+        return z_value <= -entry_floor and z_value >= -entry_z_max
+    return z_value >= entry_floor and z_value <= entry_z_max
+
+
+def _continuous_replay_seconds(
+    history: list[tuple[int, datetime | None, float]],
+    *,
+    side: str,
+    entry_floor: float,
+    entry_z_max: float,
+) -> float | None:
+    if not history or history[-1][1] is None:
+        return None
+    latest_ts = history[-1][1]
+    assert latest_ts is not None
+    start_ts = latest_ts
+    for _, item_ts, item_z in reversed(history):
+        if not _qualified_replay_entry(item_z, side, entry_floor, entry_z_max):
+            break
+        if item_ts is None:
+            return None
+        start_ts = item_ts
+    return max((latest_ts - start_ts).total_seconds(), 0.0)
+
+
+def _add_replay_trade_markers(points: list[dict[str, Any]]) -> dict[str, int]:
+    settings = _entry_replay_settings()
+    entry_z = float(settings["entry_z"])
+    entry_z_max = max(float(settings["entry_z_max"]), entry_z)
+    exit_z = float(settings["exit_z"])
+    entry_floor = max(entry_z - float(settings["tolerance"]), 0.0)
+    min_persist = int(settings["min_persist"])
+    min_qualified = int(settings["min_qualified"])
+    clean_bars = int(settings["clean_bars"])
+    min_continuous = float(settings["min_continuous_seconds"])
+
+    history: list[tuple[int, datetime | None, float]] = []
+    in_replay_position = False
+    replay_side = ""
+    stats = {"replay_entries": 0, "replay_exits": 0}
+
+    for idx, point in enumerate(points):
+        z_value = _finite_point_z(point)
+        point_ts = _point_ts(point)
+        if z_value is None:
+            continue
+        history.append((idx, point_ts, z_value))
+        if len(history) < min_persist:
+            continue
+
+        if in_replay_position:
+            if abs(z_value) <= exit_z:
+                _set_marker(
+                    point,
+                    value_key="replay_exit_z",
+                    label_key="replay_exit_label",
+                    value=z_value,
+                    label=f"Replay exit {replay_side}: Z={z_value:.2f} reverted inside +/-{exit_z:.2f}",
+                    count_key="replay_exit_count",
+                )
+                stats["replay_exits"] += 1
+                in_replay_position = False
+                replay_side = ""
+            continue
+
+        recent = history[-min_persist:]
+        recent_z = [item[2] for item in recent]
+        candidates = (
+            ("BUY_SPREAD", "oversold", min(0.0, z_value)),
+            ("SELL_SPREAD", "overbought", max(0.0, z_value)),
+        )
+        for side, side_text, _plot_hint in candidates:
+            if not _qualified_replay_entry(z_value, side, entry_floor, entry_z_max):
+                continue
+            qualified = [
+                _qualified_replay_entry(item_z, side, entry_floor, entry_z_max)
+                for item_z in recent_z
+            ]
+            if sum(1 for item in qualified if item) < min_qualified:
+                continue
+            if clean_bars and not all(
+                _qualified_replay_entry(item_z, side, entry_floor, entry_z_max)
+                for item_z in recent_z[-clean_bars:]
+            ):
+                continue
+            duration = _continuous_replay_seconds(
+                history,
+                side=side,
+                entry_floor=entry_floor,
+                entry_z_max=entry_z_max,
+            )
+            if duration is not None and duration < min_continuous:
+                continue
+            _set_marker(
+                point,
+                value_key="replay_entry_z",
+                label_key="replay_entry_label",
+                value=z_value,
+                label=(
+                    f"Replay entry {side}: Z={z_value:.2f} {side_text}, "
+                    f"persistence {sum(qualified)}/{min_persist}"
+                ),
+                count_key="replay_entry_count",
+                extra={"replay_entry_side": side},
+            )
+            stats["replay_entries"] += 1
+            in_replay_position = True
+            replay_side = side
+            break
+
+    return stats
+
+
+def _event_payload(row: Any) -> dict[str, Any]:
+    payload = getattr(row, "payload_json", None)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_pair_key(payload: dict[str, Any]) -> str:
+    pair_text = payload.get("pair") or payload.get("pair_key")
+    pair_key = _normalize_pair_key_text(pair_text)
+    if pair_key:
+        return pair_key
+    long_ticker = payload.get("long_ticker")
+    short_ticker = payload.get("short_ticker")
+    if long_ticker and short_ticker:
+        return _normalize_pair_key(long_ticker, short_ticker)
+    sym_1 = payload.get("sym_1") or payload.get("ticker_1")
+    sym_2 = payload.get("sym_2") or payload.get("ticker_2")
+    return _normalize_pair_key(sym_1, sym_2) if sym_1 and sym_2 else ""
+
+
+def _event_z_value(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _safe_float(payload.get(key))
+        if value is not None:
+            return value
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, dict):
+        for key in keys:
+            value = _safe_float(diagnostics.get(key))
+            if value is not None:
+                return value
+        value = _safe_float(diagnostics.get("latest_zscore"))
+        if value is not None:
+            return value
+    return None
+
+
+def _short_reason(payload: dict[str, Any]) -> str:
+    reason = str(payload.get("reason") or "").strip()
+    reject_type = str(payload.get("reject_type") or "").strip()
+    parts = [item for item in (reject_type, reason) if item]
+    return ": ".join(parts) if parts else "blocked"
+
+
+def _add_event_trade_markers(
+    points: list[dict[str, Any]],
+    *,
+    pair_key: str,
+    db: Any,
+) -> dict[str, int]:
+    stats = {"blocked_entries": 0, "actual_entries": 0, "actual_exits": 0}
+    times = _chart_point_times(points)
+    finite_times = [item for item in times if item is not None]
+    if db is None or not finite_times:
+        return stats
+
+    start_ts = min(finite_times)
+    end_ts = max(finite_times)
+    try:
+        from sqlalchemy import or_, select
+
+        from ..models import RunEvent, Trade
+    except Exception:
+        return stats
+
+    try:
+        trade_rows = db.execute(
+            select(Trade).where(
+                or_(
+                    Trade.entry_ts.between(start_ts, end_ts),
+                    Trade.exit_ts.between(start_ts, end_ts),
+                )
+            )
+        ).scalars().all()
+    except Exception:
+        trade_rows = []
+
+    seen_actual: set[tuple[str, int]] = set()
+    for trade in trade_rows:
+        if _normalize_pair_key_text(getattr(trade, "pair_key", "")) != pair_key:
+            continue
+        entry_idx = _nearest_point_index(times, _coerce_timestamp(getattr(trade, "entry_ts", None)))
+        if entry_idx is not None:
+            seen_actual.add(("entry", entry_idx))
+            _set_marker(
+                points[entry_idx],
+                value_key="actual_entry_z",
+                label_key="actual_entry_label",
+                value=_safe_float(getattr(trade, "entry_z", None)),
+                label=f"Actual entry {getattr(trade, 'side', None) or ''}".strip(),
+                count_key="actual_entry_count",
+            )
+            stats["actual_entries"] += 1
+
+        exit_idx = _nearest_point_index(times, _coerce_timestamp(getattr(trade, "exit_ts", None)))
+        if exit_idx is not None:
+            pnl = _safe_float(getattr(trade, "pnl_usdt", None))
+            seen_actual.add(("exit", exit_idx))
+            _set_marker(
+                points[exit_idx],
+                value_key="actual_exit_z",
+                label_key="actual_exit_label",
+                value=_safe_float(getattr(trade, "exit_z", None)),
+                label=(
+                    f"Actual exit PnL {pnl:+.2f} USDT"
+                    if pnl is not None
+                    else "Actual exit"
+                ),
+                count_key="actual_exit_count",
+                extra={"actual_exit_pnl_usdt": pnl},
+            )
+            stats["actual_exits"] += 1
+
+    try:
+        event_rows = db.execute(
+            select(RunEvent)
+            .where(
+                RunEvent.ts.between(start_ts, end_ts),
+                RunEvent.event_type.in_(("entry_reject", "trade_open", "trade_close")),
+            )
+            .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+        ).scalars().all()
+    except Exception:
+        event_rows = []
+
+    for event in event_rows:
+        payload = _event_payload(event)
+        if _payload_pair_key(payload) != pair_key:
+            continue
+        event_type = str(getattr(event, "event_type", "") or "")
+        event_ts = _coerce_timestamp(payload.get("entry_ts")) if event_type == "trade_open" else None
+        event_ts = event_ts or _coerce_timestamp(getattr(event, "ts", None))
+        idx = _nearest_point_index(times, event_ts)
+        if idx is None:
+            continue
+
+        if event_type == "entry_reject":
+            reject_type = str(payload.get("reject_type") or "").strip().lower()
+            reason = str(payload.get("reason") or "").strip()
+            if reject_type == "strategy_gate" or reason.lower().startswith("no entry -"):
+                continue
+            score = _safe_float(payload.get("score"))
+            min_score = _safe_float(payload.get("min_score"))
+            score_text = f" score {score:.2f}/{min_score:.2f}" if score is not None and min_score is not None else ""
+            _set_marker(
+                points[idx],
+                value_key="blocked_entry_z",
+                label_key="blocked_entry_label",
+                value=_event_z_value(payload, "entry_z", "latest_zscore"),
+                label=f"Blocked entry {score_text}: {_short_reason(payload)}",
+                count_key="blocked_entry_count",
+                extra={"blocked_entry_reason": _short_reason(payload)},
+            )
+            stats["blocked_entries"] += 1
+            continue
+
+        if event_type == "trade_open" and ("entry", idx) not in seen_actual:
+            _set_marker(
+                points[idx],
+                value_key="actual_entry_z",
+                label_key="actual_entry_label",
+                value=_event_z_value(payload, "entry_z", "latest_zscore"),
+                label=f"Actual entry {payload.get('side') or ''}".strip(),
+                count_key="actual_entry_count",
+            )
+            stats["actual_entries"] += 1
+        elif event_type == "trade_close" and ("exit", idx) not in seen_actual:
+            pnl = _safe_float(payload.get("pnl_usdt"))
+            _set_marker(
+                points[idx],
+                value_key="actual_exit_z",
+                label_key="actual_exit_label",
+                value=_event_z_value(payload, "exit_z", "latest_zscore"),
+                label=(
+                    f"Actual exit PnL {pnl:+.2f} USDT"
+                    if pnl is not None
+                    else "Actual exit"
+                ),
+                count_key="actual_exit_count",
+                extra={"actual_exit_pnl_usdt": pnl},
+            )
+            stats["actual_exits"] += 1
+
+    return stats
+
+
+def _add_chart_trade_markers(
+    points: list[dict[str, Any]],
+    *,
+    pair_key: str,
+    db: Any = None,
+) -> dict[str, Any]:
+    replay_stats = _add_replay_trade_markers(points)
+    event_stats = _add_event_trade_markers(points, pair_key=pair_key, db=db)
+    return {
+        **replay_stats,
+        **event_stats,
+        "legend": {
+            "chart_crossing": "Historical spread mean crossing, used as pair-quality evidence.",
+            "replay_entry": "Hypothetical entry from rolling Z-score rules only.",
+            "replay_exit": "Hypothetical exit after replay entry when Z reverts inside EXIT_Z.",
+            "blocked_entry": "A real bot signal that was blocked before order placement.",
+            "actual_entry": "Real executed entry from bot events or trade rows.",
+            "actual_exit": "Real executed exit from bot events or trade rows.",
+        },
+    }
+
+
+def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720, db: Any = None) -> dict[str, Any]:
     sym_1 = str(sym_1 or "").strip()
     sym_2 = str(sym_2 or "").strip()
     if not sym_1 or not sym_2:
@@ -927,12 +1359,32 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
                 "zscore": float(zscores[idx]) if idx < len(zscores) and np.isfinite(zscores[idx]) else None,
                 "crossing_spread": float(spread[idx]) if idx in crossing_index_set else None,
                 "crossing_label": f"#{crossing_labels[idx]}" if idx in crossing_labels else None,
+                "replay_entry_z": None,
+                "replay_entry_label": None,
+                "replay_entry_count": 0,
+                "replay_entry_side": None,
+                "replay_exit_z": None,
+                "replay_exit_label": None,
+                "replay_exit_count": 0,
+                "blocked_entry_z": None,
+                "blocked_entry_label": None,
+                "blocked_entry_count": 0,
+                "blocked_entry_reason": None,
+                "actual_entry_z": None,
+                "actual_entry_label": None,
+                "actual_entry_count": 0,
+                "actual_exit_z": None,
+                "actual_exit_label": None,
+                "actual_exit_count": 0,
+                "actual_exit_pnl_usdt": None,
                 "z_upper": 2.0,
                 "z_lower": -2.0,
                 "z_mid": 0.0,
             }
         )
 
+    pair_key = _normalize_pair_key(sym_1, sym_2)
+    marker_stats = _add_chart_trade_markers(chart_points, pair_key=pair_key, db=db)
     pair = _pair_row(row, rank)
     return {
         "pair": pair,
@@ -948,6 +1400,7 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720) -> di
             "zero_crossing_window": len(crossing_indices),
             "price_1_current": float(prices_1[-1]) if len(prices_1) else None,
             "price_2_current": float(prices_2[-1]) if len(prices_2) else None,
+            "markers": marker_stats,
         },
     }
 

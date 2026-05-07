@@ -329,10 +329,11 @@ def admin_cointegrated_pair_detail(
     sym_1: str = Query(..., min_length=1),
     sym_2: str = Query(..., min_length=1),
     limit: int = Query(default=720, ge=50, le=2000),
+    db: Session = Depends(get_db_session),
     _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     try:
-        return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit)
+        return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

@@ -131,6 +131,37 @@ def test_add_to_graveyard_stores_normalized_pair_key(tmp_path, monkeypatch):
     assert "BBB-USDT-SWAP/AAA-USDT-SWAP" not in state["graveyard"]
 
 
+def test_clear_switch_rate_limit_preserves_last_switch_time(tmp_path, monkeypatch):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "pair_strategy_state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "last_switch_time": 1_800_000_000.0,
+                "switch_events": [1_799_999_000.0, 1_799_999_100.0],
+                "switch_rate_limit_until_ts": 1_800_000_120.0,
+                "last_switch_reason": "switch_rate_limited",
+                "graveyard": {},
+                "hospital": {},
+                "pair_history": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(fps, "_STATE_DIR", state_dir)
+    monkeypatch.setattr(fps, "STATE_FILE", state_file)
+
+    assert fps.clear_switch_rate_limit(reset_events=True) is True
+
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["last_switch_time"] == 1_800_000_000.0
+    assert state["switch_events"] == []
+    assert state["switch_rate_limit_until_ts"] == 0.0
+    assert state["last_switch_reason"] == ""
+
+
 def test_startup_invalid_pair_preserves_existing_graveyard_reason(tmp_path, monkeypatch):
     state_dir = tmp_path / "state"
     state_dir.mkdir(parents=True)

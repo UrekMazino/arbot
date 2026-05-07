@@ -953,6 +953,38 @@ def get_switch_rate_limit_remaining():
         return 0.0
     return float(remaining)
 
+
+def clear_switch_rate_limit(reset_events=True):
+    """Clear the automatic switch rate limiter without changing last_switch_time."""
+    state = load_pair_state()
+    changed = False
+
+    try:
+        until_ts = float(state.get("switch_rate_limit_until_ts", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        until_ts = 0.0
+        changed = True
+
+    if until_ts:
+        state["switch_rate_limit_until_ts"] = 0.0
+        changed = True
+    elif state.get("switch_rate_limit_until_ts") != 0.0:
+        state["switch_rate_limit_until_ts"] = 0.0
+        changed = True
+
+    if reset_events and state.get("switch_events"):
+        state["switch_events"] = []
+        changed = True
+
+    if state.get("last_switch_reason") == "switch_rate_limited":
+        state["last_switch_reason"] = ""
+        changed = True
+
+    if changed:
+        save_pair_state(state)
+    return changed
+
+
 def calculate_min_capital_cooldown(required, allocated):
     try:
         required_val = float(required)

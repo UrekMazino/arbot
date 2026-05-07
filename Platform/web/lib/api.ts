@@ -534,6 +534,24 @@ export type CointegratedPairPoint = {
   zscore: number | null;
   crossing_spread?: number | null;
   crossing_label?: string | null;
+  replay_entry_z?: number | null;
+  replay_entry_label?: string | null;
+  replay_entry_count?: number;
+  replay_entry_side?: string | null;
+  replay_exit_z?: number | null;
+  replay_exit_label?: string | null;
+  replay_exit_count?: number;
+  blocked_entry_z?: number | null;
+  blocked_entry_label?: string | null;
+  blocked_entry_count?: number;
+  blocked_entry_reason?: string | null;
+  actual_entry_z?: number | null;
+  actual_entry_label?: string | null;
+  actual_entry_count?: number;
+  actual_exit_z?: number | null;
+  actual_exit_label?: string | null;
+  actual_exit_count?: number;
+  actual_exit_pnl_usdt?: number | null;
   z_upper: number;
   z_lower: number;
   z_mid: number;
@@ -553,6 +571,14 @@ export type CointegratedPairDetail = {
     zero_crossing_window?: number | null;
     price_1_current: number | null;
     price_2_current: number | null;
+    markers?: {
+      replay_entries?: number;
+      replay_exits?: number;
+      blocked_entries?: number;
+      actual_entries?: number;
+      actual_exits?: number;
+      legend?: Record<string, string>;
+    };
   };
 };
 

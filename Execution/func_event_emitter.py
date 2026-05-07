@@ -26,6 +26,7 @@ _KNOWN_EVENT_TYPES = {
     "trade_open",
     "trade_close",
     "pair_switch",
+    "position_desync",
     "risk_alert",
     "report_status",
     "entry_reject",

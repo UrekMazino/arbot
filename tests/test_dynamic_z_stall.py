@@ -108,6 +108,203 @@ class TestDynamicZStall(unittest.TestCase):
         result = self._run_monitor_exit(now_ts, entry_z, entry_time, current_z, z_history)
         self.assertEqual(result, 1)
 
+    def test_small_orphan_leg_auto_closes_without_waiting_for_mean_reversion(self):
+        close_calls = []
+
+        def _close_stub(kill_switch, tickers=None, **_kwargs):
+            close_calls.append({"kill_switch": kill_switch, "tickers": tickers})
+            return {"ok": True, "kill_switch": 0}
+
+        account_state = {
+            "ok": True,
+            "errors": [],
+            "orders": [],
+            "positions": [
+                {
+                    "instId": "SHIB-USDT-SWAP",
+                    "posSide": "long",
+                    "pos": "5.5",
+                    "notionalUsd": "35.08",
+                    "upl": "-0.055",
+                }
+            ],
+        }
+        zscore_results = ([1.33], False, {"coint_flag": 1})
+
+        with patch.dict(
+            os.environ,
+            {
+                "STATBOT_ORPHAN_LEG_AUTO_CLOSE": "1",
+                "STATBOT_ORPHAN_LEG_SMALL_NOTIONAL_USDT": "100",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_USDT": "2",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_PCT": "1",
+                "STATBOT_ORPHAN_LEG_MAX_AGE_SECONDS": "300",
+            },
+            clear=False,
+        ), patch.object(ftm, "ticker_1", "1INCH-USDT-SWAP"), \
+            patch.object(ftm, "ticker_2", "SHIB-USDT-SWAP"), \
+            patch("func_pair_state.add_to_z_history", return_value=None), \
+            patch("func_pair_state.get_entry_equity", return_value=None), \
+            patch("func_pair_state.get_entry_notional", return_value=None), \
+            patch("func_pair_state.get_entry_strategy", return_value=None), \
+            patch("func_pair_state.get_entry_time", return_value=None), \
+            patch("func_pair_state.get_entry_z_score", return_value=None), \
+            patch("func_pair_state.clear_coint_lost_since_ts", return_value=None), \
+            patch("func_pair_state.clear_coint_lost_confirm_count", return_value=None), \
+            patch("func_position_calls.get_account_state", return_value=account_state), \
+            patch("func_trade_management.close_all_positions_and_confirm", side_effect=_close_stub), \
+            patch("func_trade_management.set_last_switch_reason") as set_reason, \
+            patch("func_trade_management.set_last_health_score"), \
+            patch("func_trade_management.emit_event"):
+            result = ftm.monitor_exit(1, False, zscore_results)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(close_calls, [{"kill_switch": 1, "tickers": ["SHIB-USDT-SWAP"]}])
+        set_reason.assert_called_once_with("orphan_leg")
+
+    def test_large_orphan_leg_does_not_use_pair_mean_reversion_exit(self):
+        account_state = {
+            "ok": True,
+            "errors": [],
+            "orders": [],
+            "positions": [
+                {
+                    "instId": "SHIB-USDT-SWAP",
+                    "posSide": "long",
+                    "pos": "150",
+                    "notionalUsd": "1000",
+                    "upl": "0",
+                }
+            ],
+        }
+        zscore_results = ([0.10], False, {"coint_flag": 1})
+
+        with patch.dict(
+            os.environ,
+            {
+                "STATBOT_ORPHAN_LEG_AUTO_CLOSE": "1",
+                "STATBOT_ORPHAN_LEG_SMALL_NOTIONAL_USDT": "100",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_USDT": "2",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_PCT": "1",
+                "STATBOT_ORPHAN_LEG_MAX_AGE_SECONDS": "300",
+            },
+            clear=False,
+        ), patch.object(ftm, "ticker_1", "1INCH-USDT-SWAP"), \
+            patch.object(ftm, "ticker_2", "SHIB-USDT-SWAP"), \
+            patch("func_pair_state.add_to_z_history", return_value=None), \
+            patch("func_pair_state.get_entry_equity", return_value=None), \
+            patch("func_pair_state.get_entry_notional", return_value=None), \
+            patch("func_pair_state.get_entry_strategy", return_value=None), \
+            patch("func_pair_state.get_entry_time", return_value=None), \
+            patch("func_pair_state.get_entry_z_score", return_value=None), \
+            patch("func_pair_state.clear_coint_lost_since_ts", return_value=None), \
+            patch("func_pair_state.clear_coint_lost_confirm_count", return_value=None), \
+            patch("func_position_calls.get_account_state", return_value=account_state), \
+            patch("func_trade_management.close_all_positions_and_confirm") as close_mock, \
+            patch("func_trade_management.emit_event"):
+            result = ftm.monitor_exit(1, False, zscore_results)
+
+        self.assertEqual(result, 1)
+        close_mock.assert_not_called()
+
+    def test_orphan_leg_auto_closes_even_without_valid_zscore(self):
+        close_calls = []
+
+        def _close_stub(kill_switch, tickers=None, **_kwargs):
+            close_calls.append({"kill_switch": kill_switch, "tickers": tickers})
+            return {"ok": True, "kill_switch": 0}
+
+        account_state = {
+            "ok": True,
+            "errors": [],
+            "orders": [],
+            "positions": [
+                {
+                    "instId": "SHIB-USDT-SWAP",
+                    "posSide": "long",
+                    "pos": "5.5",
+                    "notionalUsd": "35.08",
+                    "upl": "-0.055",
+                }
+            ],
+        }
+        zscore_results = ([float("nan")], False, {"coint_flag": 0})
+
+        with patch.dict(
+            os.environ,
+            {
+                "STATBOT_ORPHAN_LEG_AUTO_CLOSE": "1",
+                "STATBOT_ORPHAN_LEG_SMALL_NOTIONAL_USDT": "100",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_USDT": "2",
+                "STATBOT_ORPHAN_LEG_MAX_LOSS_PCT": "1",
+                "STATBOT_ORPHAN_LEG_MAX_AGE_SECONDS": "300",
+            },
+            clear=False,
+        ), patch.object(ftm, "ticker_1", "1INCH-USDT-SWAP"), \
+            patch.object(ftm, "ticker_2", "SHIB-USDT-SWAP"), \
+            patch("func_position_calls.get_account_state", return_value=account_state), \
+            patch("func_trade_management.close_all_positions_and_confirm", side_effect=_close_stub), \
+            patch("func_trade_management.set_last_switch_reason") as set_reason, \
+            patch("func_trade_management.set_last_health_score"), \
+            patch("func_trade_management.emit_event"):
+            result = ftm.monitor_exit(1, False, zscore_results)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(close_calls, [{"kill_switch": 1, "tickers": ["SHIB-USDT-SWAP"]}])
+        set_reason.assert_called_once_with("orphan_leg")
+
+    def test_entry_setup_failure_closes_already_placed_leg(self):
+        result_long = {
+            "ok": False,
+            "entry_id": "3543602138750865408",
+            "entry": {
+                "code": "0",
+                "data": [{"ordId": "3543602138750865408", "sCode": "0"}],
+            },
+            "stop": {"code": "51000", "msg": "Parameter slTriggerPx error"},
+        }
+
+        with patch(
+            "func_trade_management.close_all_positions_and_confirm",
+            return_value={"ok": True, "kill_switch": 0},
+        ) as close_mock, patch("func_trade_management.set_last_switch_reason") as set_reason, \
+            patch("func_trade_management.set_last_health_score"), \
+            patch("func_trade_management.emit_event"):
+            handled, kill_switch = ftm._close_placed_entry_after_setup_failure(
+                "Long",
+                "SHIB-USDT-SWAP",
+                result_long,
+                "long_entry_setup_failed",
+                0,
+            )
+
+        self.assertTrue(handled)
+        self.assertEqual(kill_switch, 0)
+        close_mock.assert_called_once_with(0, tickers=["SHIB-USDT-SWAP"])
+        set_reason.assert_called_once_with("entry_setup_failed")
+
+    def test_entry_setup_failure_does_not_close_when_entry_was_rejected(self):
+        rejected_entry = {
+            "ok": False,
+            "entry": {
+                "code": "1",
+                "data": [{"sCode": "51155", "sMsg": "instrument restricted"}],
+            },
+        }
+
+        with patch("func_trade_management.close_all_positions_and_confirm") as close_mock:
+            handled, kill_switch = ftm._close_placed_entry_after_setup_failure(
+                "Long",
+                "SHIB-USDT-SWAP",
+                rejected_entry,
+                "long_entry_failed",
+                0,
+            )
+
+        self.assertFalse(handled)
+        self.assertEqual(kill_switch, 0)
+        close_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

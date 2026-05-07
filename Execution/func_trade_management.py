@@ -404,6 +404,286 @@ def _emergency_close_pair(reason, kill_switch=0):
         return 2
     return int(result.get("kill_switch", 0) or 0)
 
+
+def _emergency_close_tickers(reason, tickers, kill_switch=0):
+    result = close_all_positions_and_confirm(kill_switch, tickers=tickers)
+    if not result.get("ok"):
+        logger.error("Emergency close not confirmed (%s): %s", reason, _close_result_detail(result))
+        return 2
+    return int(result.get("kill_switch", 0) or 0)
+
+
+def _finite_float(value, default=None):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return parsed
+
+
+def _first_position_value(position, *keys):
+    if not isinstance(position, dict):
+        return None
+    for key in keys:
+        value = position.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _position_quantity(position):
+    if not isinstance(position, dict):
+        return None
+    return _finite_float(_first_position_value(position, "pos", "position", "size", "availPos"))
+
+
+def _position_notional_usdt(position):
+    if not isinstance(position, dict):
+        return None
+    for key in ("notionalUsd", "notionalUSDT", "notional_usdt", "notional"):
+        value = _finite_float(position.get(key))
+        if value is not None:
+            return abs(value)
+    qty = abs(_position_quantity(position) or 0.0)
+    mark_px = _finite_float(_first_position_value(position, "markPx", "last", "avgPx"))
+    if qty > 0 and mark_px is not None and mark_px > 0:
+        return qty * mark_px
+    return None
+
+
+def _position_upl_usdt(position):
+    if not isinstance(position, dict):
+        return None
+    return _finite_float(_first_position_value(position, "upl", "unrealizedPnl", "unrealized_pnl"))
+
+
+def _position_age_seconds(position, now_ts=None):
+    if not isinstance(position, dict):
+        return None
+    raw_ts = _first_position_value(position, "cTime", "createdTime", "uTime")
+    ts = _finite_float(raw_ts)
+    if ts is None or ts <= 0:
+        return None
+    if ts > 10_000_000_000:
+        ts /= 1000.0
+    now_val = time.time() if now_ts is None else float(now_ts)
+    return max(now_val - ts, 0.0)
+
+
+def _active_order_exists(account_state, ticker):
+    if not isinstance(account_state, dict):
+        return False
+    target = str(ticker or "").strip()
+    if not target:
+        return False
+    terminal_states = {"canceled", "cancelled", "filled", "done", "failed", "expired"}
+    for order in account_state.get("orders", []):
+        if not isinstance(order, dict):
+            continue
+        if str(order.get("instId") or "").strip() != target:
+            continue
+        state = str(order.get("state") or order.get("ordStatus") or "").strip().lower()
+        if state and state in terminal_states:
+            continue
+        return True
+    return False
+
+
+def _active_pair_entry_blockers(account_state, tickers=None):
+    active_tickers = [str(ticker or "").strip() for ticker in (tickers or [ticker_1, ticker_2])]
+    active_tickers = [ticker for ticker in active_tickers if ticker]
+    if not active_tickers:
+        return ["active pair tickers are unavailable"]
+    if not isinstance(account_state, dict) or not bool(account_state.get("ok", True)):
+        errors = account_state.get("errors", []) if isinstance(account_state, dict) else []
+        detail = "; ".join(str(item) for item in errors if str(item).strip())
+        return [detail or "account state could not be confirmed"]
+
+    active_set = set(active_tickers)
+    blockers = []
+    for position in account_state.get("positions", []):
+        if not isinstance(position, dict):
+            continue
+        inst_id = str(position.get("instId") or "").strip()
+        if inst_id not in active_set:
+            continue
+        qty = _position_quantity(position)
+        if qty is not None and abs(qty) > 0:
+            blockers.append(f"open position for {inst_id}: {abs(qty):.8f}")
+
+    for order in account_state.get("orders", []):
+        if not isinstance(order, dict):
+            continue
+        inst_id = str(order.get("instId") or "").strip()
+        if inst_id not in active_set:
+            continue
+        if _active_order_exists({"orders": [order]}, inst_id):
+            blockers.append(f"active order for {inst_id}: {order.get('ordId') or 'unknown order'}")
+
+    return blockers
+
+
+def _detect_active_pair_orphan_leg(account_state):
+    if not isinstance(account_state, dict):
+        return None
+    active_tickers = [str(ticker_1 or "").strip(), str(ticker_2 or "").strip()]
+    active_tickers = [ticker for ticker in active_tickers if ticker]
+    if len(set(active_tickers)) != 2:
+        return None
+
+    positions_by_ticker = {}
+    for position in account_state.get("positions", []):
+        if not isinstance(position, dict):
+            continue
+        inst_id = str(position.get("instId") or "").strip()
+        if inst_id not in active_tickers:
+            continue
+        qty = _position_quantity(position)
+        if qty is None or abs(qty) <= 0:
+            continue
+        positions_by_ticker.setdefault(inst_id, []).append(position)
+
+    if len(positions_by_ticker) != 1:
+        return None
+
+    inst_id = next(iter(positions_by_ticker.keys()))
+    missing_ticker = next((ticker for ticker in active_tickers if ticker != inst_id), "")
+    orphan_positions = positions_by_ticker[inst_id]
+    qty = sum(abs(_position_quantity(position) or 0.0) for position in orphan_positions)
+    notional_values = []
+    upl_values = []
+    age_values = []
+    for position in orphan_positions:
+        notional = _position_notional_usdt(position)
+        if notional is not None:
+            notional_values.append(notional)
+        upl = _position_upl_usdt(position)
+        if upl is not None:
+            upl_values.append(upl)
+        age_seconds = _position_age_seconds(position)
+        if age_seconds is not None:
+            age_values.append(age_seconds)
+    first_position = orphan_positions[0]
+    return {
+        "inst_id": inst_id,
+        "missing_ticker": missing_ticker,
+        "qty": qty,
+        "pos_side": str(first_position.get("posSide") or "").strip().lower(),
+        "notional_usdt": sum(notional_values) if notional_values else None,
+        "upl_usdt": sum(upl_values) if upl_values else None,
+        "age_seconds": max(age_values) if age_values else None,
+        "pending_hedge_order": _active_order_exists(account_state, missing_ticker),
+    }
+
+
+def _orphan_leg_exit_policy(orphan):
+    auto_close = _env_flag("STATBOT_ORPHAN_LEG_AUTO_CLOSE", True)
+    if not auto_close:
+        return False, "auto_close_disabled"
+    if bool(orphan.get("pending_hedge_order")):
+        return False, "matching_hedge_order_pending"
+
+    notional = _finite_float(orphan.get("notional_usdt"))
+    upl = _finite_float(orphan.get("upl_usdt"), 0.0)
+    age_seconds = _finite_float(orphan.get("age_seconds"))
+
+    small_notional = _env_float("STATBOT_ORPHAN_LEG_SMALL_NOTIONAL_USDT", 100.0)
+    if small_notional is not None and small_notional >= 0 and notional is not None and notional <= small_notional:
+        return True, "small_notional"
+
+    max_loss_usdt = _env_float("STATBOT_ORPHAN_LEG_MAX_LOSS_USDT", 2.0)
+    if max_loss_usdt is not None and max_loss_usdt >= 0 and upl is not None and upl <= -abs(max_loss_usdt):
+        return True, "max_loss_usdt"
+
+    max_loss_pct = _env_float("STATBOT_ORPHAN_LEG_MAX_LOSS_PCT", 1.0)
+    if (
+        max_loss_pct is not None
+        and max_loss_pct >= 0
+        and notional is not None
+        and notional > 0
+        and upl is not None
+        and (upl / notional) * 100.0 <= -abs(max_loss_pct)
+    ):
+        return True, "max_loss_pct"
+
+    max_age_seconds = _env_float("STATBOT_ORPHAN_LEG_MAX_AGE_SECONDS", 300.0)
+    if (
+        max_age_seconds is not None
+        and max_age_seconds > 0
+        and age_seconds is not None
+        and age_seconds >= max_age_seconds
+    ):
+        return True, "max_age"
+
+    return False, "risk_thresholds_not_met"
+
+
+def _handle_orphan_leg_if_needed(account_state, kill_switch, latest_zscore):
+    orphan = _detect_active_pair_orphan_leg(account_state)
+    if not orphan:
+        return None
+
+    z_value = _finite_float(latest_zscore)
+    z_display = f"{z_value:.4f}" if z_value is not None else "n/a"
+    should_close, policy_reason = _orphan_leg_exit_policy(orphan)
+    payload = {
+        "pair": f"{ticker_1}/{ticker_2}",
+        "orphan_ticker": orphan.get("inst_id"),
+        "missing_ticker": orphan.get("missing_ticker"),
+        "pos_side": orphan.get("pos_side"),
+        "qty": orphan.get("qty"),
+        "notional_usdt": orphan.get("notional_usdt"),
+        "upl_usdt": orphan.get("upl_usdt"),
+        "age_seconds": orphan.get("age_seconds"),
+        "current_z": z_value,
+        "policy_reason": policy_reason,
+        "auto_close": bool(should_close),
+        "pending_hedge_order": bool(orphan.get("pending_hedge_order")),
+    }
+    emit_event("position_desync", payload=payload, severity="warn", logger=logger)
+
+    if not should_close:
+        logger.warning(
+            "ORPHAN_LEG detected: %s open without %s hedge; not using pair mean-reversion exit "
+            "(reason=%s, notional=%s, upl=%s).",
+            orphan.get("inst_id"),
+            orphan.get("missing_ticker"),
+            policy_reason,
+            orphan.get("notional_usdt"),
+            orphan.get("upl_usdt"),
+        )
+        return kill_switch
+
+    msg = (
+        "ORPHAN_LEG AUTO-CLOSE: %s open without %s hedge "
+        "(reason=%s, notional=%s, upl=%s, z=%s)"
+        % (
+            orphan.get("inst_id"),
+            orphan.get("missing_ticker"),
+            policy_reason,
+            orphan.get("notional_usdt"),
+            orphan.get("upl_usdt"),
+            z_display,
+        )
+    )
+    logger.warning(msg)
+    print(msg)
+    set_last_switch_reason("orphan_leg")
+    set_last_health_score(0)
+    _close_trade_manager()
+    close_result = close_all_positions_and_confirm(kill_switch, tickers=[orphan.get("inst_id")])
+    if close_result.get("ok"):
+        return int(close_result.get("kill_switch", 0) or 0)
+
+    logger.error("Orphan leg close not confirmed: %s", _close_result_detail(close_result))
+    return 2
+
+
 # Advanced trade manager for dynamic exit logic
 trade_manager = AdvancedTradeManager(
     config={
@@ -888,6 +1168,60 @@ def _resolve_entry_id(entry_result):
         if data and isinstance(data[0], dict):
             return str(data[0].get("ordId") or data[0].get("clOrdId") or "")
     return ""
+
+
+def _entry_order_was_placed(entry_result):
+    order_id = _resolve_entry_id(entry_result)
+    if not order_id:
+        return False
+    if not isinstance(entry_result, dict):
+        return False
+    entry = entry_result.get("entry")
+    if not isinstance(entry, dict):
+        return bool(order_id)
+    if str(entry.get("code") or "").strip() not in ("", "0"):
+        return False
+    data_list = entry.get("data") or []
+    if not data_list or not isinstance(data_list[0], dict):
+        return bool(order_id)
+    order_data = data_list[0]
+    s_code = str(order_data.get("sCode") or "").strip()
+    return s_code in ("", "0")
+
+
+def _close_placed_entry_after_setup_failure(side_label, ticker, entry_result, reason, kill_switch=0):
+    if not _entry_order_was_placed(entry_result):
+        return False, kill_switch
+
+    order_id = _resolve_entry_id(entry_result)
+    logger.error(
+        "%s entry order was placed but setup failed; emergency closing opened leg. "
+        "ticker=%s order_id=%s reason=%s response=%s",
+        side_label,
+        ticker,
+        order_id,
+        reason,
+        entry_result,
+    )
+    emit_event(
+        "position_desync",
+        payload={
+            "pair": _active_pair_key(),
+            "ticker": ticker,
+            "side": side_label,
+            "entry_order_id": order_id,
+            "reason": reason,
+            "response": str(entry_result),
+            "action": "emergency_close_placed_leg",
+        },
+        severity="error",
+        logger=logger,
+    )
+    set_last_switch_reason("entry_setup_failed")
+    set_last_health_score(0)
+    _close_trade_manager()
+    close_ks = _emergency_close_tickers(reason, [ticker], kill_switch)
+    return True, close_ks
 
 
 def _entry_result_ok(entry_result):
@@ -1944,6 +2278,47 @@ def manage_new_trades(
             last_price_long = last_price_n
             last_price_short = last_price_p
 
+        from func_position_calls import get_account_state
+        pre_entry_state = get_account_state()
+        orphan_exit_result = _handle_orphan_leg_if_needed(pre_entry_state, kill_switch, latest_zscore)
+        if orphan_exit_result is not None:
+            logger.error(
+                "ENTRY_POSITION_GUARD_BLOCK: orphan leg detected before entry for %s/%s; "
+                "entry skipped while exposure is reconciled.",
+                long_ticker,
+                short_ticker,
+            )
+            _emit_entry_reject(
+                "position_desync",
+                "orphan_leg_detected_pre_entry",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+            )
+            return orphan_exit_result, signal_detected, trade_placed
+
+        entry_blockers = _active_pair_entry_blockers(pre_entry_state, [long_ticker, short_ticker])
+        if entry_blockers:
+            logger.error(
+                "ENTRY_POSITION_GUARD_BLOCK: active pair not flat before entry (%s/%s): %s",
+                long_ticker,
+                short_ticker,
+                "; ".join(entry_blockers),
+            )
+            _emit_entry_reject(
+                "position_desync",
+                "active_pair_not_flat_before_entry",
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                blockers=entry_blockers,
+            )
+            return kill_switch, signal_detected, trade_placed
+
         # Fill targets
         # POSITION SIZING (2% Risk Rule)
         # Check available funds (cross margin requires availEq, isolated uses availBal)
@@ -2713,6 +3088,13 @@ def manage_new_trades(
                     order_long_id = ""
                     order_status_long = "failed"
                     logger.error("Long entry failed; skipping pair entry. Response: %s", result_long)
+                    handled_partial_entry, partial_close_ks = _close_placed_entry_after_setup_failure(
+                        "Long",
+                        long_ticker,
+                        result_long,
+                        "long_entry_setup_failed",
+                        0,
+                    )
                     _emit_entry_reject(
                         "entry_execution",
                         "long_entry_failed",
@@ -2723,6 +3105,12 @@ def manage_new_trades(
                         short_ticker=short_ticker,
                         response=str(result_long),
                     )
+                    if handled_partial_entry:
+                        if partial_close_ks == 2:
+                            return partial_close_ks, signal_detected, trade_placed
+                        if _handle_compliance_restriction(result_long, long_ticker):
+                            return 3, signal_detected, trade_placed
+                        return partial_close_ks, signal_detected, trade_placed
                     if _handle_compliance_restriction(result_long, long_ticker):
                         return 3, signal_detected, trade_placed
                     return kill_switch, signal_detected, trade_placed
@@ -3016,14 +3404,9 @@ def monitor_exit(
     else:
         zscore, signal_sign_positive_new, metrics = get_latest_zscore()
 
+    if not isinstance(metrics, dict):
+        metrics = {}
     coint_flag = metrics.get("coint_flag", 0)
-
-    valid_zscores = [z for z in zscore if not math.isnan(z)]
-    if not valid_zscores:
-        return kill_switch
-
-    latest_zscore = valid_zscores[-1]
-    _log_zscore_status(latest_zscore)
 
     from func_pair_state import (
         add_to_z_history,
@@ -3041,6 +3424,36 @@ def monitor_exit(
     )
     from func_position_calls import get_account_state
 
+    account_state = get_account_state()
+    if not isinstance(account_state, dict) or not bool(account_state.get("ok", True)):
+        detail = ""
+        if isinstance(account_state, dict):
+            detail = "; ".join(str(item) for item in account_state.get("errors", []) if str(item).strip())
+        logger.warning(
+            "Skipping monitor_exit PnL state update because account state is untrusted: %s",
+            detail or "invalid state",
+        )
+        return kill_switch
+
+    valid_zscores = []
+    zscore_iter = zscore if zscore is not None else []
+    for value in zscore_iter:
+        try:
+            if not math.isnan(value):
+                valid_zscores.append(value)
+        except TypeError:
+            continue
+    latest_zscore = valid_zscores[-1] if valid_zscores else None
+
+    orphan_exit_result = _handle_orphan_leg_if_needed(account_state, kill_switch, latest_zscore)
+    if orphan_exit_result is not None:
+        return orphan_exit_result
+
+    if latest_zscore is None:
+        logger.warning("Skipping pair exit evaluation because no valid z-score is available.")
+        return kill_switch
+
+    _log_zscore_status(latest_zscore)
     add_to_z_history(latest_zscore)
 
     entry_equity = get_entry_equity()
@@ -3055,16 +3468,6 @@ def monitor_exit(
     except (TypeError, ValueError):
         entry_notional_val = None
 
-    account_state = get_account_state()
-    if not isinstance(account_state, dict) or not bool(account_state.get("ok", True)):
-        detail = ""
-        if isinstance(account_state, dict):
-            detail = "; ".join(str(item) for item in account_state.get("errors", []) if str(item).strip())
-        logger.warning(
-            "Skipping monitor_exit PnL state update because account state is untrusted: %s",
-            detail or "invalid state",
-        )
-        return kill_switch
     positions = account_state.get("positions", []) if isinstance(account_state, dict) else []
 
     total_unrealized_pnl = 0.0

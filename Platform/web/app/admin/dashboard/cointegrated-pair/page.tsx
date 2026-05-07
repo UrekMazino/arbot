@@ -298,6 +298,76 @@ function ChartEmpty({ message }: { message: string }) {
   return <p className="py-20 text-center text-sm text-gray-500 dark:text-gray-400">{message}</p>;
 }
 
+type PairChartPoint = CointegratedPairDetail["points"][number];
+
+type PairTooltipItem = {
+  color?: string;
+  dataKey?: string | number;
+  name?: string | number;
+  payload?: PairChartPoint;
+  value?: number | string | null;
+};
+
+function PairChartTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: PairTooltipItem[];
+}) {
+  if (!active || !payload?.length) return null;
+  const point = payload.find((item) => item.payload)?.payload;
+  if (!point) return null;
+
+  const markerRows = [
+    ["Chart crossing", point.crossing_label],
+    ["Replay entry", point.replay_entry_label],
+    ["Replay exit", point.replay_exit_label],
+    ["Blocked entry", point.blocked_entry_label],
+    ["Actual entry", point.actual_entry_label],
+    ["Actual exit", point.actual_exit_label],
+  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].trim().length > 0);
+
+  return (
+    <div className="max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-gray-800 dark:bg-gray-950">
+      <p className="font-medium text-gray-900 dark:text-white">{fmtDate(String(label ?? point.ts))}</p>
+      <div className="mt-1 space-y-0.5 text-gray-600 dark:text-gray-300">
+        <p>Spread: {fmtNumber(point.spread, 5)}</p>
+        <p>Z-score: {fmtNumber(point.zscore, 3)}</p>
+      </div>
+      {markerRows.length ? (
+        <div className="mt-2 space-y-1 border-t border-gray-200 pt-2 dark:border-gray-800">
+          {markerRows.map(([name, value]) => (
+            <p key={`${name}-${value}`} className="text-gray-700 dark:text-gray-200">
+              <span className="font-medium">{name}:</span> {value}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function markerDot(fullscreen: boolean, fill: string, stroke = "#0f172a") {
+  return {
+    r: fullscreen ? 5 : 4,
+    fill,
+    stroke,
+    strokeWidth: 1.8,
+  };
+}
+
+function activeMarkerDot(fullscreen: boolean, fill: string, stroke = "#f8fafc") {
+  return {
+    r: fullscreen ? 7 : 6,
+    fill,
+    stroke,
+    strokeWidth: 2,
+  };
+}
+
 function PairUniverseCharts({
   chartData,
   fullscreen = false,
@@ -343,7 +413,7 @@ function PairUniverseCharts({
             <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
             <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-            <Tooltip labelFormatter={(value) => fmtDate(String(value))} />
+            <Tooltip content={<PairChartTooltip />} />
             <Legend />
             <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} {...lineAnimation} />
             <Line
@@ -366,21 +436,76 @@ function PairUniverseCharts({
               stroke="transparent"
               strokeWidth={0}
               connectNulls={false}
-              dot={{
-                r: fullscreen ? 5 : 4,
-                fill: "#facc15",
-                stroke: "#0f172a",
-                strokeWidth: 1.8,
-              }}
-              activeDot={{
-                r: fullscreen ? 7 : 6,
-                fill: "#facc15",
-                stroke: "#fef3c7",
-                strokeWidth: 2,
-              }}
+              dot={markerDot(fullscreen, "#facc15")}
+              activeDot={activeMarkerDot(fullscreen, "#facc15", "#fef3c7")}
               isAnimationActive={false}
             />
             <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} {...lineAnimation} />
+            <Line
+              yAxisId="z"
+              type="linear"
+              dataKey="replay_entry_z"
+              name="Replay entry"
+              legendType="triangle"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={markerDot(fullscreen, "#06b6d4")}
+              activeDot={activeMarkerDot(fullscreen, "#06b6d4")}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="z"
+              type="linear"
+              dataKey="replay_exit_z"
+              name="Replay exit"
+              legendType="diamond"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={markerDot(fullscreen, "#8b5cf6")}
+              activeDot={activeMarkerDot(fullscreen, "#8b5cf6")}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="z"
+              type="linear"
+              dataKey="blocked_entry_z"
+              name="Blocked entry"
+              legendType="cross"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={markerDot(fullscreen, "#f59e0b", "#7f1d1d")}
+              activeDot={activeMarkerDot(fullscreen, "#f59e0b", "#fef3c7")}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="z"
+              type="linear"
+              dataKey="actual_entry_z"
+              name="Actual entry"
+              legendType="star"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={markerDot(fullscreen, "#22c55e")}
+              activeDot={activeMarkerDot(fullscreen, "#22c55e")}
+              isAnimationActive={false}
+            />
+            <Line
+              yAxisId="z"
+              type="linear"
+              dataKey="actual_exit_z"
+              name="Actual exit"
+              legendType="square"
+              stroke="transparent"
+              strokeWidth={0}
+              connectNulls={false}
+              dot={markerDot(fullscreen, "#e11d48")}
+              activeDot={activeMarkerDot(fullscreen, "#e11d48")}
+              isAnimationActive={false}
+            />
             <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} {...lineAnimation} />

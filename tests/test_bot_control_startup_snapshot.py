@@ -359,6 +359,74 @@ def test_normalize_status_trusts_remote_runner_state(monkeypatch):
     assert result["detail"] == "started"
 
 
+def test_runtime_status_exposes_waiting_state_from_existing_status_file(tmp_path, monkeypatch):
+    status_file = tmp_path / "status.json"
+    status_file.write_text(json.dumps({"message": "Managing new trades..."}), encoding="utf-8")
+
+    monkeypatch.setattr(bot_control, "BOT_RUNTIME_STATUS_FILE", status_file)
+    monkeypatch.setattr(
+        bot_control,
+        "_load_runtime_heartbeat_context",
+        lambda _status: {
+            "run_key": "run_01",
+            "current_pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+            "in_position": False,
+            "current_z": -1.42,
+            "heartbeat_at": "2026-04-18T12:01:00+00:00",
+        },
+    )
+
+    result = bot_control._build_runtime_status({"running": True, "latest_run_key": "run_01"})
+
+    assert result["state"] == "waiting_for_entry_signal"
+    assert result["label"] == "Waiting for entry signal"
+    assert result["detail"] == "Managing new trades..."
+    assert result["current_pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert result["current_z"] == -1.42
+    assert result["source"] == "status_file+heartbeat"
+
+
+def test_runtime_status_uses_heartbeat_position_context(tmp_path, monkeypatch):
+    status_file = tmp_path / "status.json"
+    status_file.write_text(json.dumps({"message": "Managing new trades..."}), encoding="utf-8")
+
+    monkeypatch.setattr(bot_control, "BOT_RUNTIME_STATUS_FILE", status_file)
+    monkeypatch.setattr(
+        bot_control,
+        "_load_runtime_heartbeat_context",
+        lambda _status: {
+            "run_key": "run_02",
+            "current_pair": "CCC-USDT-SWAP/DDD-USDT-SWAP",
+            "in_position": True,
+            "current_z": 0.31,
+            "entry_z": 2.12,
+            "hold_minutes": 4.5,
+            "unrealized_pnl_usdt": 1.25,
+            "heartbeat_at": "2026-04-18T12:05:00+00:00",
+        },
+    )
+
+    result = bot_control._build_runtime_status({"running": True, "latest_run_key": "run_02"})
+
+    assert result["state"] == "in_position"
+    assert result["label"] == "In position"
+    assert result["in_position"] is True
+    assert result["entry_z"] == 2.12
+    assert result["hold_minutes"] == 4.5
+    assert result["unrealized_pnl_usdt"] == 1.25
+
+
+def test_write_state_strips_volatile_runtime_status(tmp_path, monkeypatch):
+    state_file = tmp_path / "ui_bot_control.json"
+    monkeypatch.setattr(bot_control, "STATE_FILE", state_file)
+
+    bot_control._write_state({"running": True, "runtime_status": {"state": "in_position"}})
+
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert saved["running"] is True
+    assert "runtime_status" not in saved
+
+
 def test_bot_child_env_uses_internal_api_port_inside_docker(monkeypatch):
     monkeypatch.setattr(bot_control.os, "name", "posix", raising=False)
     monkeypatch.setattr(bot_control.Path, "exists", lambda self: str(self) == "/workspace")

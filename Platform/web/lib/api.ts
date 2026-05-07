@@ -297,6 +297,24 @@ export type RunReportArtifact = {
   files: ReportArtifactFile[];
 };
 
+export type AdminBotRuntimeStatus = {
+  state: string;
+  label: string;
+  detail: string;
+  current_pair: string | null;
+  current_z: number | null;
+  in_position: boolean | null;
+  entry_z: number | null;
+  hold_minutes: number | null;
+  unrealized_pnl_usdt: number | null;
+  entry_notional_usdt: number | null;
+  regime: string | null;
+  strategy: string | null;
+  run_key: string | null;
+  updated_at: string | null;
+  source: string;
+};
+
 export type AdminBotStatus = {
   running: boolean;
   pid: number;
@@ -318,6 +336,7 @@ export type AdminBotStatus = {
   latest_log_file?: string | null;
   workspace_root?: string;
   control_log_file?: string | null;
+  runtime_status?: AdminBotRuntimeStatus | null;
 };
 
 export type AdminLogTail = {

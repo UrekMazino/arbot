@@ -294,6 +294,30 @@ function fmtNumber(value: number | null | undefined, maximumFractionDigits = 2):
   });
 }
 
+type ConsoleStatusTone = "success" | "warn" | "error" | "info" | "warning" | "danger" | "neutral";
+
+function runtimeStatusTone(state: string | null | undefined): ConsoleStatusTone {
+  switch (state) {
+    case "in_position":
+      return "success";
+    case "entry_gate_active":
+    case "closing_position":
+    case "switching_pair":
+    case "risk_halt":
+    case "starting":
+    case "stopping":
+      return "warning";
+    case "error":
+      return "danger";
+    case "stopped":
+      return "neutral";
+    case "waiting_for_entry_signal":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
 function fmtCurrency(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
   const sign = value > 0 ? "+" : "";
@@ -504,6 +528,21 @@ export default function AdminConsolePage() {
       ? "running"
       : "stopped";
   const botStatusTone = botTransitioning ? "warning" : botStatus?.running ? "success" : "error";
+  const botRuntimeStatus = botStatus?.runtime_status ?? null;
+  const botRuntimeLabel = botRuntimeStatus?.label || (botStatus?.running ? "Starting" : "Stopped");
+  const botRuntimeTone = runtimeStatusTone(botRuntimeStatus?.state || (botStatus?.running ? "starting" : "stopped"));
+  const botRuntimeContext = [
+    botRuntimeStatus?.current_pair || runtimeSnapshot?.current_pair || null,
+    botRuntimeStatus?.current_z !== null && botRuntimeStatus?.current_z !== undefined
+      ? `Z ${botRuntimeStatus.current_z >= 0 ? "+" : ""}${botRuntimeStatus.current_z.toFixed(2)}`
+      : null,
+    botRuntimeStatus?.hold_minutes !== null && botRuntimeStatus?.hold_minutes !== undefined
+      ? `${botRuntimeStatus.hold_minutes.toFixed(1)}m hold`
+      : null,
+    botRuntimeStatus?.unrealized_pnl_usdt !== null && botRuntimeStatus?.unrealized_pnl_usdt !== undefined
+      ? fmtCurrency(botRuntimeStatus.unrealized_pnl_usdt)
+      : null,
+  ].filter(Boolean).join(" | ");
   // Use shared logTail from context when floating, otherwise use local state + SSE stream
   const displayLogTail = isFloating ? sharedLogTail : localLogTail;
   // Use SSE streamed lines when available and not floating
@@ -1268,6 +1307,40 @@ export default function AdminConsolePage() {
     applyRuntimeMetrics,
   ]);
 
+  useEffect(() => {
+    if (!canViewConsole || (!canViewLogs && !canManageBot)) return;
+
+    let isMounted = true;
+    let inFlight = false;
+
+    const pollStatus = async () => {
+      if (inFlight) return;
+      inFlight = true;
+
+      try {
+        const statusData = await getAdminBotStatus();
+        if (isMounted) setBotStatus(statusData);
+      } catch {
+        // Ignore errors
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    pollStatus();
+    const timer = window.setInterval(pollStatus, 5000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+    };
+  }, [
+    canViewConsole,
+    canViewLogs,
+    canManageBot,
+    setBotStatus,
+  ]);
+
   // Poll pairs health data
   useEffect(() => {
     if (!canViewConsole) return;
@@ -1586,6 +1659,28 @@ export default function AdminConsolePage() {
                     <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Starting Equity</p>
                       <p className="mt-1.5 font-mono text-sm text-gray-900 dark:text-white/90">{startingEquity !== null ? `${startingEquity.toFixed(2)} USDT` : "n/a"}</p>
+                    </div>
+                    <div className="col-span-2 border-b border-gray-200 pb-3 dark:border-gray-700">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Bot State</p>
+                        <span className="font-mono text-[10px] text-gray-400 dark:text-gray-500">
+                          {fmtDate(botRuntimeStatus?.updated_at)}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <StatusPill label={botRuntimeLabel} tone={botRuntimeTone} />
+                        {botRuntimeStatus?.source ? (
+                          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-gray-400 dark:text-gray-500">
+                            {botRuntimeStatus.source}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1.5 text-xs text-gray-600 dark:text-gray-300">
+                        {botRuntimeStatus?.detail || "No runtime message yet"}
+                      </p>
+                      {botRuntimeContext ? (
+                        <p className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">{botRuntimeContext}</p>
+                      ) : null}
                     </div>
                     <div className="border-b border-gray-200 pb-3 dark:border-gray-700">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">Latest Run</p>

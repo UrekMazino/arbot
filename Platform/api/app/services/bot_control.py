@@ -73,6 +73,7 @@ LOGS_ROOT = WORKSPACE_ROOT / "Logs" / "v1"
 REPORTS_ROOT = WORKSPACE_ROOT / "Reports" / "v1"
 ENV_FILE = EXECUTION_ROOT / ".env"
 STATE_FILE = EXECUTION_ROOT / "state" / "ui_bot_control.json"
+BOT_RUNTIME_STATUS_FILE = EXECUTION_ROOT / "state" / "status.json"
 CONTROL_LOG_FILE = LOGS_ROOT / "superadmin_bot_control.log"
 PAIR_SUPPLY_LOG_FILE = LOGS_ROOT / "pair_supply_scheduler.log"
 STARTING_EQUITY_RE = re.compile(r"Starting equity:\s*(?P<eq>[-+]?\d+(?:\.\d+)?)\s*USDT", re.IGNORECASE)
@@ -272,6 +273,7 @@ def _read_state() -> dict:
 
 def _write_state(data: dict) -> None:
     payload = dict(data or {})
+    payload.pop("runtime_status", None)
     payload["updated_at"] = _utc_iso_now()
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -451,6 +453,191 @@ def _coerce_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return None
+
+
+def _iso_from_mtime(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _max_iso(*values: str | None) -> str | None:
+    parsed: list[datetime] = []
+    for value in values:
+        dt = _parse_iso_timestamp(value)
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        parsed.append(dt.astimezone(timezone.utc))
+    if not parsed:
+        return None
+    return max(parsed).isoformat()
+
+
+def _read_runtime_status_file() -> dict:
+    if not BOT_RUNTIME_STATUS_FILE.exists() or not BOT_RUNTIME_STATUS_FILE.is_file():
+        return {}
+    try:
+        parsed = json.loads(BOT_RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    message = str(parsed.get("message") or parsed.get("status") or "").strip()
+    return {
+        "message": message,
+        "updated_at": _iso_from_mtime(BOT_RUNTIME_STATUS_FILE),
+        "raw": parsed,
+    }
+
+
+def _latest_run_for_runtime_status(db: Session, bot_status: dict) -> Run | None:
+    run_key = str(bot_status.get("run_key") or bot_status.get("latest_run_key") or "").strip()
+    if run_key and run_key.lower() not in {"latest", "__control__"}:
+        run = db.execute(select(Run).where(Run.run_key == run_key)).scalar_one_or_none()
+        if run is not None:
+            return run
+    return db.execute(
+        select(Run)
+        .order_by(Run.start_ts.desc(), Run.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _load_runtime_heartbeat_context(bot_status: dict) -> dict:
+    db: Session = SessionLocal()
+    try:
+        run = _latest_run_for_runtime_status(db, bot_status)
+        if run is None:
+            return {}
+        heartbeat = db.execute(
+            select(RunEvent)
+            .where(RunEvent.run_id == run.id, RunEvent.event_type == "heartbeat")
+            .order_by(RunEvent.ts.desc(), RunEvent.created_at.desc(), RunEvent.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        payload = heartbeat.payload_json if heartbeat and isinstance(heartbeat.payload_json, dict) else {}
+        current_pair = str(payload.get("current_pair") or payload.get("pair") or "").strip() or None
+        return {
+            "run_id": run.id,
+            "run_key": run.run_key,
+            "current_pair": current_pair,
+            "in_position": _coerce_bool(payload.get("in_position")),
+            "current_z": _coerce_float(payload.get("current_z")),
+            "entry_z": _coerce_float(payload.get("entry_z")),
+            "hold_minutes": _coerce_float(payload.get("hold_minutes")),
+            "unrealized_pnl_usdt": _coerce_float(payload.get("unrealized_pnl_usdt")),
+            "entry_notional_usdt": _coerce_float(payload.get("entry_notional_usdt")),
+            "regime": str(payload.get("regime") or "").strip() or None,
+            "strategy": str(payload.get("strategy") or "").strip() or None,
+            "heartbeat_at": _as_utc_dt(heartbeat.ts).isoformat() if heartbeat and heartbeat.ts else None,
+        }
+    except Exception:
+        return {}
+    finally:
+        db.close()
+
+
+def _runtime_status_label(state: str) -> str:
+    labels = {
+        "starting": "Starting",
+        "stopping": "Stopping",
+        "stopped": "Stopped",
+        "waiting_for_entry_signal": "Waiting for entry signal",
+        "in_position": "In position",
+        "entry_gate_active": "Entry gate active",
+        "closing_position": "Closing position",
+        "switching_pair": "Switching pair",
+        "risk_halt": "Risk halt",
+        "error": "Error",
+        "running": "Running",
+    }
+    return labels.get(state, "Running")
+
+
+def _classify_runtime_state(*, running: bool, desired_running: bool | None, message: str, in_position: bool | None, current_z: float | None) -> str:
+    msg = message.lower()
+    if desired_running is True and not running:
+        return "starting"
+    if desired_running is False and running:
+        return "stopping"
+    if not running:
+        return "stopped"
+    if "crashed" in msg or "hard stop" in msg:
+        return "error"
+    if "circuit breaker" in msg or ("risk" in msg and "triggered" in msg):
+        return "risk_halt"
+    if "closing" in msg or "close not confirmed" in msg or "retrying close" in msg:
+        return "closing_position"
+    if in_position is True:
+        return "in_position"
+    if "switch" in msg or "restarting" in msg or "pair doctor" in msg:
+        return "switching_pair"
+    if "entry gate active" in msg or "skip_new_entries" in msg or "skipping new entries" in msg:
+        return "entry_gate_active"
+    if "managing new trades" in msg or current_z is not None:
+        return "waiting_for_entry_signal"
+    if "starting" in msg or "startup" in msg:
+        return "starting"
+    return "running"
+
+
+def _build_runtime_status(bot_status: dict) -> dict:
+    file_status = _read_runtime_status_file()
+    heartbeat = _load_runtime_heartbeat_context(bot_status)
+    message = str(file_status.get("message") or "").strip()
+    in_position = heartbeat.get("in_position")
+    current_z = _coerce_float(heartbeat.get("current_z"))
+    desired_raw = bot_status.get("desired_running")
+    desired_running = desired_raw if isinstance(desired_raw, bool) else None
+    running = bool(bot_status.get("running"))
+    state = _classify_runtime_state(
+        running=running,
+        desired_running=desired_running,
+        message=message,
+        in_position=in_position if isinstance(in_position, bool) else None,
+        current_z=current_z,
+    )
+    updated_at = _max_iso(file_status.get("updated_at"), heartbeat.get("heartbeat_at"), bot_status.get("updated_at"))
+    source_parts = []
+    if file_status:
+        source_parts.append("status_file")
+    if heartbeat.get("heartbeat_at"):
+        source_parts.append("heartbeat")
+    if not source_parts:
+        source_parts.append("process")
+    return {
+        "state": state,
+        "label": _runtime_status_label(state),
+        "detail": message or str(bot_status.get("detail") or "").strip() or _runtime_status_label(state),
+        "current_pair": heartbeat.get("current_pair"),
+        "current_z": current_z,
+        "in_position": in_position,
+        "entry_z": _coerce_float(heartbeat.get("entry_z")),
+        "hold_minutes": _coerce_float(heartbeat.get("hold_minutes")),
+        "unrealized_pnl_usdt": _coerce_float(heartbeat.get("unrealized_pnl_usdt")),
+        "entry_notional_usdt": _coerce_float(heartbeat.get("entry_notional_usdt")),
+        "regime": heartbeat.get("regime"),
+        "strategy": heartbeat.get("strategy"),
+        "run_key": heartbeat.get("run_key") or bot_status.get("latest_run_key") or bot_status.get("run_key"),
+        "updated_at": updated_at,
+        "source": "+".join(source_parts),
+    }
 
 
 def _parse_log_timestamp(line: str) -> float | None:
@@ -896,12 +1083,15 @@ def _normalize_status(state: dict) -> dict:
     return data
 
 
-def get_bot_status() -> dict:
+def get_bot_status(*, include_runtime_status: bool = False) -> dict:
     state = _read_state()
     normalized = _normalize_status(state)
     if normalized != state:
         _write_state(normalized)
-    return normalized
+    response = dict(normalized)
+    if include_runtime_status:
+        response["runtime_status"] = _build_runtime_status(response)
+    return response
 
 
 def _use_bot_runner_mode() -> bool:

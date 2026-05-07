@@ -66,7 +66,7 @@ def _require_any_settings_permission(user_permissions: set[str]) -> None:
 
 @router.get("/bot/status")
 def admin_bot_status(_: User = Depends(require_permissions("view_logs", "manage_bot"))):
-    return get_bot_status()
+    return get_bot_status(include_runtime_status=True)
 
 
 @router.post("/bot/start")

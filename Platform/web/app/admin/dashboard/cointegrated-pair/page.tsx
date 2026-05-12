@@ -17,6 +17,7 @@ import {
   AdminPairsHealth,
   ApiError,
   ChartAuditActualMarker,
+  ChartAuditReplayMarker,
   CointegratedPair,
   CointegratedPairDetail,
   CointegratedPairsResponse,
@@ -386,12 +387,35 @@ function actualMarkerSummary(marker: ChartAuditActualMarker): string {
   return pieces.length ? `${actualMarkerTitle(marker)} ${pieces.join(" | ")}` : actualMarkerTitle(marker);
 }
 
+function replayMarkerTitle(marker: ChartAuditReplayMarker): string {
+  if (marker.marker_type === "replay_entry_candidate") return "Replay entry candidate";
+  if (marker.marker_type === "replay_exit_candidate") return "Replay exit candidate";
+  if (marker.marker_type === "replay_blocked_signal") return "Replay blocked signal";
+  return String(marker.marker_type).replace(/_/g, " ");
+}
+
+function replayMarkerSummary(marker: ChartAuditReplayMarker): string {
+  const pieces = [
+    marker.side,
+    marker.z_score !== null && marker.z_score !== undefined ? `Z=${fmtNumber(marker.z_score, 2)}` : null,
+    marker.passed === true ? "passed" : marker.passed === false ? "blocked" : null,
+    marker.reason,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return pieces.length ? `${replayMarkerTitle(marker)} ${pieces.join(" | ")}` : replayMarkerTitle(marker);
+}
+
 function appendMarkerLabel(existing: string | null | undefined, label: string): string {
   const current = String(existing || "").trim();
   return current ? `${current} | ${label}` : label;
 }
 
 function markerPlotValue(marker: ChartAuditActualMarker, point: PairChartPoint): number | null {
+  if (typeof marker.z_score === "number" && Number.isFinite(marker.z_score)) return marker.z_score;
+  if (typeof point.zscore === "number" && Number.isFinite(point.zscore)) return point.zscore;
+  return null;
+}
+
+function replayMarkerPlotValue(marker: ChartAuditReplayMarker, point: PairChartPoint): number | null {
   if (typeof marker.z_score === "number" && Number.isFinite(marker.z_score)) return marker.z_score;
   if (typeof point.zscore === "number" && Number.isFinite(point.zscore)) return point.zscore;
   return null;
@@ -412,6 +436,64 @@ function nearestChartPointIndex(points: PairChartPoint[], marker: ChartAuditActu
     }
   });
   return bestIndex;
+}
+
+function nearestReplayChartPointIndex(points: PairChartPoint[], marker: ChartAuditReplayMarker): number | null {
+  const markerTs = parseTimestampSeconds(marker.timestamp);
+  if (markerTs === null || !points.length) return null;
+  let bestIndex: number | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    const pointTs = parseTimestampSeconds(point.ts);
+    if (pointTs === null) return;
+    const delta = Math.abs(pointTs - markerTs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function mergeReplayMarkersIntoChartData(
+  points: CointegratedPairDetail["points"],
+  replayMarkers: ChartAuditReplayMarker[],
+): CointegratedPairDetail["points"] {
+  if (!replayMarkers.length) return points;
+  const merged = points.map((point) => ({ ...point, replay_markers: [...(point.replay_markers || [])] }));
+  replayMarkers.forEach((marker) => {
+    const index = nearestReplayChartPointIndex(merged, marker);
+    if (index === null) return;
+    const point = merged[index];
+    const plotValue = replayMarkerPlotValue(marker, point);
+    const label = replayMarkerSummary(marker);
+    point.replay_markers = [...(point.replay_markers || []), marker];
+
+    if (marker.marker_type === "replay_entry_candidate" && marker.side === "BUY_SPREAD") {
+      point.replay_buy_entry_z = plotValue;
+      point.replay_buy_entry_label = appendMarkerLabel(point.replay_buy_entry_label, label);
+      point.replay_buy_entry_count = (point.replay_buy_entry_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_entry_candidate" && marker.side === "SELL_SPREAD") {
+      point.replay_sell_entry_z = plotValue;
+      point.replay_sell_entry_label = appendMarkerLabel(point.replay_sell_entry_label, label);
+      point.replay_sell_entry_count = (point.replay_sell_entry_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_exit_candidate") {
+      point.replay_exit_candidate_z = plotValue;
+      point.replay_exit_candidate_label = appendMarkerLabel(point.replay_exit_candidate_label, label);
+      point.replay_exit_candidate_count = (point.replay_exit_candidate_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_blocked_signal") {
+      point.replay_blocked_signal_z = plotValue;
+      point.replay_blocked_signal_label = appendMarkerLabel(point.replay_blocked_signal_label, label);
+      point.replay_blocked_signal_count = (point.replay_blocked_signal_count || 0) + 1;
+    }
+  });
+  return merged;
 }
 
 function mergeActualMarkersIntoChartData(
@@ -471,6 +553,20 @@ function actualMarkerTooltipRows(marker: ChartAuditActualMarker): Array<[string,
   ];
 }
 
+function replayMarkerTooltipRows(marker: ChartAuditReplayMarker): Array<[string, string]> {
+  return [
+    ["side", marker.side || "n/a"],
+    ["z_score", fmtNumber(marker.z_score, 3)],
+    ["spread", fmtNumber(marker.spread, 5)],
+    ["curator_state", marker.curator_state || "n/a"],
+    ["curator_state_source", marker.curator_state_source || "n/a"],
+    ["config_source", marker.config_source || "n/a"],
+    ["passed", marker.passed === true ? "true" : marker.passed === false ? "false" : "n/a"],
+    ["block_reasons", marker.block_reasons?.length ? marker.block_reasons.join(", ") : "none"],
+    ["reason", marker.reason || "n/a"],
+  ];
+}
+
 function markerPointCoordinates(props: MarkerDotProps): { cx: number; cy: number } | null {
   const cx = Number(props.cx);
   const cy = Number(props.cy);
@@ -518,6 +614,60 @@ function renderActualBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
   );
 }
 
+function renderReplayBuyEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
+      fill="transparent"
+      stroke="#22c55e"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplaySellEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy - size} L ${coords.cx + size} ${coords.cy - size} Z`}
+      fill="transparent"
+      stroke="#ef4444"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplayExitDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx + size} ${coords.cy} L ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy} Z`}
+      fill="transparent"
+      stroke="#3b82f6"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplayBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <g stroke="#f59e0b" strokeLinecap="round" strokeWidth={fullscreen ? 3.2 : 2.6}>
+      <line x1={coords.cx - size} y1={coords.cy - size} x2={coords.cx + size} y2={coords.cy + size} />
+      <line x1={coords.cx + size} y1={coords.cy - size} x2={coords.cx - size} y2={coords.cy + size} />
+    </g>
+  );
+}
+
 function PairChartTooltip({
   active,
   label,
@@ -537,10 +687,15 @@ function PairChartTooltip({
     markerLayers.statistical ? ["Chart crossing", point.crossing_label] : null,
     markerLayers.replay ? ["Replay entry", point.replay_entry_label] : null,
     markerLayers.replay ? ["Replay exit", point.replay_exit_label] : null,
+    markerLayers.replay ? ["Replay buy", point.replay_buy_entry_label] : null,
+    markerLayers.replay ? ["Replay sell", point.replay_sell_entry_label] : null,
+    markerLayers.replay ? ["Replay blocked", point.replay_blocked_signal_label] : null,
+    markerLayers.replay ? ["Replay exit candidate", point.replay_exit_candidate_label] : null,
     markerLayers.actual ? ["Blocked entry", point.blocked_entry_label] : null,
     markerLayers.actual ? ["Actual entry", point.actual_entry_label] : null,
     markerLayers.actual ? ["Actual exit", point.actual_exit_label] : null,
   ].filter((row): row is [string, string] => typeof row?.[1] === "string" && row[1].trim().length > 0);
+  const replayMarkers = markerLayers.replay ? point.replay_markers || [] : [];
   const actualMarkers = markerLayers.actual ? point.actual_markers || [] : [];
 
   return (
@@ -556,6 +711,20 @@ function PairChartTooltip({
             <p key={`${name}-${value}`} className="text-gray-700 dark:text-gray-200">
               <span className="font-medium">{name}:</span> {value}
             </p>
+          ))}
+        </div>
+      ) : null}
+      {replayMarkers.length ? (
+        <div className="mt-2 space-y-2 border-t border-gray-200 pt-2 dark:border-gray-800">
+          {replayMarkers.map((marker, index) => (
+            <div key={`${marker.marker_type}-${marker.entry_id || marker.timestamp}-${index}`} className="space-y-0.5 text-gray-700 dark:text-gray-200">
+              <p className="font-semibold">{replayMarkerTitle(marker)}</p>
+              {replayMarkerTooltipRows(marker).map(([name, value]) => (
+                <p key={name}>
+                  <span className="font-medium">{name}:</span> {value}
+                </p>
+              ))}
+            </div>
           ))}
         </div>
       ) : null}
@@ -715,27 +884,53 @@ function PairUniverseCharts({
                 <Line
                   yAxisId="z"
                   type="linear"
-                  dataKey="replay_entry_z"
-                  name="Replay entry"
+                  dataKey="replay_buy_entry_z"
+                  name="Replay buy"
                   legendType="triangle"
-                  stroke="transparent"
+                  stroke="#22c55e"
                   strokeWidth={0}
                   connectNulls={false}
-                  dot={markerDot(fullscreen, "#06b6d4")}
-                  activeDot={activeMarkerDot(fullscreen, "#06b6d4")}
+                  dot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen)}
                   isAnimationActive={false}
                 />
                 <Line
                   yAxisId="z"
                   type="linear"
-                  dataKey="replay_exit_z"
-                  name="Replay exit"
-                  legendType="diamond"
-                  stroke="transparent"
+                  dataKey="replay_sell_entry_z"
+                  name="Replay sell"
+                  legendType="triangle"
+                  stroke="#ef4444"
                   strokeWidth={0}
                   connectNulls={false}
-                  dot={markerDot(fullscreen, "#8b5cf6")}
-                  activeDot={activeMarkerDot(fullscreen, "#8b5cf6")}
+                  dot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_exit_candidate_z"
+                  name="Replay exit"
+                  legendType="diamond"
+                  stroke="#3b82f6"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplayExitDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplayExitDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_blocked_signal_z"
+                  name="Replay blocked"
+                  legendType="cross"
+                  stroke="#f59e0b"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplayBlockedDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplayBlockedDot(props, fullscreen)}
                   isAnimationActive={false}
                 />
               </>
@@ -928,8 +1123,12 @@ export default function CointegratedPairPage() {
   const chartData = useMemo(() => {
     if (!detailMatchesSelection || !rawChartPoints.length) return [];
     const auditMatchesSelection = auditChart?.pair === selectedPair?.pair;
-    return mergeActualMarkersIntoChartData(
+    const withReplayMarkers = mergeReplayMarkersIntoChartData(
       rawChartPoints,
+      auditMatchesSelection ? auditChart?.replay_markers || [] : [],
+    );
+    return mergeActualMarkersIntoChartData(
+      withReplayMarkers,
       auditMatchesSelection ? auditChart?.actual_markers || [] : [],
     );
   }, [auditChart, detailMatchesSelection, rawChartPoints, selectedPair?.pair]);
@@ -939,10 +1138,13 @@ export default function CointegratedPairPage() {
         rawChartPoints.some((point) => point.crossing_spread !== null && point.crossing_spread !== undefined) ||
         Boolean(auditChart?.statistical_markers?.length),
       replay:
-        rawChartPoints.some(
+        chartData.some(
           (point) =>
-            (point.replay_entry_z !== null && point.replay_entry_z !== undefined) ||
-            (point.replay_exit_z !== null && point.replay_exit_z !== undefined),
+            Boolean(point.replay_markers?.length) ||
+            (point.replay_buy_entry_z !== null && point.replay_buy_entry_z !== undefined) ||
+            (point.replay_sell_entry_z !== null && point.replay_sell_entry_z !== undefined) ||
+            (point.replay_exit_candidate_z !== null && point.replay_exit_candidate_z !== undefined) ||
+            (point.replay_blocked_signal_z !== null && point.replay_blocked_signal_z !== undefined),
         ) || Boolean(auditChart?.replay_markers?.length),
       actual:
         chartData.some(

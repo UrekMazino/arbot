@@ -560,6 +560,19 @@ export type CointegratedPairPoint = {
   replay_exit_z?: number | null;
   replay_exit_label?: string | null;
   replay_exit_count?: number;
+  replay_buy_entry_z?: number | null;
+  replay_buy_entry_label?: string | null;
+  replay_buy_entry_count?: number;
+  replay_sell_entry_z?: number | null;
+  replay_sell_entry_label?: string | null;
+  replay_sell_entry_count?: number;
+  replay_exit_candidate_z?: number | null;
+  replay_exit_candidate_label?: string | null;
+  replay_exit_candidate_count?: number;
+  replay_blocked_signal_z?: number | null;
+  replay_blocked_signal_label?: string | null;
+  replay_blocked_signal_count?: number;
+  replay_markers?: ChartAuditReplayMarker[];
   blocked_entry_z?: number | null;
   blocked_entry_label?: string | null;
   blocked_entry_count?: number;
@@ -630,6 +643,29 @@ export type ChartAuditActualMarker = {
   metadata?: Record<string, unknown>;
 };
 
+export type ChartAuditReplayMarkerType =
+  | "replay_entry_candidate"
+  | "replay_exit_candidate"
+  | "replay_blocked_signal";
+
+export type ChartAuditReplayMarker = {
+  timestamp: number | string;
+  marker_category?: "replay" | string;
+  marker_type: ChartAuditReplayMarkerType;
+  entry_id?: string | null;
+  side?: string | null;
+  z_score?: number | null;
+  spread?: number | null;
+  status?: string | null;
+  curator_state?: string | null;
+  curator_state_source?: string | null;
+  config_source?: string | null;
+  passed?: boolean | null;
+  block_reasons?: string[];
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type ChartAuditStatisticalMarker = {
   timestamp: number | string;
   marker_category?: "statistical" | string;
@@ -647,7 +683,7 @@ export type PairDecisionAuditChart = {
   end_ts: number | null;
   zscore_series: Array<Record<string, unknown>>;
   statistical_markers: ChartAuditStatisticalMarker[];
-  replay_markers: Array<Record<string, unknown>>;
+  replay_markers: ChartAuditReplayMarker[];
   actual_markers: ChartAuditActualMarker[];
   counterfactual_exit_studies: Array<Record<string, unknown>>;
   counterfactuals_lazy_load: boolean;

@@ -1,3 +1,34 @@
+NEXT IMPLEMENTATION
+# Step 6 — Implement snapshot factory / replay loop
+
+# This builds ReplaySnapshot per candle.
+
+
+# Implement ReplaySnapshotFactory.
+
+# Create:
+
+# core/chart_audit/replay_snapshot_factory.py
+
+# Responsibilities:
+# - iterate candles sequentially
+# - at each candle index i, build ReplaySnapshot with data <= i only
+# - convert candles_until_t, zscore_until_t, spread_until_t, actual_events_at_t into tuples
+# - call curator_state_at(timestamp)
+# - call config_at(timestamp)
+# - attach orderbook snapshot if available
+# - attach actual events at timestamp if available
+
+# Important:
+# - do not pass all future candles to the replay engine
+# - do not precompute future-derived indicators
+# - adding candles after timestamp t must not change replay result at t
+
+This is where the no-lookahead guarantee becomes real.
+
+
+
+
 OKXStatBot Chart Decision Audit Dashboard Prompt v1.2
 Actual Bot Decision Overlay + Curator-Aware Point-In-Time Replay + Counterfactual Exit Study + Decision Score Timeline
 

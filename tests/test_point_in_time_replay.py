@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from core.chart_audit.marker_types import BlockReason, CuratorState, MarkerCategory, ReplayMarkerType
 from core.chart_audit.point_in_time_indicators import (
     STATUS_BLOCKED_CANDIDATE,
@@ -102,6 +104,11 @@ def test_buy_spread_entry_candidate_when_threshold_and_gates_pass() -> None:
     assert marker.side == BUY_SPREAD
     assert marker.entry_id == "replay_AAA-USDT-SWAP/BBB-USDT-SWAP_1715000060_BUY_SPREAD"
     assert engine.position_state == ReplayPositionState.OPEN_BUY_SPREAD
+
+
+def test_replay_engine_evaluate_requires_replay_snapshot() -> None:
+    with pytest.raises(TypeError, match="requires a ReplaySnapshot"):
+        PointInTimeReplayEngine().evaluate({"zscore_until_t": [-2.2]})  # type: ignore[arg-type]
 
 
 def test_sell_spread_entry_candidate_when_threshold_and_gates_pass() -> None:

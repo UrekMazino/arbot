@@ -108,6 +108,9 @@ class PointInTimeReplayEngine:
     def evaluate(self, snapshot: ReplaySnapshot) -> list[ReplayMarker]:
         """Evaluate one point-in-time snapshot and return replay markers."""
 
+        if not isinstance(snapshot, ReplaySnapshot):
+            raise TypeError("PointInTimeReplayEngine.evaluate requires a ReplaySnapshot")
+
         if self.position_state == ReplayPositionState.CLOSED:
             self.position_state = ReplayPositionState.NO_POSITION
 

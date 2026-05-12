@@ -1,9 +1,8 @@
-"""Phase 1 chart decision audit service.
+"""Phase 2 chart decision audit service.
 
-This service assembles read-only chart audit data. Phase 1 returns historical
-chart series when available and actual bot markers from event/trade records.
-Replay, counterfactuals, and decision score timelines are intentionally left
-empty here.
+This service assembles read-only chart audit data. Phase 2 returns historical
+chart series, actual bot markers, and point-in-time replay markers.
+Counterfactuals and decision score timelines are intentionally left empty here.
 """
 
 from __future__ import annotations
@@ -15,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from core.chart_audit.actual_event_overlay import actual_markers_from_records
+from core.chart_audit.config_snapshot_source import config_at
+from core.chart_audit.curator_state_source import curator_state_at
 from core.chart_audit.marker_types import MarkerCategory, StatisticalMarkerType
+from core.chart_audit.replay_snapshot_factory import ReplaySnapshotFactory
 from core.chart_audit.timestamp_alignment import align_actual_marker_timestamps
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,14 @@ def get_pair_decision_audit_chart(
         actual_markers,
         chart_supports_exact_timestamp=True,
     )
+    replay_markers = _replay_markers_from_points(
+        pair_key=pair_key,
+        timeframe=timeframe,
+        chart_points=chart_points,
+        actual_records=actual_records,
+        start_ts=start_value,
+        end_ts=end_value,
+    )
 
     return {
         "pair": pair_key,
@@ -57,7 +67,7 @@ def get_pair_decision_audit_chart(
         "end_ts": end_value,
         "zscore_series": zscore_series,
         "statistical_markers": statistical_markers,
-        "replay_markers": [],
+        "replay_markers": replay_markers,
         "actual_markers": [marker.to_dict() for marker in actual_markers],
         "counterfactual_exit_studies": [],
         "counterfactuals_lazy_load": True,
@@ -208,6 +218,63 @@ def _statistical_markers_from_points(
             )
         )
     return markers
+
+
+def _replay_markers_from_points(
+    *,
+    pair_key: str,
+    timeframe: str,
+    chart_points: list[dict[str, Any]],
+    actual_records: list[Any],
+    start_ts: float | None,
+    end_ts: float | None,
+) -> list[dict[str, Any]]:
+    candles = _replay_candles_from_points(chart_points, start_ts, end_ts)
+    if not candles:
+        return []
+
+    try:
+        factory = ReplaySnapshotFactory(
+            pair=pair_key,
+            timeframe=str(timeframe or "").strip() or "",
+            candles=candles,
+            curator_state_at=lambda timestamp: curator_state_at(pair_key, timestamp),
+            config_at=config_at,
+            actual_events=actual_records,
+        )
+        return [marker.to_dict() for marker in factory.replay()]
+    except Exception as exc:
+        logger.debug("chart audit replay unavailable for %s: %s", pair_key, exc)
+        return []
+
+
+def _replay_candles_from_points(
+    points: list[dict[str, Any]],
+    start_ts: float | None,
+    end_ts: float | None,
+) -> list[dict[str, Any]]:
+    candles: list[dict[str, Any]] = []
+    for point in points:
+        timestamp = _coerce_timestamp(point.get("timestamp") or point.get("ts"))
+        if timestamp is None or not _timestamp_in_range(timestamp, start_ts, end_ts):
+            continue
+
+        spread = _safe_float(point.get("spread"))
+        price_1 = _safe_float(point.get("price_1"))
+        price_2 = _safe_float(point.get("price_2"))
+        if spread is None and (price_1 is None or price_2 is None):
+            continue
+
+        candle = _compact(
+            {
+                "timestamp": timestamp,
+                "spread": spread,
+                "close_1": price_1,
+                "close_2": price_2,
+            }
+        )
+        candles.append(candle)
+    return candles
 
 
 def _chart_points(chart_detail: dict[str, Any] | None) -> list[dict[str, Any]]:

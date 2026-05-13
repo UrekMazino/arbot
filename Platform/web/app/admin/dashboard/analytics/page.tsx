@@ -1,102 +1,548 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
-  DataQualitySummary,
-  AdvancedMLAnalytics,
-  PerformanceHistory,
-  PerformanceSummaryRow,
-  RunEvent,
-  RunSummary,
-  ScorecardCell,
-  Trade,
+  AnalyticsDashboardResponse,
+  PairSummary,
   UserRecord,
-  getPerformanceHistory,
+  getAnalyticsDashboard,
   getMe,
-  getRunDataQuality,
-  getRunAdvancedMLAnalytics,
-  getRunEvents,
-  getRunScorecard,
-  getRunTrades,
-  getRuns,
   isUnauthorizedError,
 } from "../../../../lib/api";
-import { DashboardShell } from "../../../../components/dashboard-shell";
-import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../../components/panels";
-import {
-  getStoredAdminEmail,
-} from "../../../../lib/auth";
+import { getStoredAdminEmail } from "../../../../lib/auth";
 import {
   canAccessAdminPath,
   getAdminNavItems,
   getFirstAccessibleAdminPath,
 } from "../../../../lib/admin-access";
 import { UI_CLASSES } from "../../../../lib/ui-classes";
+import { DashboardShell } from "../../../../components/dashboard-shell";
+import { MetricCard, PanelCard, StatusPill, TableFrame } from "../../../../components/panels";
+import { PortfolioChart } from "../../../../components/portfolio-chart";
 
-type LiveMsg = {
-  event_type?: string;
-  ts?: number;
-  severity?: string;
-  payload?: Record<string, unknown>;
-};
+type AnalyticsRange = "7d" | "30d" | "90d" | "all";
 
-type TimelineCategory = "switch" | "gate" | "alert" | "exit" | "other";
-type TimelineSource = "history" | "live";
-type TimelineFilterCategory = "all" | "core" | TimelineCategory;
-type TimelineSeverity = "all" | "info" | "warn" | "error" | "critical";
-type RunPnlFilter = "all" | "positive" | "negative";
-type PerformanceRange = "7d" | "30d" | "90d" | "all";
+const ACTIVE_HREF = "/admin/dashboard/analytics";
 
-type TimelineEvent = {
-  id: string;
-  source: TimelineSource;
-  eventType: string;
-  severity: Exclude<TimelineSeverity, "all">;
-  tsMs: number;
-  category: TimelineCategory;
-  summary: string;
-};
+export default function AnalyticsPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [user, setUser] = useState<UserRecord | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [range, setRange] = useState<AnalyticsRange>("30d");
+  const [dashboard, setDashboard] = useState<AnalyticsDashboardResponse | null>(null);
 
-function fmtNumber(value: number | null | undefined, digits = 2): string {
+  const navItems = useMemo(() => getAdminNavItems(user), [user]);
+  const auth = useMemo(() => ({ email: getStoredAdminEmail(), hasToken: true }), []);
+
+  useEffect(() => {
+    getMe()
+      .then((record) => setUser(record))
+      .catch(() => setUser(null))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+    const hasAccess = canAccessAdminPath(user, pathname);
+    const firstAccessible = getFirstAccessibleAdminPath(user);
+    if (!hasAccess) {
+      router.replace(firstAccessible ?? "/");
+    }
+  }, [authLoading, pathname, router, user]);
+
+  const loadDashboard = useCallback(
+    async (forceRefresh = false) => {
+      setDashboardLoading(true);
+      setRefreshing(forceRefresh);
+      setError(null);
+      try {
+        const response = await getAnalyticsDashboard({
+          startTs: rangeStartTs(range),
+          endTs: range === "all" ? undefined : Math.floor(Date.now() / 1000),
+          refresh: forceRefresh,
+        });
+        setDashboard(response);
+      } catch (err) {
+        setDashboard(null);
+        setError(isUnauthorizedError(err) ? "Unauthorized" : errorMessage(err, "Failed to load analytics dashboard."));
+      } finally {
+        setDashboardLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [range],
+  );
+
+  useEffect(() => {
+    if (authLoading) return;
+    void loadDashboard(false);
+  }, [authLoading, loadDashboard]);
+
+  const equityChartData = useMemo(() => mapEquityCurve(dashboard), [dashboard]);
+  const dailyPnlData = useMemo(() => mapSeries(dashboard?.pnl_timeseries.daily_pnl ?? [], "date", "pnl_usdt"), [dashboard]);
+  const drawdownData = useMemo(() => mapSeries(dashboard?.pnl_timeseries.drawdown_curve ?? [], "timestamp", "drawdown_usdt"), [dashboard]);
+
+  const cacheStatus = dashboard?.cache
+    ? `Updated ${formatTimestamp(dashboard.cache.generated_at)} · ${dashboard.cache.cache_hit ? "cache hit" : "fresh"} · TTL ${dashboard.cache.ttl_seconds ?? "n/a"}s`
+    : "Read-only";
+
+  if (authLoading) {
+    return (
+      <DashboardShell
+        title="Analytics"
+        subtitle="Strategy-wide performance, pair, exit, ML, and hedge-ratio analytics."
+        status="Loading"
+        activeHref={ACTIVE_HREF}
+        navItems={navItems}
+        auth={auth}
+      >
+        <PanelCard title="Loading" subtitle="Checking dashboard access.">
+          <p className="text-sm text-gray-500 dark:text-gray-400">Loading analytics...</p>
+        </PanelCard>
+      </DashboardShell>
+    );
+  }
+
+  return (
+    <DashboardShell
+      title="Analytics"
+      subtitle="Strategy-wide performance, pair, exit, ML, and hedge-ratio analytics."
+      status={dashboardLoading ? "Loading analytics..." : cacheStatus}
+      activeHref={ACTIVE_HREF}
+      navItems={navItems}
+      auth={auth}
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className={UI_CLASSES.inputSmall}
+            value={range}
+            onChange={(event) => setRange(event.target.value as AnalyticsRange)}
+          >
+            <option value="7d">7d</option>
+            <option value="30d">30d</option>
+            <option value="90d">90d</option>
+            <option value="all">All</option>
+          </select>
+          <button
+            type="button"
+            className={UI_CLASSES.secondaryButton}
+            onClick={() => void loadDashboard(true)}
+            disabled={refreshing}
+          >
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+      }
+    >
+      {error ? (
+        <PanelCard title="Unable to load analytics" subtitle={error}>
+          <button type="button" className={UI_CLASSES.primaryButton} onClick={() => void loadDashboard(true)}>
+            Retry
+          </button>
+        </PanelCard>
+      ) : null}
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="Total PnL" value={formatMoney(dashboard?.performance.total_pnl_usdt)} tone={pnlTone(dashboard?.performance.total_pnl_usdt)} />
+        <MetricCard label="Realized PnL" value={formatMoney(dashboard?.performance.realized_pnl_usdt)} tone={pnlTone(dashboard?.performance.realized_pnl_usdt)} />
+        <MetricCard label="Unrealized PnL" value={formatMoney(dashboard?.performance.unrealized_pnl_usdt)} tone="sky" />
+        <MetricCard label="Win Rate" value={formatPercent(dashboard?.performance.win_rate)} tone="teal" />
+        <MetricCard label="Profit Factor" value={formatNumber(dashboard?.performance.profit_factor)} tone="sky" />
+        <MetricCard label="Max Drawdown" value={formatMoney(dashboard?.performance.max_drawdown_usdt)} tone="rose" />
+        <MetricCard label="Trade Count" value={formatInteger(dashboard?.performance.trade_count)} tone="violet" />
+        <MetricCard label="Avg Hold Time" value={formatDuration(dashboard?.performance.avg_hold_seconds)} tone="violet" />
+        <MetricCard label="Average Win" value={formatMoney(dashboard?.performance.average_win_usdt)} tone="teal" />
+        <MetricCard label="Average Loss" value={formatMoney(dashboard?.performance.average_loss_usdt)} tone="rose" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <PanelCard title="Equity Curve" subtitle="Stored equity snapshots only.">
+          {equityChartData.length ? (
+            <PortfolioChart
+              data={equityChartData}
+              height={260}
+              title="Equity Curve"
+              subtitle="Dashboard analytics service"
+              caption={`${equityChartData.length} points`}
+            />
+          ) : (
+            <EmptyState message="No data available yet." />
+          )}
+        </PanelCard>
+        <PanelCard title="Daily / Session PnL" subtitle="Aggregated from closed trades.">
+          <SimpleBarChart data={dailyPnlData} valueKey="value" labelKey="label" emptyMessage="No data available yet." />
+        </PanelCard>
+        <PanelCard title="Drawdown Curve" subtitle="Computed from available equity curve.">
+          <SimpleLineChart data={drawdownData} valueKey="value" labelKey="label" emptyMessage="No data available yet." />
+        </PanelCard>
+        <PanelCard title="Distribution" subtitle="PnL and trade duration distributions are not part of the standardized backend yet.">
+          <EmptyState message="No data available yet." />
+        </PanelCard>
+      </section>
+
+      <PanelCard title="Pair Leaderboards" subtitle="Pair history summaries reused for strategy-wide ranking.">
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Leaderboard title="Top pairs by PnL" rows={dashboard?.pair_leaderboards.top_pairs_by_pnl ?? []} valueKey="net_pnl_usdt" valueFormatter={formatMoney} />
+          <Leaderboard title="Bottom pairs by PnL" rows={dashboard?.pair_leaderboards.bottom_pairs_by_pnl ?? []} valueKey="net_pnl_usdt" valueFormatter={formatMoney} />
+          <Leaderboard title="Top pairs by win rate" rows={dashboard?.pair_leaderboards.top_pairs_by_win_rate ?? []} valueKey="win_rate" valueFormatter={formatPercent} />
+          <Leaderboard title="Worst pairs by drawdown" rows={dashboard?.pair_leaderboards.worst_pairs_by_drawdown ?? []} valueKey="max_drawdown_usdt" valueFormatter={formatMoney} />
+          <Leaderboard title="High hedge-drift pairs" rows={dashboard?.pair_leaderboards.pairs_with_high_hedge_drift ?? []} valueKey="avg_hedge_drift_pct" valueFormatter={formatPercent} />
+          <Leaderboard title="Frequent blocked pairs" rows={dashboard?.pair_leaderboards.pairs_with_frequent_blocks ?? []} valueKey="block_count" valueFormatter={formatInteger} />
+        </div>
+      </PanelCard>
+
+      <section className="grid gap-4 xl:grid-cols-3">
+        <PanelCard title="Exit Policy Analysis" subtitle="Stored counterfactual and Exit Orchestrator records only.">
+          <KeyValueList
+            rows={[
+              ["Best counterfactual exit policy", dashboard?.exit_analysis.best_counterfactual_exit_policy ?? "n/a"],
+              ["Actual exit efficiency", formatPercent(dashboard?.exit_analysis.actual_exit_efficiency)],
+              ["Average missed profit", formatMoney(dashboard?.exit_analysis.avg_missed_profit_usdt)],
+              ["Average avoided loss", formatMoney(dashboard?.exit_analysis.avg_avoided_loss_usdt)],
+            ]}
+          />
+          <DistributionTable
+            title="Exit policy distribution"
+            distribution={dashboard?.exit_analysis.exit_policy_distribution ?? {}}
+            emptyMessage="No exit orchestrator data available yet."
+          />
+        </PanelCard>
+
+        <PanelCard title="ML Analysis" subtitle="Stored score history only.">
+          <KeyValueList rows={[["Break risk before losses", formatNumber(dashboard?.ml_analysis.break_risk_before_losses)]]} />
+          <SmallRows
+            title="PnL by regime"
+            rows={dashboard?.ml_analysis.pnl_by_regime ?? []}
+            columns={[
+              ["regime", "Regime"],
+              ["pnl_usdt", "PnL"],
+              ["trade_count", "Trades"],
+            ]}
+          />
+          <SmallRows
+            title="Win rate by regime"
+            rows={dashboard?.ml_analysis.win_rate_by_regime ?? []}
+            columns={[
+              ["regime", "Regime"],
+              ["win_rate", "Win Rate"],
+              ["trade_count", "Trades"],
+            ]}
+          />
+          <SmallRows
+            title="Bayesian posterior vs outcome"
+            rows={dashboard?.ml_analysis.bayesian_posterior_vs_outcome ?? []}
+            columns={[
+              ["bayesian_posterior", "Posterior"],
+              ["pnl_usdt", "PnL"],
+              ["won", "Won"],
+            ]}
+          />
+          <SmallRows
+            title="Final rank score vs outcome"
+            rows={dashboard?.ml_analysis.final_rank_score_vs_outcome ?? []}
+            columns={[
+              ["final_rank_score", "Final Rank"],
+              ["pnl_usdt", "PnL"],
+              ["won", "Won"],
+            ]}
+          />
+          <SmallRows
+            title="Microstructure risk vs slippage"
+            rows={dashboard?.ml_analysis.microstructure_risk_vs_slippage ?? []}
+            columns={[
+              ["microstructure_risk", "Risk"],
+              ["slippage_usdt", "Slippage"],
+            ]}
+          />
+        </PanelCard>
+
+        <PanelCard title="Hedge-Ratio Analysis" subtitle="Stored Phase 2.25 / Phase 3 sizing comparison fields.">
+          <KeyValueList
+            rows={[
+              ["Equal-notional total PnL", formatMoney(dashboard?.hedge_analysis.equal_notional_total_pnl)],
+              ["Hedge-ratio-sized total PnL", formatMoney(dashboard?.hedge_analysis.hedge_ratio_sized_total_pnl)],
+              ["Sizing PnL delta", formatMoney(dashboard?.hedge_analysis.sizing_pnl_delta_usdt)],
+              ["High drift trade count", formatInteger(dashboard?.hedge_analysis.high_drift_trade_count)],
+            ]}
+          />
+        </PanelCard>
+      </section>
+    </DashboardShell>
+  );
+}
+
+function Leaderboard({
+  title,
+  rows,
+  valueKey,
+  valueFormatter,
+}: {
+  title: string;
+  rows: Array<PairSummary & { block_count?: number | null }>;
+  valueKey: keyof PairSummary | "block_count";
+  valueFormatter: (value: number | null | undefined) => string;
+}) {
+  return (
+    <div>
+      <h4 className="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">{title}</h4>
+      {!rows.length ? (
+        <EmptyState message="No data available yet." compact />
+      ) : (
+        <TableFrame compact maxHeightClass="max-h-72">
+          <table className="min-w-[520px] text-left text-sm">
+            <thead className="border-b border-gray-200 text-xs uppercase tracking-[0.12em] text-gray-500 dark:border-gray-800">
+              <tr>
+                <th className="px-4 py-3">Pair</th>
+                <th className="px-4 py-3">Value</th>
+                <th className="px-4 py-3">Trades</th>
+                <th className="px-4 py-3">Tags</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {rows.map((row) => (
+                <tr key={`${title}-${row.pair}`} className="text-gray-700 dark:text-gray-300">
+                  <td className="px-4 py-3 font-medium">{row.pair}</td>
+                  <td className="px-4 py-3">{valueFormatter(valueFromRow(row, valueKey))}</td>
+                  <td className="px-4 py-3">{formatInteger(row.total_trades)}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap gap-1">
+                      {(row.tags ?? []).slice(0, 3).map((tag) => (
+                        <StatusPill key={tag} label={String(tag).replaceAll("_", " ")} tone="neutral" />
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableFrame>
+      )}
+    </div>
+  );
+}
+
+function KeyValueList({ rows }: { rows: Array<[string, string]> }) {
+  return (
+    <div className="mb-4 grid gap-3">
+      {rows.map(([label, value]) => (
+        <div key={label} className="rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-950/40">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500">{label}</p>
+          <p className="mt-1 font-mono text-sm text-gray-900 dark:text-white/90">{value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DistributionTable({
+  title,
+  distribution,
+  emptyMessage,
+}: {
+  title: string;
+  distribution: Record<string, number>;
+  emptyMessage: string;
+}) {
+  const rows = Object.entries(distribution);
+  return (
+    <div className="mt-4">
+      <h4 className="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">{title}</h4>
+      {!rows.length ? (
+        <EmptyState message={emptyMessage} compact />
+      ) : (
+        <div className="space-y-2">
+          {rows.map(([name, count]) => (
+            <div key={name} className="flex justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm dark:border-gray-800">
+              <span>{name}</span>
+              <span className="font-mono">{count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SmallRows({
+  title,
+  rows,
+  columns,
+}: {
+  title: string;
+  rows: Array<Record<string, unknown>>;
+  columns: Array<[string, string]>;
+}) {
+  return (
+    <div className="mt-4">
+      <h4 className="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">{title}</h4>
+      {!rows.length ? (
+        <EmptyState message="No data available yet." compact />
+      ) : (
+        <TableFrame compact maxHeightClass="max-h-56">
+          <table className="min-w-[420px] text-left text-sm">
+            <thead className="border-b border-gray-200 text-xs uppercase tracking-[0.12em] text-gray-500 dark:border-gray-800">
+              <tr>
+                {columns.map(([, label]) => (
+                  <th key={label} className="px-4 py-3">{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+              {rows.slice(0, 10).map((row, index) => (
+                <tr key={`${title}-${index}`} className="text-gray-700 dark:text-gray-300">
+                  {columns.map(([key]) => (
+                    <td key={key} className="px-4 py-3">{formatUnknown(row[key])}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableFrame>
+      )}
+    </div>
+  );
+}
+
+function SimpleBarChart({
+  data,
+  valueKey,
+  labelKey,
+  emptyMessage,
+}: {
+  data: Array<Record<string, string | number>>;
+  valueKey: string;
+  labelKey: string;
+  emptyMessage: string;
+}) {
+  if (!data.length) return <EmptyState message={emptyMessage} />;
+  return (
+    <div className="h-72">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey={labelKey} tickLine={false} axisLine={false} fontSize={12} />
+          <YAxis tickLine={false} axisLine={false} fontSize={12} />
+          <Tooltip />
+          <Bar dataKey={valueKey} fill="#465fff" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function SimpleLineChart({
+  data,
+  valueKey,
+  labelKey,
+  emptyMessage,
+}: {
+  data: Array<Record<string, string | number>>;
+  valueKey: string;
+  labelKey: string;
+  emptyMessage: string;
+}) {
+  if (!data.length) return <EmptyState message={emptyMessage} />;
+  return (
+    <div className="h-72">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey={labelKey} tickLine={false} axisLine={false} fontSize={12} />
+          <YAxis tickLine={false} axisLine={false} fontSize={12} />
+          <Tooltip />
+          <Line dataKey={valueKey} stroke="#f04438" strokeWidth={2} dot={false} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function EmptyState({ message, compact = false }: { message: string; compact?: boolean }) {
+  return (
+    <div className={`rounded-xl border border-dashed border-gray-300 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400 ${compact ? "p-3" : "p-6"}`}>
+      {message}
+    </div>
+  );
+}
+
+function mapEquityCurve(dashboard: AnalyticsDashboardResponse | null) {
+  return (dashboard?.pnl_timeseries.equity_curve ?? [])
+    .map((point) => {
+      const timestamp = timestampMs(point.timestamp ?? point.ts);
+      const equity = numberValue(point.equity_usdt ?? point.equity);
+      if (timestamp === null || equity === null) return null;
+      return {
+        ts: new Date(timestamp).toISOString(),
+        equity,
+        drawdown: numberValue(point.drawdown_usdt) ?? 0,
+        drawdown_pct: numberValue(point.drawdown_pct),
+        pnl_usdt: numberValue(point.session_pnl_usdt ?? point.pnl_usdt),
+        source: stringValue(point.source),
+      };
+    })
+    .filter((point): point is NonNullable<typeof point> => point !== null);
+}
+
+function mapSeries(rows: Array<Record<string, unknown>>, labelField: string, valueField: string) {
+  return rows
+    .map((row) => {
+      const value = numberValue(row[valueField]);
+      if (value === null) return null;
+      return {
+        label: labelField === "timestamp" ? shortTimestamp(row[labelField]) : String(row[labelField] ?? "n/a"),
+        value,
+      };
+    })
+    .filter((row): row is { label: string; value: number } => row !== null);
+}
+
+function valueFromRow(row: PairSummary & { block_count?: number | null }, key: keyof PairSummary | "block_count"): number | null {
+  return numberValue(row[key as keyof typeof row]);
+}
+
+function rangeStartTs(range: AnalyticsRange): number | undefined {
+  if (range === "all") return undefined;
+  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+  return Math.floor(Date.now() / 1000) - days * 86_400;
+}
+
+function timestampMs(value: unknown): number | null {
+  const numeric = numberValue(value);
+  if (numeric !== null) return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+  const parsed = new Date(String(value ?? "")).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function shortTimestamp(value: unknown): string {
+  const ms = timestampMs(value);
+  if (ms === null) return "n/a";
+  return new Date(ms).toLocaleDateString();
+}
+
+function formatTimestamp(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return value.toFixed(digits);
+  const ms = value > 10_000_000_000 ? value : value * 1000;
+  return new Date(ms).toLocaleString();
 }
 
-function fmtSignedNumber(value: number | null | undefined, digits = 2): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
-}
-
-function fmtPercent(value: number | null | undefined, digits = 1): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return `${value.toFixed(digits)}%`;
-}
-
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return "n/a";
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return "n/a";
-  return dt.toLocaleString();
-}
-
-function fmtDuration(startIso: string, endIso: string | null): string {
-  const start = new Date(startIso).getTime();
-  const end = endIso ? new Date(endIso).getTime() : Date.now();
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return "n/a";
-  const sec = Math.floor((end - start) / 1000);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h}h ${m}m`;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
-}
-
-function asNumber(value: unknown): number | null {
+function numberValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value);
@@ -105,658 +551,53 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function normalizeSeverity(value: unknown): Exclude<TimelineSeverity, "all"> {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "warn") return "warn";
-  if (normalized === "error") return "error";
-  if (normalized === "critical") return "critical";
-  return "info";
+function stringValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
 }
 
-function classifyEventType(eventType: string, severity: Exclude<TimelineSeverity, "all">): TimelineCategory {
-  const text = eventType.toLowerCase();
-  if (
-    text.includes("pair_switch") ||
-    text.includes("strategy_change") ||
-    text.includes("strategy_update") ||
-    text.includes("regime_change") ||
-    text.includes("regime_update")
-  ) {
-    return "switch";
-  }
-  if (
-    text.includes("gate") ||
-    text.includes("blocked") ||
-    text.includes("coint_lost") ||
-    text.includes("mean_shift")
-  ) {
-    return "gate";
-  }
-  if (text.includes("trade_close") || text.includes("exit") || text.includes("stop_loss") || text.includes("profit")) {
-    return "exit";
-  }
-  if (text.includes("alert") || severity !== "info") {
-    return "alert";
-  }
-  return "other";
+function formatNumber(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return value.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
-function summarizePayload(payload: Record<string, unknown>): string {
-  const parts: string[] = [];
-  const reason = payload.reason || payload.reason_code || payload.alert_type;
-  if (reason) parts.push(`reason=${String(reason)}`);
-  if (payload.pair) parts.push(`pair=${String(payload.pair)}`);
-  if (payload.strategy) parts.push(`strategy=${String(payload.strategy)}`);
-  if (payload.regime) parts.push(`regime=${String(payload.regime)}`);
-  if (payload.exit_tier) parts.push(`exit=${String(payload.exit_tier)}`);
-  if (payload.gate) parts.push(`gate=${String(payload.gate)}`);
-
-  const pnl = payload.pnl_usdt;
-  if (typeof pnl === "number" && Number.isFinite(pnl)) {
-    parts.push(`pnl=${pnl.toFixed(2)}`);
-  } else if (typeof pnl === "string" && pnl.trim()) {
-    parts.push(`pnl=${pnl}`);
-  }
-
-  if (payload.message && !parts.length) parts.push(String(payload.message));
-  return parts.join(" | ");
+function formatInteger(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return Math.round(value).toLocaleString();
 }
 
-function normalizeHistoryEvent(ev: RunEvent): TimelineEvent {
-  const severity = normalizeSeverity(ev.severity);
-  const eventType = String(ev.event_type || "event");
-  const payload = asRecord(ev.payload_json);
-  const tsMs = Number.isFinite(Date.parse(ev.ts)) ? Date.parse(ev.ts) : Date.now();
-  return {
-    id: `history-${ev.event_id}`,
-    source: "history",
-    eventType,
-    severity,
-    tsMs,
-    category: classifyEventType(eventType, severity),
-    summary: summarizePayload(payload),
-  };
+function formatPercent(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  return `${(value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
 }
 
-function normalizeLiveEvent(msg: LiveMsg, idx: number): TimelineEvent {
-  const payload = asRecord(msg.payload);
-  const severity = normalizeSeverity(msg.severity || payload.severity);
-  const eventType = String(msg.event_type || "event");
-  const tsMs = typeof msg.ts === "number" && Number.isFinite(msg.ts) ? Math.floor(msg.ts * 1000) : Date.now() - idx * 10;
-  return {
-    id: `live-${eventType}-${tsMs}-${idx}`,
-    source: "live",
-    eventType,
-    severity,
-    tsMs,
-    category: classifyEventType(eventType, severity),
-    summary: summarizePayload(payload),
-  };
+function formatMoney(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT`;
 }
 
-function findStrategy(summary: PerformanceSummaryRow[], strategy: string): PerformanceSummaryRow | null {
-  return summary.find((row) => row.strategy === strategy) || null;
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || Number.isNaN(seconds)) return "n/a";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${(seconds / 3600).toLocaleString(undefined, { maximumFractionDigits: 1 })}h`;
+  return `${(seconds / 86400).toLocaleString(undefined, { maximumFractionDigits: 1 })}d`;
 }
 
-export default function AnalyticsPage() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const [user, setUser] = useState<UserRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [timelineFilter, setTimelineFilter] = useState<TimelineFilterCategory>("all");
-  const [timelineSeverity, setTimelineSeverity] = useState<TimelineSeverity>("all");
-  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
-  const [showLive, setShowLive] = useState(true);
-  const [liveEvents, setLiveEvents] = useState<TimelineEvent[]>([]);
-  const [selectedRun, setSelectedRun] = useState<RunSummary | null>(null);
-  const [runQuality, setRunQuality] = useState<DataQualitySummary | null>(null);
-  const [advancedML, setAdvancedML] = useState<AdvancedMLAnalytics | null>(null);
-  const [runTrades, setRunTrades] = useState<Trade[]>([]);
-  const [runScorecard, setRunScorecard] = useState<ScorecardCell[]>([]);
-  const [performanceHistory, setPerformanceHistory] = useState<PerformanceHistory | null>(null);
-  const [performanceRange, setPerformanceRange] = useState<PerformanceRange>("30d");
-  const [pnlFilter, setPnlFilter] = useState<RunPnlFilter>("all");
+function formatUnknown(value: unknown): string {
+  if (typeof value === "boolean") return value ? "true" : "false";
+  const numeric = numberValue(value);
+  if (numeric !== null) return formatNumber(numeric);
+  return stringValue(value) ?? "n/a";
+}
 
-  const navItems = useMemo(() => getAdminNavItems(user), [user]);
+function pnlTone(value: number | null | undefined): "teal" | "rose" | "sky" {
+  if (value === null || value === undefined || Number.isNaN(value)) return "sky";
+  return value >= 0 ? "teal" : "rose";
+}
 
-  useEffect(() => {
-    getMe()
-      .then((u) => setUser(u))
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const auth = useMemo(
-    () => ({
-      email: getStoredAdminEmail(),
-      hasToken: true,
-    }),
-    [],
-  );
-
-  useEffect(() => {
-    if (loading || !user) return;
-    // Check if user still has permission to access this page
-    const currentPath = pathname;
-    const hasAccess = canAccessAdminPath(user, currentPath);
-    const firstAccessible = getFirstAccessibleAdminPath(user);
-
-    if (!hasAccess) {
-      // If there's no accessible page at all, go home
-      if (!firstAccessible) {
-        router.replace("/");
-        return;
-      }
-      // Only redirect if the accessible page is different from current
-      if (firstAccessible !== currentPath) {
-        router.replace(firstAccessible);
-      }
-    }
-  }, [loading, user, pathname, router]);
-
-  useEffect(() => {
-    if (!showLive) return;
-    const wsBase =
-      process.env.NEXT_PUBLIC_WS_BASE && process.env.NEXT_PUBLIC_WS_BASE !== "same-origin"
-        ? process.env.NEXT_PUBLIC_WS_BASE
-        : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
-    const wsUrl = `${wsBase}/ws/dashboard`;
-    const w = new WebSocket(wsUrl);
-    w.onmessage = (evt) => {
-      try {
-        const msg = JSON.parse(evt.data) as LiveMsg;
-        setLiveEvents((prev) => [normalizeLiveEvent(msg, prev.length), ...prev].slice(0, 500));
-      } catch (e) {
-        console.error("WS parse error", e);
-      }
-    };
-    return () => w.close();
-  }, [showLive]);
-
-  useEffect(() => {
-    getRuns()
-      .then(setRuns)
-      .catch((e) => setError(isUnauthorizedError(e) ? "Unauthorized" : "Failed to load runs"));
-  }, []);
-
-  useEffect(() => {
-    getPerformanceHistory(performanceRange)
-      .then(setPerformanceHistory)
-      .catch((e) => {
-        console.error("Failed to load performance history", e);
-        setPerformanceHistory(null);
-      });
-  }, [performanceRange]);
-
-  // Use the selected run or default to the first run
-  const effectiveSelectedRun = selectedRun || runs[0] || null;
-
-  // Fetch run data when effectiveSelectedRun changes
-  useEffect(() => {
-    if (!effectiveSelectedRun) return;
-    (async () => {
-      try {
-        const [qual, trades, evts, scorecard] = await Promise.all([
-          getRunDataQuality(effectiveSelectedRun.id),
-          getRunTrades(effectiveSelectedRun.id),
-          getRunEvents(effectiveSelectedRun.id),
-          getRunScorecard(effectiveSelectedRun.id),
-        ]);
-        setRunQuality(qual);
-        setRunTrades(trades);
-        setTimelineEvents(evts.map(normalizeHistoryEvent));
-        setRunScorecard(scorecard);
-        getRunAdvancedMLAnalytics(effectiveSelectedRun.id)
-          .then(setAdvancedML)
-          .catch((err) => {
-            console.error("Failed to load advanced ML analytics", err);
-            setAdvancedML(null);
-          });
-      } catch (e) {
-        console.error("Failed to load run data", e);
-        setRunScorecard([]);
-        setAdvancedML(null);
-      }
-    })();
-  }, [effectiveSelectedRun]);
-
-  const filteredTimeline = useMemo(() => {
-    let events = [...timelineEvents];
-    if (showLive) {
-      events = [...liveEvents, ...events];
-    }
-    return events
-      .filter((ev) => timelineFilter === "all" || ev.category === timelineFilter || (timelineFilter === "core" && (ev.category === "switch" || ev.category === "gate")))
-      .filter((ev) => timelineSeverity === "all" || ev.severity === timelineSeverity)
-      .sort((a, b) => b.tsMs - a.tsMs)
-      .slice(0, 100);
-  }, [timelineEvents, liveEvents, showLive, timelineFilter, timelineSeverity]);
-
-  const filteredRuns = useMemo(() => {
-    return (runs || []).filter((r) => {
-      if (pnlFilter === "positive") return (r.session_pnl ?? 0) > 0;
-      if (pnlFilter === "negative") return (r.session_pnl ?? 0) < 0;
-      return true;
-    });
-  }, [runs, pnlFilter]);
-
-  const mrPerformance = useMemo(
-    () => findStrategy(performanceHistory?.strategy_summary || [], "STATARB_MR"),
-    [performanceHistory],
-  );
-  const trendPerformance = useMemo(
-    () => findStrategy(performanceHistory?.strategy_summary || [], "TREND_SPREAD"),
-    [performanceHistory],
-  );
-
-  if (loading) {
-    return <div className="p-8 text-center text-gray-500">Loading...</div>;
-  }
-
-  const activeHref = "/admin/dashboard/analytics";
-
-  return (
-    <DashboardShell
-      title="Analytics"
-      subtitle="Run monitoring, timeline & data quality"
-      status="OK"
-      activeHref={activeHref}
-      navItems={navItems}
-      auth={auth}
-    >
-      <div className="space-y-6">
-        {error ? (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
-            {error}
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap gap-4">
-          <select
-            className={UI_CLASSES.input}
-            value={effectiveSelectedRun?.id || ""}
-            onChange={(e) => {
-              const found = runs.find(r => r.id === e.target.value);
-              if (found) setSelectedRun(found);
-            }}
-          >
-            {filteredRuns.filter(r => r && r.id).map((run) => (
-              <option key={run.id} value={run.id}>
-                {run.id.slice(0, 8)} ({fmtDate(run.start_ts)}) - {fmtSignedNumber(run.session_pnl)} USDT
-              </option>
-            ))}
-          </select>
-          <select className={UI_CLASSES.input} value={pnlFilter} onChange={(e) => setPnlFilter(e.target.value as RunPnlFilter)}>
-            <option value="all">All PnL</option>
-            <option value="positive">Positive only</option>
-            <option value="negative">Negative only</option>
-          </select>
-          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-            <input type="checkbox" checked={showLive} onChange={(e) => setShowLive(e.target.checked)} />
-            Live events
-          </label>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <MetricCard label="Session PnL" value={fmtSignedNumber(effectiveSelectedRun?.session_pnl)} unit="USDT" />
-          <MetricCard label="Duration" value={effectiveSelectedRun ? fmtDuration(effectiveSelectedRun.start_ts, effectiveSelectedRun.end_ts) : "n/a"} />
-          <MetricCard label="Start Equity" value={fmtNumber(effectiveSelectedRun?.start_equity)} unit="USDT" />
-          <MetricCard label="End Equity" value={fmtNumber(effectiveSelectedRun?.end_equity)} unit="USDT" />
-        </div>
-
-        {advancedML && (
-          <PanelCard
-            title="Advanced ML"
-            subtitle="Regime, pair scoring, learning, rollout, and exit-policy telemetry for the selected run."
-            titleRight={
-              <StatusPill
-                label={advancedML.strategy_level.advanced_policy_mode}
-                variant={advancedML.strategy_level.advanced_policy_mode === "live" ? "success" : advancedML.strategy_level.advanced_policy_mode === "shadow" ? "info" : "neutral"}
-              />
-            }
-          >
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard
-                label="Learning"
-                value={`${advancedML.strategy_level.learning_updates}`}
-                hint={`Bayes ${advancedML.strategy_level.bayes_updates} | LinUCB ${advancedML.strategy_level.linucb_updates} | skipped ${advancedML.strategy_level.learning_skips}`}
-                tone="sky"
-              />
-              <MetricCard
-                label="Live Exits"
-                value={`${advancedML.strategy_level.live_exit_allowed}/${advancedML.strategy_level.live_exit_events}`}
-                hint={`${advancedML.strategy_level.rollout_blocked} blocked by rollout guard`}
-                tone={advancedML.strategy_level.rollout_blocked > 0 ? "amber" : "teal"}
-              />
-              <MetricCard
-                label="Shadow Agreement"
-                value={advancedML.strategy_level.shadow_agreement_rate === null ? "n/a" : fmtPercent(advancedML.strategy_level.shadow_agreement_rate * 100)}
-                hint="Old vs advanced exit decisions"
-                tone="violet"
-              />
-              <MetricCard
-                label="Risk"
-                value={fmtNumber(advancedML.strategy_level.avg_break_risk, 3)}
-                hint={`avg exit score ${fmtNumber(advancedML.strategy_level.avg_exit_score, 3)}`}
-                tone={(advancedML.strategy_level.avg_break_risk ?? 0) > 0.5 ? "rose" : "teal"}
-              />
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Regime</div>
-                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
-                  {String(asRecord(advancedML.latest_regime?.payload).advanced_regime || asRecord(advancedML.latest_regime?.payload).regime || "n/a")}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  conf {fmtNumber(asNumber(asRecord(advancedML.latest_regime?.payload).confidence), 3)} | break {fmtNumber(asNumber(asRecord(advancedML.latest_regime?.payload).break_risk), 3)}
-                </div>
-              </div>
-              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Exit</div>
-                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
-                  {String(asRecord(advancedML.latest_exit?.payload).new_action || "n/a")}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  score {fmtNumber(asNumber(asRecord(advancedML.latest_exit?.payload).total_exit_score), 3)} | rollout {String(asRecord(advancedML.latest_exit?.payload).rollout_allowed ?? "n/a")}
-                </div>
-              </div>
-              <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-                <div className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Latest Learning</div>
-                <div className="mt-2 font-mono text-sm text-gray-800 dark:text-gray-100">
-                  {String(asRecord(advancedML.latest_learning?.payload).pair || "n/a")}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Bayes {String(asRecord(advancedML.latest_learning?.payload).bayes_updated ?? "n/a")} | LinUCB {String(asRecord(advancedML.latest_learning?.payload).linucb_updated ?? "n/a")}
-                </div>
-              </div>
-            </div>
-          </PanelCard>
-        )}
-
-        <PanelCard
-          title="Strategy Performance"
-          subtitle="Closed-trade scorecard by strategy; this is where we validate TREND_SPREAD before trusting it."
-          titleRight={
-            <select className={UI_CLASSES.inputSmall} value={performanceRange} onChange={(e) => setPerformanceRange(e.target.value as PerformanceRange)}>
-              <option value="7d">7 days</option>
-              <option value="30d">30 days</option>
-              <option value="90d">90 days</option>
-              <option value="all">All history</option>
-            </select>
-          }
-        >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <MetricCard
-              label="Total PnL"
-              value={fmtSignedNumber(performanceHistory?.total_pnl_usdt)}
-              unit="USDT"
-              hint={`${performanceHistory?.closed_trades ?? 0} closed trades across ${performanceHistory?.run_count ?? 0} runs`}
-              tone={(performanceHistory?.total_pnl_usdt ?? 0) >= 0 ? "teal" : "rose"}
-            />
-            <MetricCard
-              label="STATARB_MR"
-              value={fmtSignedNumber(mrPerformance?.pnl_usdt)}
-              unit="USDT"
-              hint={`${mrPerformance?.trades ?? 0} trades | ${fmtPercent(mrPerformance?.win_rate_pct)}`}
-              tone={(mrPerformance?.pnl_usdt ?? 0) >= 0 ? "sky" : "rose"}
-            />
-            <MetricCard
-              label="TREND_SPREAD"
-              value={fmtSignedNumber(trendPerformance?.pnl_usdt)}
-              unit="USDT"
-              hint={`${trendPerformance?.trades ?? 0} trades | ${fmtPercent(trendPerformance?.win_rate_pct)}`}
-              tone={(trendPerformance?.pnl_usdt ?? 0) >= 0 ? "amber" : "rose"}
-            />
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <TableFrame compact>
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
-                    <th className="pb-2 font-medium text-gray-500">Trades</th>
-                    <th className="pb-2 font-medium text-gray-500">Win</th>
-                    <th className="pb-2 font-medium text-gray-500">PnL</th>
-                    <th className="pb-2 font-medium text-gray-500">Avg</th>
-                    <th className="pb-2 font-medium text-gray-500">Size</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(performanceHistory?.strategy_summary || []).map((row) => (
-                    <tr key={row.strategy} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="py-2 font-mono">{row.strategy}</td>
-                      <td className="py-2">{row.trades}</td>
-                      <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
-                      <td className={`py-2 font-mono ${row.pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.pnl_usdt)}</td>
-                      <td className="py-2 font-mono">{fmtSignedNumber(row.avg_pnl_usdt)}</td>
-                      <td className="py-2">{fmtNumber(row.avg_size_multiplier, 2)}</td>
-                    </tr>
-                  ))}
-                  {(performanceHistory?.strategy_summary || []).length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-gray-400">No closed trades in this range</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </TableFrame>
-
-            <TableFrame compact>
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
-                    <th className="pb-2 font-medium text-gray-500">Regime</th>
-                    <th className="pb-2 font-medium text-gray-500">Trades</th>
-                    <th className="pb-2 font-medium text-gray-500">Win</th>
-                    <th className="pb-2 font-medium text-gray-500">PnL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(performanceHistory?.strategy_regime_summary || []).map((row) => (
-                    <tr key={`${row.strategy}-${row.regime || "UNKNOWN"}`} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="py-2 font-mono">{row.strategy}</td>
-                      <td className="py-2 font-mono">{row.regime || "UNKNOWN"}</td>
-                      <td className="py-2">{row.trades}</td>
-                      <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
-                      <td className={`py-2 font-mono ${row.pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.pnl_usdt)}</td>
-                    </tr>
-                  ))}
-                  {(performanceHistory?.strategy_regime_summary || []).length === 0 && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-gray-400">No strategy/regime performance yet</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </TableFrame>
-          </div>
-
-          <div className="mt-4">
-            <h4 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-200">Recent Attributed Trades</h4>
-            <TableFrame compact maxHeightClass="max-h-72">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 dark:border-gray-700">
-                    <th className="pb-2 font-medium text-gray-500">Exit</th>
-                    <th className="pb-2 font-medium text-gray-500">Pair</th>
-                    <th className="pb-2 font-medium text-gray-500">Strategy</th>
-                    <th className="pb-2 font-medium text-gray-500">Regime</th>
-                    <th className="pb-2 font-medium text-gray-500">PnL</th>
-                    <th className="pb-2 font-medium text-gray-500">Cum</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(performanceHistory?.recent_trades || []).slice(0, 20).map((trade) => (
-                    <tr key={trade.id} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="py-2 text-xs">{fmtDate(trade.exit_ts)}</td>
-                      <td className="py-2 max-w-[18rem] truncate font-mono" title={trade.pair_key}>{trade.pair_key}</td>
-                      <td className="py-2 font-mono">{trade.strategy}</td>
-                      <td className="py-2 font-mono">{trade.regime}</td>
-                      <td className={`py-2 font-mono ${(trade.pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(trade.pnl_usdt)}</td>
-                      <td className={`py-2 font-mono ${trade.cumulative_pnl_usdt >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(trade.cumulative_pnl_usdt)}</td>
-                    </tr>
-                  ))}
-                  {(performanceHistory?.recent_trades || []).length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-gray-400">No attributed trade history yet</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </TableFrame>
-          </div>
-        </PanelCard>
-
-        <PanelCard title="Selected Run Scorecard" subtitle="Per-run strategy/regime attribution for the selected run.">
-          <TableFrame compact>
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="pb-2 font-medium text-gray-500">Strategy</th>
-                  <th className="pb-2 font-medium text-gray-500">Regime</th>
-                  <th className="pb-2 font-medium text-gray-500">Trades</th>
-                  <th className="pb-2 font-medium text-gray-500">Wins</th>
-                  <th className="pb-2 font-medium text-gray-500">Win</th>
-                  <th className="pb-2 font-medium text-gray-500">Avg PnL</th>
-                  <th className="pb-2 font-medium text-gray-500">Sum PnL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {runScorecard.map((row) => (
-                  <tr key={`${row.entry_strategy || "UNKNOWN"}-${row.entry_regime || "UNKNOWN"}`} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="py-2 font-mono">{row.entry_strategy || "UNKNOWN"}</td>
-                    <td className="py-2 font-mono">{row.entry_regime || "UNKNOWN"}</td>
-                    <td className="py-2">{row.trades}</td>
-                    <td className="py-2">{row.wins}</td>
-                    <td className="py-2">{fmtPercent(row.win_rate_pct)}</td>
-                    <td className={`py-2 font-mono ${(row.avg_pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.avg_pnl_usdt)}</td>
-                    <td className={`py-2 font-mono ${(row.sum_pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>{fmtSignedNumber(row.sum_pnl_usdt)}</td>
-                  </tr>
-                ))}
-                {runScorecard.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-gray-400">No closed trades attributed to strategy/regime yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </TableFrame>
-        </PanelCard>
-
-        <PanelCard title="Timeline" titleRight={
-          <div className="flex gap-2">
-            <select className={UI_CLASSES.inputSmall} value={timelineFilter} onChange={(e) => setTimelineFilter(e.target.value as TimelineFilterCategory)}>
-              <option value="all">All</option>
-              <option value="core">Core</option>
-              <option value="switch">Switches</option>
-              <option value="gate">Gates</option>
-              <option value="alert">Alerts</option>
-              <option value="exit">Exits</option>
-              <option value="other">Other</option>
-            </select>
-            <select className={UI_CLASSES.inputSmall} value={timelineSeverity} onChange={(e) => setTimelineSeverity(e.target.value as TimelineSeverity)}>
-              <option value="all">All</option>
-              <option value="info">Info</option>
-              <option value="warn">Warning</option>
-              <option value="error">Error</option>
-              <option value="critical">Critical</option>
-            </select>
-          </div>
-        }>
-          <TableFrame>
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="pb-2 font-medium text-gray-500">Time</th>
-                  <th className="pb-2 font-medium text-gray-500">Source</th>
-                  <th className="pb-2 font-medium text-gray-500">Type</th>
-                  <th className="pb-2 font-medium text-gray-500">Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTimeline.map((ev) => (
-                  <tr key={ev.id} className="border-b border-gray-100 py-2 dark:border-gray-800">
-                    <td className="py-2 font-mono text-xs">{new Date(ev.tsMs).toLocaleTimeString()}</td>
-                    <td className="py-2">
-                      <StatusPill label={ev.source} variant={ev.source === "live" ? "info" : "neutral"} />
-                    </td>
-                    <td className="py-2">
-                      <StatusPill label={ev.severity} variant={ev.severity === "error" || ev.severity === "critical" ? "danger" : ev.severity === "warn" ? "warning" : "neutral"} />
-                    </td>
-                    <td className="py-2 max-w-md truncate" title={ev.summary}>{ev.summary}</td>
-                  </tr>
-                ))}
-                {filteredTimeline.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="py-8 text-center text-gray-400">No events</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </TableFrame>
-        </PanelCard>
-
-        {runQuality && (
-          <PanelCard title="Data Quality" titleRight={<StatusPill label={runQuality.overall_status} variant={runQuality.overall_status === "pass" ? "success" : "warning"} />}>
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              <div className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800">
-                <div className="text-xs font-medium uppercase text-gray-500">Total Events</div>
-                <div className="mt-1 text-lg font-semibold">{runQuality.event_health?.total ?? 0}</div>
-              </div>
-              <div className="rounded-lg p-3 bg-yellow-50 dark:bg-yellow-900/20">
-                <div className="text-xs font-medium uppercase text-yellow-600">Warnings</div>
-                <div className="mt-1 text-lg font-semibold text-yellow-600">{runQuality.event_health?.warn ?? 0}</div>
-              </div>
-              <div className="rounded-lg p-3 bg-red-50 dark:bg-red-900/20">
-                <div className="text-xs font-medium uppercase text-red-600">Errors</div>
-                <div className="mt-1 text-lg font-semibold text-red-600">{runQuality.event_health?.error ?? 0}</div>
-              </div>
-              <div className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800">
-                <div className="text-xs font-medium uppercase text-gray-500">Trade Status</div>
-                <div className="mt-1 text-sm font-semibold">{runQuality.trade_integrity?.status ?? "unknown"}</div>
-              </div>
-            </div>
-          </PanelCard>
-        )}
-
-        {runTrades.length > 0 && (
-          <PanelCard title="Trades">
-            <TableFrame>
-              <div className="max-h-64 overflow-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <th className="pb-2 font-medium text-gray-500">Pair</th>
-                      <th className="pb-2 font-medium text-gray-500">Side</th>
-                      <th className="pb-2 font-medium text-gray-500">Entry</th>
-                      <th className="pb-2 font-medium text-gray-500">Exit</th>
-                      <th className="pb-2 font-medium text-gray-500">PnL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runTrades.slice(0, 20).map((trade) => (
-                      <tr key={trade.id} className="border-b border-gray-100 py-2 dark:border-gray-800">
-                        <td className="py-2 font-mono">{trade.pair_key}</td>
-                        <td className="py-2">{trade.side}</td>
-                        <td className="py-2">{fmtNumber(trade.entry_z)}</td>
-                        <td className="py-2">{fmtNumber(trade.exit_z)}</td>
-                        <td className={`py-2 font-mono ${(trade.pnl_usdt ?? 0) >= 0 ? "text-success-600" : "text-danger-600"}`}>
-                          {fmtSignedNumber(trade.pnl_usdt)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </TableFrame>
-          </PanelCard>
-        )}
-      </div>
-    </DashboardShell>
-  );
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message.replace(/^HTTP\s+\d+:\s*/i, "") || fallback : fallback;
 }

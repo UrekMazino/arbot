@@ -467,6 +467,58 @@ export type AnalyticsSummary = {
   cache: DashboardCacheMeta;
 };
 
+export type AnalyticsDashboardPerformance = {
+  total_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  average_win_usdt: number | null;
+  average_loss_usdt: number | null;
+  max_drawdown_usdt: number | null;
+  trade_count: number | null;
+  avg_hold_seconds: number | null;
+};
+
+export type AnalyticsDashboardResponse = {
+  performance: AnalyticsDashboardPerformance;
+  pnl_timeseries: {
+    daily_pnl: Array<Record<string, unknown>>;
+    equity_curve: Array<Record<string, unknown>>;
+    drawdown_curve: Array<Record<string, unknown>>;
+  };
+  pair_leaderboards: {
+    top_pairs_by_pnl: PairSummary[];
+    bottom_pairs_by_pnl: PairSummary[];
+    top_pairs_by_win_rate: PairSummary[];
+    worst_pairs_by_drawdown: PairSummary[];
+    pairs_with_high_hedge_drift: PairSummary[];
+    pairs_with_frequent_blocks: Array<PairSummary & { block_count?: number | null }>;
+  };
+  exit_analysis: {
+    best_counterfactual_exit_policy: string | null;
+    actual_exit_efficiency: number | null;
+    avg_missed_profit_usdt: number | null;
+    avg_avoided_loss_usdt: number | null;
+    exit_policy_distribution: Record<string, number>;
+  };
+  ml_analysis: {
+    pnl_by_regime: Array<Record<string, unknown>>;
+    win_rate_by_regime: Array<Record<string, unknown>>;
+    bayesian_posterior_vs_outcome: Array<Record<string, unknown>>;
+    final_rank_score_vs_outcome: Array<Record<string, unknown>>;
+    break_risk_before_losses: number | null;
+    microstructure_risk_vs_slippage: Array<Record<string, unknown>>;
+  };
+  hedge_analysis: {
+    equal_notional_total_pnl: number | null;
+    hedge_ratio_sized_total_pnl: number | null;
+    sizing_pnl_delta_usdt: number | null;
+    high_drift_trade_count: number | null;
+  };
+  cache: DashboardCacheMeta;
+};
+
 export type DataQualityIssue = {
   event_id: string;
   ts: string;
@@ -1343,6 +1395,28 @@ export async function getPortfolioDashboard(params?: {
   const suffix = query.toString();
   return apiRequest<PortfolioDashboardResponse>(
     `/admin/dashboard/portfolio${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getAnalyticsDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<AnalyticsDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<AnalyticsDashboardResponse>(
+    `/admin/dashboard/analytics${suffix ? `?${suffix}` : ""}`,
     { method: "GET" },
   );
 }

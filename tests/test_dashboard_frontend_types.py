@@ -22,10 +22,12 @@ def test_frontend_dashboard_type_exports_exist() -> None:
         "PortfolioSummary",
         "PortfolioDashboardResponse",
         "AnalyticsSummary",
+        "AnalyticsDashboardResponse",
     ):
         assert f"export type {exported_type}" in api_types
 
     assert "export async function getPortfolioDashboard" in api_types
+    assert "export async function getAnalyticsDashboard" in api_types
     assert "export async function getPairHistory" in api_types
     assert "export async function getPairDetailSummary" in api_types
     for query_param in (

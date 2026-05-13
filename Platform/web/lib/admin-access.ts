@@ -25,7 +25,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
         href: "/admin/dashboard/analytics",
         label: "Analytics",
         group: "Monitor",
-        requiredPermissions: ["view_analytics"],
+        requiredPermissions: ["view_analytics", "view_dashboard"],
       },
       {
         href: "/admin/dashboard/portfolio",

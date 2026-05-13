@@ -706,6 +706,52 @@ export type PairDecisionAuditChart = {
   decision_score_timeline: Array<Record<string, unknown>>;
 };
 
+export type CounterfactualExitResult = {
+  entry_id: string;
+  exit_strategy: string;
+  status: "triggered" | "not_triggered" | "forced_close_at_window_end" | "unavailable" | string;
+  entry_timestamp: number | string;
+  entry_side: string | null;
+  entry_z: number | null;
+  entry_spread: number | null;
+  hypothetical_exit_timestamp: number | string | null;
+  hypothetical_exit_z: number | null;
+  hypothetical_exit_spread: number | null;
+  hypothetical_gross_pnl_usdt: number | null;
+  hypothetical_fees_usdt: number | null;
+  hypothetical_slippage_usdt: number | null;
+  hypothetical_net_pnl_usdt: number | null;
+  hold_seconds: number | null;
+  max_adverse_excursion_z: number | null;
+  max_favorable_excursion_z: number | null;
+  max_adverse_excursion_usdt: number | null;
+  max_favorable_excursion_usdt: number | null;
+  equal_notional_pnl_usdt: number | null;
+  hedge_ratio_sized_pnl_usdt: number | null;
+  pnl_delta_usdt: number | null;
+  pnl_delta_pct: number | null;
+  note: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CounterfactualExitStudy = {
+  entry_id: string;
+  entry_marker_type: "actual_entry" | "replay_entry_candidate" | string;
+  pair: string;
+  timeframe: string | null;
+  entry_timestamp: number | string;
+  entry_side: string | null;
+  entry_z: number | null;
+  entry_spread: number | null;
+  actual_exit_timestamp: number | string | null;
+  actual_exit_z: number | null;
+  actual_pnl_usdt: number | null;
+  results: CounterfactualExitResult[];
+  best_policy_by_pnl: string | null;
+  best_policy_by_risk_adjusted_return: string | null;
+  warnings: string[];
+};
+
 export type PairSupplyStatus = {
   running: boolean;
   pid: number;
@@ -1094,6 +1140,23 @@ export async function getPairDecisionAuditChart(
     params.set("end_ts", String(endTs));
   }
   return apiRequest<PairDecisionAuditChart>(`/admin/cointegrated-pairs/decision-audit?${params.toString()}`, { method: "GET" });
+}
+
+export async function getCounterfactualExitStudy(
+  entryId: string,
+  pair: string,
+  timeframe = "1m",
+  startTs?: string | number | null,
+  endTs?: string | number | null,
+): Promise<CounterfactualExitStudy> {
+  const params = new URLSearchParams({ entry_id: entryId, pair, timeframe });
+  if (startTs !== null && startTs !== undefined && String(startTs).trim()) {
+    params.set("start_ts", String(startTs));
+  }
+  if (endTs !== null && endTs !== undefined && String(endTs).trim()) {
+    params.set("end_ts", String(endTs));
+  }
+  return apiRequest<CounterfactualExitStudy>(`/admin/cointegrated-pairs/decision-audit/counterfactual?${params.toString()}`, { method: "GET" });
 }
 
 export async function removeCointegratedPair(sym1: string, sym2: string): Promise<RemoveCointegratedPairResult> {

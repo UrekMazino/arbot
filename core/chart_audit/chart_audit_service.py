@@ -15,10 +15,14 @@ from typing import Any
 
 from core.chart_audit.actual_event_overlay import actual_markers_from_records
 from core.chart_audit.config_snapshot_source import config_at
+from core.chart_audit.counterfactual_exit_study import (
+    CounterfactualExitConfig,
+    build_counterfactual_exit_study,
+)
 from core.chart_audit.curator_state_source import curator_state_at
 from core.chart_audit.marker_types import MarkerCategory, StatisticalMarkerType
 from core.chart_audit.ml_replay_scoring_bridge import ReplayMLScoringBridge
-from core.chart_audit.ml_score_lookup import StoredMLScoreLookup
+from core.chart_audit.ml_score_lookup import StoredMLScoreLookup, get_score_source_for_range
 from core.chart_audit.point_in_time_replay import PointInTimeReplayEngine
 from core.chart_audit.replay_snapshot_factory import ReplaySnapshotFactory
 from core.chart_audit.timestamp_alignment import align_actual_marker_timestamps
@@ -76,6 +80,71 @@ def get_pair_decision_audit_chart(
         "counterfactuals_lazy_load": True,
         "decision_score_timeline": [],
     }
+
+
+def get_counterfactual_exit_study(
+    entry_id: str,
+    pair: str,
+    timeframe: str,
+    start_ts: int | float | datetime | str | None,
+    end_ts: int | float | datetime | str | None,
+) -> dict[str, Any]:
+    """Return a lazy Phase 3 counterfactual exit study for one entry marker."""
+
+    entry_id_text = str(entry_id or "").strip()
+    if not entry_id_text:
+        raise ValueError("entry_id is required")
+
+    pair_key = _normalize_pair_key_text(pair)
+    start_value = _coerce_timestamp(start_ts)
+    end_value = _coerce_timestamp(end_ts)
+    chart_detail = _load_existing_pair_chart_detail(pair_key, timeframe, start_value, end_value)
+    chart_points = _chart_points(chart_detail)
+    actual_records = _load_actual_records(pair_key, start_value, end_value)
+    actual_marker_dicts = [
+        marker.to_dict()
+        for marker in align_actual_marker_timestamps(
+            actual_markers_from_records(
+                actual_records,
+                pair=None,
+                start_ts=start_value,
+                end_ts=end_value,
+            ),
+            chart_supports_exact_timestamp=True,
+        )
+    ]
+    replay_markers = _replay_markers_from_points(
+        pair_key=pair_key,
+        timeframe=timeframe,
+        chart_points=chart_points,
+        actual_records=actual_records,
+        start_ts=start_value,
+        end_ts=end_value,
+    )
+    entry_marker = _counterfactual_entry_marker(
+        entry_id_text,
+        actual_markers=actual_marker_dicts,
+        replay_markers=replay_markers,
+    )
+    entry_timestamp = _coerce_timestamp(
+        entry_marker.get("original_event_timestamp") or entry_marker.get("timestamp")
+    )
+    score_rows = get_score_source_for_range(
+        pair_key,
+        entry_timestamp if entry_timestamp is not None else start_value,
+        end_value,
+        stored_events=actual_records,
+    )
+    study_config = _counterfactual_config_at(entry_timestamp)
+    return build_counterfactual_exit_study(
+        entry_marker=entry_marker,
+        pair=pair_key,
+        timeframe=str(timeframe or "").strip() or "",
+        chart_points=chart_points,
+        actual_markers=actual_marker_dicts,
+        score_rows=score_rows,
+        config=study_config,
+    ).to_dict()
 
 
 def _load_existing_pair_chart_detail(
@@ -314,6 +383,35 @@ def _chart_points(chart_detail: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [point for point in points if isinstance(point, dict)]
 
 
+def _counterfactual_entry_marker(
+    entry_id: str,
+    *,
+    actual_markers: list[dict[str, Any]],
+    replay_markers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    for marker in actual_markers:
+        if marker.get("entry_id") == entry_id and marker.get("marker_type") == "actual_entry":
+            return marker
+    for marker in replay_markers:
+        if marker.get("entry_id") == entry_id and marker.get("marker_type") == "replay_entry_candidate":
+            return marker
+    raise ValueError(
+        "entry_id does not resolve to an eligible actual_entry or replay_entry_candidate"
+    )
+
+
+def _counterfactual_config_at(timestamp: float | None) -> CounterfactualExitConfig:
+    if timestamp is None:
+        return CounterfactualExitConfig()
+    try:
+        replay_config = config_at(int(timestamp))
+    except Exception:
+        return CounterfactualExitConfig()
+    return CounterfactualExitConfig(
+        max_hold_seconds=float(replay_config.max_hold_seconds),
+    )
+
+
 def _import_cointegrated_pairs_service() -> Any | None:
     _ensure_platform_api_path()
     for module_name in (
@@ -545,4 +643,4 @@ def _compact(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
-__all__ = ["get_pair_decision_audit_chart"]
+__all__ = ["get_counterfactual_exit_study", "get_pair_decision_audit_chart"]

@@ -57,6 +57,15 @@ def _get_pair_decision_audit_chart_service():
     return get_pair_decision_audit_chart
 
 
+def _get_counterfactual_exit_study_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.chart_audit.chart_audit_service import get_counterfactual_exit_study
+
+    return get_counterfactual_exit_study
+
+
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
     filtered: dict[str, str] = {}
     for key, value in values.items():
@@ -364,6 +373,32 @@ def admin_cointegrated_pair_decision_audit(
     try:
         service = _get_pair_decision_audit_chart_service()
         return service(pair=pair, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/decision-audit/counterfactual")
+def admin_cointegrated_pair_decision_audit_counterfactual(
+    entry_id: str = Query(..., min_length=1),
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: str = Query(..., min_length=1),
+    end_ts: str = Query(..., min_length=1),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_counterfactual_exit_study_service()
+        return service(
+            entry_id=entry_id,
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

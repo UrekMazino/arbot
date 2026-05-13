@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   CartesianGrid,
@@ -21,11 +22,13 @@ import {
   CointegratedPair,
   CointegratedPairDetail,
   CointegratedPairsResponse,
+  CounterfactualExitStudy,
   PairSupplyStatus,
   PairDecisionAuditChart,
   UserRecord,
   getCointegratedPairDetail,
   getCointegratedPairs,
+  getCounterfactualExitStudy,
   getAdminPairsHealth,
   getMe,
   getPairDecisionAuditChart,
@@ -388,6 +391,12 @@ type PairTooltipItem = {
   value?: number | string | null;
 };
 
+type CounterfactualEntryAnchor = {
+  entryId: string;
+  markerType: "actual_entry" | "replay_entry_candidate";
+  label: string;
+};
+
 function actualMarkerTitle(marker: ChartAuditActualMarker): string {
   const titles: Record<string, string> = {
     actual_entry: "Actual entry",
@@ -620,12 +629,73 @@ function markerPointCoordinates(props: MarkerDotProps): { cx: number; cy: number
   return { cx, cy };
 }
 
-function renderActualEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+function actualEntryAnchorFromPoint(point: PairChartPoint | undefined): CounterfactualEntryAnchor | null {
+  const marker = point?.actual_markers?.find((item) => item.marker_type === "actual_entry");
+  if (!marker) return null;
+  const entryId = String(marker.entry_id || (marker.trade_id ? `actual_${marker.trade_id}` : "")).trim();
+  if (!entryId) return null;
+  return {
+    entryId,
+    markerType: "actual_entry",
+    label: `Actual entry ${marker.side || ""}`.trim(),
+  };
+}
+
+function replayEntryAnchorFromPoint(point: PairChartPoint | undefined, side: "BUY_SPREAD" | "SELL_SPREAD"): CounterfactualEntryAnchor | null {
+  const marker = point?.replay_markers?.find((item) => item.marker_type === "replay_entry_candidate" && item.side === side);
+  const entryId = String(marker?.entry_id || "").trim();
+  if (!marker || !entryId) return null;
+  return {
+    entryId,
+    markerType: "replay_entry_candidate",
+    label: `Replay ${side === "BUY_SPREAD" ? "buy" : "sell"}`,
+  };
+}
+
+type MarkerInteractionProps = {
+  role?: "button";
+  tabIndex?: number;
+  className?: string;
+  "aria-label"?: string;
+  onClick?: (event: ReactMouseEvent<SVGElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<SVGElement>) => void;
+};
+
+function markerInteractionProps(
+  anchor: CounterfactualEntryAnchor | null,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+): MarkerInteractionProps {
+  if (!anchor || !onCompareEntry) return {};
+  return {
+    role: "button",
+    tabIndex: 0,
+    className: "cursor-pointer",
+    "aria-label": `Compare exits for ${anchor.label}`,
+    onClick: (event) => {
+      event.stopPropagation();
+      onCompareEntry(anchor);
+    },
+    onKeyDown: (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCompareEntry(anchor);
+      }
+    },
+  };
+}
+
+function renderActualEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
   const coords = markerPointCoordinates(props);
   if (!coords) return null;
   const size = fullscreen ? 8 : 6;
   return (
     <path
+      {...markerInteractionProps(actualEntryAnchorFromPoint(props.payload), onCompareEntry)}
       d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
       fill="#22c55e"
       stroke="#dcfce7"
@@ -660,12 +730,17 @@ function renderActualBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
   );
 }
 
-function renderReplayBuyEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+function renderReplayBuyEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
   const coords = markerPointCoordinates(props);
   if (!coords) return null;
   const size = fullscreen ? 8 : 6;
   return (
     <path
+      {...markerInteractionProps(replayEntryAnchorFromPoint(props.payload, "BUY_SPREAD"), onCompareEntry)}
       d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
       fill="transparent"
       stroke="#22c55e"
@@ -674,12 +749,17 @@ function renderReplayBuyEntryDot(props: MarkerDotProps, fullscreen: boolean) {
   );
 }
 
-function renderReplaySellEntryDot(props: MarkerDotProps, fullscreen: boolean) {
+function renderReplaySellEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
   const coords = markerPointCoordinates(props);
   if (!coords) return null;
   const size = fullscreen ? 8 : 6;
   return (
     <path
+      {...markerInteractionProps(replayEntryAnchorFromPoint(props.payload, "SELL_SPREAD"), onCompareEntry)}
       d={`M ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy - size} L ${coords.cx + size} ${coords.cy - size} Z`}
       fill="transparent"
       stroke="#ef4444"
@@ -853,11 +933,13 @@ function PairUniverseCharts({
   fullscreen = false,
   selectedPair,
   markerLayers,
+  onCompareEntry,
 }: {
   chartData: CointegratedPairDetail["points"];
   fullscreen?: boolean;
   selectedPair: CointegratedPair;
   markerLayers: MarkerLayerSettings;
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void;
 }) {
   const priceHeight = fullscreen ? 360 : 280;
   const spreadHeight = fullscreen ? 420 : 300;
@@ -936,8 +1018,8 @@ function PairUniverseCharts({
                   stroke="#22c55e"
                   strokeWidth={0}
                   connectNulls={false}
-                  dot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen)}
-                  activeDot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen)}
+                  dot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen, onCompareEntry)}
                   isAnimationActive={false}
                 />
                 <Line
@@ -949,8 +1031,8 @@ function PairUniverseCharts({
                   stroke="#ef4444"
                   strokeWidth={0}
                   connectNulls={false}
-                  dot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen)}
-                  activeDot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen)}
+                  dot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen, onCompareEntry)}
                   isAnimationActive={false}
                 />
                 <Line
@@ -1005,8 +1087,8 @@ function PairUniverseCharts({
                   stroke="transparent"
                   strokeWidth={0}
                   connectNulls={false}
-                  dot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen)}
-                  activeDot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen)}
+                  dot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen, onCompareEntry)}
                   isAnimationActive={false}
                 />
                 <Line
@@ -1030,6 +1112,98 @@ function PairUniverseCharts({
           </LineChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "n/a";
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function prettyCounterfactualPolicy(value: string | null | undefined): string {
+  return String(value || "n/a").replace(/^exit_/, "").replace(/_/g, " ");
+}
+
+function CounterfactualExitComparison({
+  study,
+  loading,
+  error,
+  anchorLabel,
+}: {
+  study: CounterfactualExitStudy | null;
+  loading: boolean;
+  error: string | null;
+  anchorLabel: string | null;
+}) {
+  if (!loading && !error && !study && !anchorLabel) return null;
+  return (
+    <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Compare exits</h4>
+          <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            {study ? `${study.entry_marker_type} | ${fmtMarkerTimestamp(study.entry_timestamp)}` : anchorLabel || "Select an entry marker"}
+          </p>
+        </div>
+        {loading ? <StatusPill label="Loading" tone="neutral" /> : study ? <StatusPill label="Ready" tone="success" /> : null}
+      </div>
+      {error ? (
+        <p className="rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-xs text-error-700 dark:border-error-900/60 dark:bg-error-950/30 dark:text-error-300">
+          {error}
+        </p>
+      ) : null}
+      {!error && loading ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Loading counterfactual exit study...
+        </p>
+      ) : null}
+      {!error && !loading && study ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
+          <table className="min-w-full divide-y divide-gray-200 text-xs dark:divide-gray-800">
+            <thead className="bg-gray-50 text-left text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Policy</th>
+                <th className="px-3 py-2 font-semibold">Status</th>
+                <th className="px-3 py-2 font-semibold">Exit</th>
+                <th className="px-3 py-2 font-semibold">Net PnL</th>
+                <th className="px-3 py-2 font-semibold">Hold</th>
+                <th className="px-3 py-2 font-semibold">Note</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-800 dark:bg-gray-900">
+              {study.results.length ? (
+                study.results.map((result) => (
+                  <tr key={`${result.entry_id}-${result.exit_strategy}`} className="text-gray-700 dark:text-gray-200">
+                    <td className="whitespace-nowrap px-3 py-2 font-medium">{prettyCounterfactualPolicy(result.exit_strategy)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{String(result.status || "n/a").replace(/_/g, " ")}</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {result.hypothetical_exit_timestamp ? fmtMarkerTimestamp(result.hypothetical_exit_timestamp) : "n/a"}
+                      <span className="ml-1 text-gray-400">Z {fmtNumber(result.hypothetical_exit_z, 3)}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 font-mono">{fmtNumber(result.hypothetical_net_pnl_usdt, 2)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{fmtDuration(result.hold_seconds)}</td>
+                    <td className="min-w-[14rem] px-3 py-2 text-gray-500 dark:text-gray-400">{result.note || "n/a"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="px-3 py-4 text-center text-gray-500 dark:text-gray-400" colSpan={6}>
+                    No counterfactual rows returned for this entry.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {!error && !loading && study?.warnings?.length ? (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{study.warnings.join(" | ")}</p>
+      ) : null}
     </div>
   );
 }
@@ -1060,6 +1234,10 @@ export default function CointegratedPairPage() {
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
   const [auditChart, setAuditChart] = useState<PairDecisionAuditChart | null>(null);
+  const [counterfactualStudy, setCounterfactualStudy] = useState<CounterfactualExitStudy | null>(null);
+  const [counterfactualLoading, setCounterfactualLoading] = useState(false);
+  const [counterfactualError, setCounterfactualError] = useState<string | null>(null);
+  const [counterfactualAnchorLabel, setCounterfactualAnchorLabel] = useState<string | null>(null);
   const [markerLayers, setMarkerLayers] = useState<MarkerLayerSettings>(DEFAULT_MARKER_LAYERS);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
   const [showGraph, setShowGraph] = useState(true);
@@ -1142,6 +1320,13 @@ export default function CointegratedPairPage() {
     selectedPairRef.current = selectedPair;
   }, [selectedPair]);
 
+  useEffect(() => {
+    setCounterfactualStudy(null);
+    setCounterfactualError(null);
+    setCounterfactualAnchorLabel(null);
+    setCounterfactualLoading(false);
+  }, [selectedPair?.id]);
+
   const filteredPairs = useMemo(
     () => (catalog?.pairs || []).filter((pair) => pairMatches(pair, query)),
     [catalog, query],
@@ -1205,6 +1390,35 @@ export default function CointegratedPairPage() {
     }),
     [auditChart, chartData, rawChartPoints],
   );
+  const compareCounterfactualEntry = useCallback(
+    async (anchor: CounterfactualEntryAnchor) => {
+      if (!selectedPair || !chartData.length) {
+        setCounterfactualError("No chart window is available for counterfactual analysis.");
+        return;
+      }
+      const firstPoint = chartData[0];
+      const lastPoint = chartData[chartData.length - 1];
+      setCounterfactualAnchorLabel(anchor.label);
+      setCounterfactualLoading(true);
+      setCounterfactualError(null);
+      setCounterfactualStudy(null);
+      try {
+        const study = await getCounterfactualExitStudy(
+          anchor.entryId,
+          selectedPair.pair,
+          "1m",
+          firstPoint?.ts,
+          lastPoint?.ts,
+        );
+        setCounterfactualStudy(study);
+      } catch (err) {
+        setCounterfactualError(cleanApiMessage(err, "Failed to load counterfactual exit study"));
+      } finally {
+        setCounterfactualLoading(false);
+      }
+    },
+    [chartData, selectedPair],
+  );
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
@@ -1238,6 +1452,10 @@ export default function CointegratedPairPage() {
       setDetailLoading(true);
       setError(null);
       setAuditChart(null);
+      setCounterfactualStudy(null);
+      setCounterfactualError(null);
+      setCounterfactualAnchorLabel(null);
+      setCounterfactualLoading(false);
     }
     try {
       const data = await getCointegratedPairDetail(sym1, sym2, 720);
@@ -1527,8 +1745,19 @@ export default function CointegratedPairPage() {
                 chartData={chartData}
                 selectedPair={selectedPair}
                 markerLayers={markerLayers}
+                onCompareEntry={compareCounterfactualEntry}
                 fullscreen
               />
+              {counterfactualLoading || counterfactualError || counterfactualStudy || counterfactualAnchorLabel ? (
+                <div className="mt-6 rounded-lg border border-white/10 bg-gray-950/70 p-4">
+                  <CounterfactualExitComparison
+                    study={counterfactualStudy}
+                    loading={counterfactualLoading}
+                    error={counterfactualError}
+                    anchorLabel={counterfactualAnchorLabel}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1911,6 +2140,13 @@ export default function CointegratedPairPage() {
                     chartData={chartData}
                     selectedPair={selectedPair}
                     markerLayers={markerLayers}
+                    onCompareEntry={compareCounterfactualEntry}
+                  />
+                  <CounterfactualExitComparison
+                    study={counterfactualStudy}
+                    loading={counterfactualLoading}
+                    error={counterfactualError}
+                    anchorLabel={counterfactualAnchorLabel}
                   />
                 </div>
               )}

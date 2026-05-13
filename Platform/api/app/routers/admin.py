@@ -75,6 +75,15 @@ def _get_portfolio_dashboard_service():
     return get_portfolio_dashboard
 
 
+def _get_pair_history_summary_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.pair_history_service import get_pair_history_summary
+
+    return get_pair_history_summary
+
+
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
     filtered: dict[str, str] = {}
     for key, value in values.items():
@@ -336,6 +345,52 @@ def admin_pairs_health(
     _: User = Depends(require_permissions("view_pair_universe", "view_logs", "manage_bot", "switch_active_pair")),
 ):
     return get_pair_health_data()
+
+
+@router.get("/pairs/history")
+def admin_pair_history(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    pair_status: str | None = Query(default=None, alias="status"),
+    pnl_filter: str = Query(default="all", pattern="^(all|winners|losers)$"),
+    min_trade_count: int | None = Query(default=None, ge=0),
+    min_win_rate: float | None = Query(default=None, ge=0.0, le=1.0),
+    max_win_rate: float | None = Query(default=None, ge=0.0, le=1.0),
+    regime: str | None = Query(default=None),
+    hedge_drift_filter: str = Query(default="all", pattern="^(all|high_drift)$"),
+    significant_only: bool = Query(default=False),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="net_pnl_usdt"),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_history_summary_service()
+        return service(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            status=pair_status,
+            pnl_filter=pnl_filter,
+            min_trade_count=min_trade_count,
+            min_win_rate=min_win_rate,
+            max_win_rate=max_win_rate,
+            regime=regime,
+            hedge_drift_filter=hedge_drift_filter,
+            significant_only=significant_only,
+            search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            page_size=page_size,
+            refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.delete("/pairs/health/graveyard")

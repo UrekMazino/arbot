@@ -255,6 +255,31 @@ export type PairSummary = {
   tags: DashboardTag[] | string[];
 };
 
+export type PairHistoryMeta = {
+  page: number;
+  page_size: number;
+  total_rows: number;
+  total_pages: number;
+  sort_by: string;
+  sort_dir: "asc" | "desc" | string;
+};
+
+export type PairHistoryKpis = {
+  total_pairs: number;
+  tradable_pairs: number;
+  profitable_pairs: number;
+  losing_pairs: number;
+  hospital_pairs: number;
+  graveyard_pairs: number;
+};
+
+export type PairHistoryResponse = {
+  rows: PairSummary[];
+  meta: PairHistoryMeta;
+  kpis: PairHistoryKpis;
+  cache: DashboardCacheMeta;
+};
+
 export type PairPerformanceSummary = {
   pair: string | null;
   total_trades: number | null;
@@ -1280,6 +1305,48 @@ export async function getPortfolioDashboard(params?: {
   const suffix = query.toString();
   return apiRequest<PortfolioDashboardResponse>(
     `/admin/dashboard/portfolio${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getPairHistory(params?: {
+  startTs?: number;
+  endTs?: number;
+  status?: string;
+  pnlFilter?: "all" | "winners" | "losers";
+  minTradeCount?: number;
+  minWinRate?: number;
+  maxWinRate?: number;
+  regime?: string;
+  hedgeDriftFilter?: "all" | "high_drift";
+  significantOnly?: boolean;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+  refresh?: boolean;
+}): Promise<PairHistoryResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) query.set("start_ts", String(params.startTs));
+  if (params?.endTs !== undefined) query.set("end_ts", String(params.endTs));
+  if (params?.status) query.set("status", params.status);
+  if (params?.pnlFilter) query.set("pnl_filter", params.pnlFilter);
+  if (params?.minTradeCount !== undefined) query.set("min_trade_count", String(params.minTradeCount));
+  if (params?.minWinRate !== undefined) query.set("min_win_rate", String(params.minWinRate));
+  if (params?.maxWinRate !== undefined) query.set("max_win_rate", String(params.maxWinRate));
+  if (params?.regime) query.set("regime", params.regime);
+  if (params?.hedgeDriftFilter) query.set("hedge_drift_filter", params.hedgeDriftFilter);
+  if (params?.significantOnly !== undefined) query.set("significant_only", params.significantOnly ? "true" : "false");
+  if (params?.search) query.set("search", params.search);
+  if (params?.sortBy) query.set("sort_by", params.sortBy);
+  if (params?.sortDir) query.set("sort_dir", params.sortDir);
+  if (params?.page !== undefined) query.set("page", String(params.page));
+  if (params?.pageSize !== undefined) query.set("page_size", String(params.pageSize));
+  if (params?.refresh !== undefined) query.set("refresh", params.refresh ? "true" : "false");
+  const suffix = query.toString();
+  return apiRequest<PairHistoryResponse>(
+    `/admin/pairs/history${suffix ? `?${suffix}` : ""}`,
     { method: "GET" },
   );
 }

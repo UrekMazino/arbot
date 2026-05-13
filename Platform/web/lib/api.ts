@@ -189,6 +189,359 @@ export type PerformanceHistory = {
   recent_trades: PerformanceTradeRow[];
 };
 
+export type DashboardTag =
+  | "elite"
+  | "stable"
+  | "warning"
+  | "hospital"
+  | "graveyard"
+  | "high_drift"
+  | "high_slippage"
+  | "good_reverter"
+  | "bad_executor"
+  | "high_break_risk"
+  | "profitable"
+  | "losing";
+
+export type DashboardCacheMeta = {
+  cache_hit: boolean;
+  generated_at: number | null;
+  ttl_seconds: number | null;
+  refresh_supported: boolean;
+};
+
+export type TradeSummary = {
+  trade_id: string;
+  pair: string;
+  side: string | null;
+  entry_time: number | null;
+  exit_time: number | null;
+  entry_z: number | null;
+  exit_z: number | null;
+  hold_seconds: number | null;
+  pnl_usdt: number | null;
+  fees_usdt: number | null;
+  slippage_usdt: number | null;
+  exit_reason: string | null;
+  entry_hedge_ratio: number | null;
+  exit_hedge_ratio: number | null;
+  hedge_ratio_drift_pct: number | null;
+  regime_at_entry: string | null;
+  final_rank_score_at_entry: number | null;
+  bayesian_posterior_at_entry: number | null;
+};
+
+export type PairSummary = {
+  pair: string;
+  status: string | null;
+  total_trades: number | null;
+  net_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  avg_hold_seconds: number | null;
+  avg_entry_z: number | null;
+  avg_exit_z: number | null;
+  avg_hedge_ratio: number | null;
+  avg_hedge_drift_pct: number | null;
+  hospital_count: number | null;
+  graveyard_count: number | null;
+  block_reason_counts: Record<string, number>;
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  last_traded_at: number | null;
+  tags: DashboardTag[] | string[];
+};
+
+export type PairHistoryMeta = {
+  page: number;
+  page_size: number;
+  total_rows: number;
+  total_pages: number;
+  sort_by: string;
+  sort_dir: "asc" | "desc" | string;
+};
+
+export type PairHistoryKpis = {
+  total_pairs: number;
+  tradable_pairs: number;
+  profitable_pairs: number;
+  losing_pairs: number;
+  hospital_pairs: number;
+  graveyard_pairs: number;
+};
+
+export type PairHistoryResponse = {
+  rows: PairSummary[];
+  meta: PairHistoryMeta;
+  kpis: PairHistoryKpis;
+  cache: DashboardCacheMeta;
+};
+
+export type PairDetailSummaryResponse = {
+  pair: string;
+  timeframe: string;
+  status: string | null;
+  summary: {
+    total_pnl_usdt: number | null;
+    total_trades: number | null;
+    win_rate: number | null;
+    profit_factor: number | null;
+    avg_reversion_time_seconds: number | null;
+    avg_hedge_ratio: number | null;
+    current_hedge_ratio: number | null;
+    avg_hedge_drift_pct: number | null;
+    current_regime: string | null;
+    current_bayesian_posterior: number | null;
+    current_final_rank_score: number | null;
+  };
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  latest_trade: TradeSummary | null;
+  block_reason_counts: Record<string, number>;
+  counterfactual_summary: {
+    best_exit_policy: string | null;
+    avg_missed_profit_usdt: number | null;
+    avg_avoided_loss_usdt: number | null;
+    actual_exit_efficiency: number | null;
+  };
+  hedge_summary: {
+    avg_entry_hedge_ratio: number | null;
+    avg_exit_hedge_ratio: number | null;
+    avg_hedge_drift_pct: number | null;
+    equal_notional_total_pnl: number | null;
+    hedge_ratio_sized_total_pnl: number | null;
+    sizing_pnl_delta_usdt: number | null;
+  };
+  cache: DashboardCacheMeta;
+};
+
+export type PairPerformanceSummary = {
+  pair: string | null;
+  total_trades: number | null;
+  net_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  avg_hold_seconds: number | null;
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  tags: DashboardTag[] | string[];
+  metadata: Record<string, unknown>;
+};
+
+export type ReplaySignalSummary = {
+  pair: string | null;
+  total_markers: number | null;
+  entry_candidates: number | null;
+  exit_candidates: number | null;
+  blocked_signals: number | null;
+  valid_candidates: number | null;
+  blocked_candidates: number | null;
+  candidate_to_actual_conversion_rate: number | null;
+  block_reason_counts: Record<string, number>;
+  latest_signal_at: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type CounterfactualSummary = {
+  best_exit_policy: string | null;
+  avg_missed_profit_usdt: number | null;
+  avg_avoided_loss_usdt: number | null;
+  studies_count: number | null;
+  policy_win_counts: Record<string, number>;
+  metadata: Record<string, unknown>;
+};
+
+export type DecisionScoreSummary = {
+  score_source: string | null;
+  avg_regime_confidence: number | null;
+  avg_break_risk: number | null;
+  avg_bayesian_posterior: number | null;
+  avg_final_rank_score: number | null;
+  avg_liquidity_score: number | null;
+  avg_microstructure_risk: number | null;
+  avg_ev_hold_value_usdt: number | null;
+  avg_exit_score: number | null;
+  quality_gate_pass_rate: number | null;
+  unavailable_count: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type HedgeRatioSummary = {
+  avg_hedge_ratio: number | null;
+  avg_hedge_drift_pct: number | null;
+  max_hedge_drift_pct: number | null;
+  high_drift_count: number | null;
+  sizing_pnl_delta_usdt: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type RiskEventSummary = {
+  severity: string | null;
+  type: string | null;
+  message: string | null;
+  pair: string | null;
+  latest_timestamp: number | null;
+  occurrence_count: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type PortfolioSummary = {
+  total_equity_usdt: number | null;
+  session_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  open_positions: Array<Record<string, unknown>> | null;
+  active_pair: string | null;
+  bot_status: string | null;
+  open_exposure_usdt: number | null;
+  cache: DashboardCacheMeta;
+};
+
+export type PortfolioDashboardSummary = Omit<PortfolioSummary, "cache">;
+
+export type PortfolioDashboardEquityPoint = {
+  timestamp: number;
+  equity_usdt: number;
+  session_pnl_usdt?: number | null;
+  source?: string | null;
+  run_id?: string | null;
+  current_pair?: string | null;
+};
+
+export type PortfolioDashboardDailyPnlPoint = {
+  date: string;
+  pnl_usdt: number;
+  trade_count: number;
+};
+
+export type PortfolioDashboardDrawdownPoint = {
+  timestamp: number;
+  equity_usdt: number;
+  peak_equity_usdt: number;
+  drawdown_usdt: number;
+  drawdown_pct: number | null;
+};
+
+export type PortfolioDashboardOpenExposurePoint = {
+  timestamp: number;
+  pair?: string | null;
+  open_exposure_usdt: number;
+  unrealized_pnl_usdt?: number | null;
+};
+
+export type PortfolioDashboardHighlights = {
+  best_performing_pair: string | null;
+  worst_performing_pair: string | null;
+  most_traded_pair: string | null;
+  highest_drawdown_pair: string | null;
+  current_regime_state: string | null;
+  current_risk_level: string | null;
+};
+
+export type PortfolioDashboardResponse = {
+  summary: PortfolioDashboardSummary;
+  charts: {
+    equity_curve: PortfolioDashboardEquityPoint[];
+    daily_pnl: PortfolioDashboardDailyPnlPoint[];
+    drawdown_curve: PortfolioDashboardDrawdownPoint[];
+    open_exposure: PortfolioDashboardOpenExposurePoint[];
+  };
+  highlights: PortfolioDashboardHighlights;
+  cache: DashboardCacheMeta;
+};
+
+export type AnalyticsSummary = {
+  performance: Record<string, unknown>;
+  pnl_timeseries: Array<Record<string, unknown>>;
+  pair_leaderboards: PairPerformanceSummary[];
+  exit_analysis: CounterfactualSummary | Record<string, unknown> | null;
+  ml_analysis: DecisionScoreSummary | Record<string, unknown> | null;
+  hedge_analysis: HedgeRatioSummary | Record<string, unknown> | null;
+  cache: DashboardCacheMeta;
+};
+
+export type AnalyticsDashboardPerformance = {
+  total_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  average_win_usdt: number | null;
+  average_loss_usdt: number | null;
+  max_drawdown_usdt: number | null;
+  trade_count: number | null;
+  avg_hold_seconds: number | null;
+};
+
+export type AnalyticsDashboardResponse = {
+  performance: AnalyticsDashboardPerformance;
+  pnl_timeseries: {
+    daily_pnl: Array<Record<string, unknown>>;
+    equity_curve: Array<Record<string, unknown>>;
+    drawdown_curve: Array<Record<string, unknown>>;
+  };
+  pair_leaderboards: {
+    top_pairs_by_pnl: PairSummary[];
+    bottom_pairs_by_pnl: PairSummary[];
+    top_pairs_by_win_rate: PairSummary[];
+    worst_pairs_by_drawdown: PairSummary[];
+    pairs_with_high_hedge_drift: PairSummary[];
+    pairs_with_frequent_blocks: Array<PairSummary & { block_count?: number | null }>;
+  };
+  exit_analysis: {
+    best_counterfactual_exit_policy: string | null;
+    actual_exit_efficiency: number | null;
+    avg_missed_profit_usdt: number | null;
+    avg_avoided_loss_usdt: number | null;
+    exit_policy_distribution: Record<string, number>;
+  };
+  ml_analysis: {
+    pnl_by_regime: Array<Record<string, unknown>>;
+    win_rate_by_regime: Array<Record<string, unknown>>;
+    bayesian_posterior_vs_outcome: Array<Record<string, unknown>>;
+    final_rank_score_vs_outcome: Array<Record<string, unknown>>;
+    break_risk_before_losses: number | null;
+    microstructure_risk_vs_slippage: Array<Record<string, unknown>>;
+  };
+  hedge_analysis: {
+    equal_notional_total_pnl: number | null;
+    hedge_ratio_sized_total_pnl: number | null;
+    sizing_pnl_delta_usdt: number | null;
+    high_drift_trade_count: number | null;
+  };
+  cache: DashboardCacheMeta;
+};
+
+export type RiskHealthDashboardResponse = {
+  bot_status: Record<string, unknown>;
+  risk_kpis: {
+    current_drawdown_usdt: number | null;
+    daily_loss_limit_usage_pct: number | null;
+    open_exposure_usdt: number | null;
+    open_positions: number | null;
+    orphan_desync_status: string | null;
+    api_latency_ms: number | null;
+    order_failure_count: number | null;
+    orderbook_stale_count: number | null;
+  };
+  pair_health: {
+    hospital_pairs: Array<string | Record<string, unknown>>;
+    graveyard_pairs: Array<string | Record<string, unknown>>;
+    high_break_risk_pairs: Array<Record<string, unknown>>;
+    high_hedge_drift_positions: Array<Record<string, unknown>>;
+    liquidity_stress_pairs: Array<Record<string, unknown>>;
+  };
+  alerts: RiskEventSummary[];
+  cache: DashboardCacheMeta;
+};
+
 export type DataQualityIssue = {
   event_id: string;
   ts: string;
@@ -560,6 +913,19 @@ export type CointegratedPairPoint = {
   replay_exit_z?: number | null;
   replay_exit_label?: string | null;
   replay_exit_count?: number;
+  replay_buy_entry_z?: number | null;
+  replay_buy_entry_label?: string | null;
+  replay_buy_entry_count?: number;
+  replay_sell_entry_z?: number | null;
+  replay_sell_entry_label?: string | null;
+  replay_sell_entry_count?: number;
+  replay_exit_candidate_z?: number | null;
+  replay_exit_candidate_label?: string | null;
+  replay_exit_candidate_count?: number;
+  replay_blocked_signal_z?: number | null;
+  replay_blocked_signal_label?: string | null;
+  replay_blocked_signal_count?: number;
+  replay_markers?: ChartAuditReplayMarker[];
   blocked_entry_z?: number | null;
   blocked_entry_label?: string | null;
   blocked_entry_count?: number;
@@ -571,6 +937,7 @@ export type CointegratedPairPoint = {
   actual_exit_label?: string | null;
   actual_exit_count?: number;
   actual_exit_pnl_usdt?: number | null;
+  actual_markers?: ChartAuditActualMarker[];
   z_upper: number;
   z_lower: number;
   z_mid: number;
@@ -599,6 +966,188 @@ export type CointegratedPairDetail = {
       legend?: Record<string, string>;
     };
   };
+};
+
+export type ChartAuditActualMarkerType =
+  | "actual_entry"
+  | "actual_exit"
+  | "actual_partial_exit"
+  | "actual_blocked_signal"
+  | "actual_regime_exit"
+  | "actual_manual_exit"
+  | "actual_advanced_ml_shadow_recommendation";
+
+export type ChartAuditActualMarker = {
+  timestamp: number | string;
+  original_event_timestamp?: number | string | null;
+  timestamp_alignment?: "exact" | "snapped_to_nearest_candle" | string;
+  marker_category?: "actual" | string;
+  marker_type: ChartAuditActualMarkerType;
+  trade_id?: string | null;
+  entry_id?: string | null;
+  side?: string | null;
+  z_score?: number | null;
+  spread?: number | null;
+  pnl_usdt?: number | null;
+  fees_usdt?: number | null;
+  slippage_usdt?: number | null;
+  reason?: string | null;
+  block_reasons?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type ChartAuditReplayMarkerType =
+  | "replay_entry_candidate"
+  | "replay_exit_candidate"
+  | "replay_blocked_signal";
+
+export type ChartAuditReplayMarkerMetadata = Record<string, unknown> & {
+  score_source?: "stored_live" | "recomputed_point_in_time" | "current_approximate" | "unavailable" | string | null;
+  hard_validation_valid?: boolean | null;
+  regime_name?: string | null;
+  regime_confidence?: number | null;
+  break_risk?: number | null;
+  bayesian_posterior?: number | null;
+  bayesian_quality_grade?: string | null;
+  final_rank_score?: number | null;
+  microstructure_risk?: number | null;
+  liquidity_score?: number | null;
+  ev_hold_value_usdt?: number | null;
+  exit_score?: number | null;
+  quality_gate_passed?: boolean | null;
+};
+
+export type ChartAuditReplayMarker = {
+  timestamp: number | string;
+  marker_category?: "replay" | string;
+  marker_type: ChartAuditReplayMarkerType;
+  entry_id?: string | null;
+  side?: string | null;
+  z_score?: number | null;
+  spread?: number | null;
+  status?: string | null;
+  curator_state?: string | null;
+  curator_state_source?: string | null;
+  config_source?: string | null;
+  passed?: boolean | null;
+  block_reasons?: string[];
+  reason?: string | null;
+  metadata?: ChartAuditReplayMarkerMetadata;
+};
+
+export type ChartAuditStatisticalMarker = {
+  timestamp: number | string;
+  marker_category?: "statistical" | string;
+  marker_type: string;
+  spread?: number | null;
+  zscore?: number | null;
+  label?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type PairDecisionAuditChart = {
+  pair: string;
+  timeframe: string | null;
+  start_ts: number | null;
+  end_ts: number | null;
+  zscore_series: Array<Record<string, unknown>>;
+  statistical_markers: ChartAuditStatisticalMarker[];
+  replay_markers: ChartAuditReplayMarker[];
+  actual_markers: ChartAuditActualMarker[];
+  counterfactual_exit_studies: Array<Record<string, unknown>>;
+  counterfactuals_lazy_load: boolean;
+  decision_score_timeline: DecisionScoreTimelinePoint[];
+  decision_timeline_meta?: DecisionScoreTimelineMeta;
+};
+
+export type DecisionScoreTimelinePoint = {
+  timestamp: number | string;
+  score_source: "stored_live" | "recomputed_point_in_time" | "current_approximate" | "unavailable" | string;
+  curator_state?: string | null;
+  curator_state_source?: string | null;
+  regime?: string | null;
+  regime_confidence?: number | null;
+  break_risk?: number | null;
+  bayesian_posterior?: number | null;
+  bayesian_quality_grade?: string | null;
+  final_rank_score?: number | null;
+  linucb_score?: number | null;
+  trade_quality_score?: number | null;
+  liquidity_score?: number | null;
+  microstructure_risk?: number | null;
+  ev_hold_value_usdt?: number | null;
+  exit_score?: number | null;
+  quality_gate_passed?: boolean | null;
+  hedge_ratio_at_t?: number | null;
+  hedge_ratio_drift_pct?: number | null;
+  config_source?: string | null;
+  warning?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type DecisionScoreTimelineMeta = {
+  timeline_resolution: string | null;
+  timeline_downsample_method: "last" | "mean" | "none" | string;
+  timeline_original_points: number;
+  timeline_returned_points: number;
+  score_source_summary: Record<string, number>;
+  unavailable_count: number;
+  stored_live_count: number;
+  recomputed_point_in_time_count: number;
+  current_approximate_count: number;
+};
+
+export type PairDecisionAuditChartOptions = {
+  includeDecisionTimeline?: boolean;
+  maxTimelinePoints?: number;
+  downsampleMethod?: "last" | "mean" | "none";
+  resolution?: string | null;
+};
+
+export type CounterfactualExitResult = {
+  entry_id: string;
+  exit_strategy: string;
+  status: "triggered" | "not_triggered" | "forced_close_at_window_end" | "unavailable" | string;
+  entry_timestamp: number | string;
+  entry_side: string | null;
+  entry_z: number | null;
+  entry_spread: number | null;
+  hypothetical_exit_timestamp: number | string | null;
+  hypothetical_exit_z: number | null;
+  hypothetical_exit_spread: number | null;
+  hypothetical_gross_pnl_usdt: number | null;
+  hypothetical_fees_usdt: number | null;
+  hypothetical_slippage_usdt: number | null;
+  hypothetical_net_pnl_usdt: number | null;
+  hold_seconds: number | null;
+  max_adverse_excursion_z: number | null;
+  max_favorable_excursion_z: number | null;
+  max_adverse_excursion_usdt: number | null;
+  max_favorable_excursion_usdt: number | null;
+  equal_notional_pnl_usdt: number | null;
+  hedge_ratio_sized_pnl_usdt: number | null;
+  pnl_delta_usdt: number | null;
+  pnl_delta_pct: number | null;
+  note: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type CounterfactualExitStudy = {
+  entry_id: string;
+  entry_marker_type: "actual_entry" | "replay_entry_candidate" | string;
+  pair: string;
+  timeframe: string | null;
+  entry_timestamp: number | string;
+  entry_side: string | null;
+  entry_z: number | null;
+  entry_spread: number | null;
+  actual_exit_timestamp: number | string | null;
+  actual_exit_z: number | null;
+  actual_pnl_usdt: number | null;
+  results: CounterfactualExitResult[];
+  best_policy_by_pnl: string | null;
+  best_policy_by_risk_adjusted_return: string | null;
+  warnings: string[];
 };
 
 export type PairSupplyStatus = {
@@ -851,6 +1400,134 @@ export async function getPortfolioEquityCurve(
   return apiRequest<PortfolioEquityCurve>(`/runs/portfolio/equity-curve?${params.toString()}`, { method: "GET" });
 }
 
+export async function getPortfolioDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<PortfolioDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<PortfolioDashboardResponse>(
+    `/admin/dashboard/portfolio${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getAnalyticsDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<AnalyticsDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<AnalyticsDashboardResponse>(
+    `/admin/dashboard/analytics${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getRiskHealthDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<RiskHealthDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<RiskHealthDashboardResponse>(
+    `/admin/dashboard/risk-health${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getPairHistory(params?: {
+  startTs?: number;
+  endTs?: number;
+  status?: string;
+  pnlFilter?: "all" | "winners" | "losers";
+  minTradeCount?: number;
+  minWinRate?: number;
+  maxWinRate?: number;
+  regime?: string;
+  hedgeDriftFilter?: "all" | "high_drift";
+  significantOnly?: boolean;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+  refresh?: boolean;
+}): Promise<PairHistoryResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) query.set("start_ts", String(params.startTs));
+  if (params?.endTs !== undefined) query.set("end_ts", String(params.endTs));
+  if (params?.status) query.set("status", params.status);
+  if (params?.pnlFilter) query.set("pnl_filter", params.pnlFilter);
+  if (params?.minTradeCount !== undefined) query.set("min_trade_count", String(params.minTradeCount));
+  if (params?.minWinRate !== undefined) query.set("min_win_rate", String(params.minWinRate));
+  if (params?.maxWinRate !== undefined) query.set("max_win_rate", String(params.maxWinRate));
+  if (params?.regime) query.set("regime", params.regime);
+  if (params?.hedgeDriftFilter) query.set("hedge_drift_filter", params.hedgeDriftFilter);
+  if (params?.significantOnly !== undefined) query.set("significant_only", params.significantOnly ? "true" : "false");
+  if (params?.search) query.set("search", params.search);
+  if (params?.sortBy) query.set("sort_by", params.sortBy);
+  if (params?.sortDir) query.set("sort_dir", params.sortDir);
+  if (params?.page !== undefined) query.set("page", String(params.page));
+  if (params?.pageSize !== undefined) query.set("page_size", String(params.pageSize));
+  if (params?.refresh !== undefined) query.set("refresh", params.refresh ? "true" : "false");
+  const suffix = query.toString();
+  return apiRequest<PairHistoryResponse>(
+    `/admin/pairs/history${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getPairDetailSummary(params: {
+  pair: string;
+  timeframe?: string;
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<PairDetailSummaryResponse> {
+  const query = new URLSearchParams({
+    pair: params.pair,
+    timeframe: params.timeframe || "1m",
+  });
+  if (params.startTs !== undefined) query.set("start_ts", String(params.startTs));
+  if (params.endTs !== undefined) query.set("end_ts", String(params.endTs));
+  if (params.refresh !== undefined) query.set("refresh", params.refresh ? "true" : "false");
+  return apiRequest<PairDetailSummaryResponse>(
+    `/admin/pairs/detail-summary?${query.toString()}`,
+    { method: "GET" },
+  );
+}
+
 export async function getRunScorecard(runId: string): Promise<ScorecardCell[]> {
   return apiRequest<ScorecardCell[]>(`/runs/${runId}/analytics/scorecard`, { method: "GET" });
 }
@@ -973,6 +1650,52 @@ export async function getCointegratedPairDetail(
 ): Promise<CointegratedPairDetail> {
   const params = new URLSearchParams({ sym_1: sym1, sym_2: sym2, limit: String(limit) });
   return apiRequest<CointegratedPairDetail>(`/admin/cointegrated-pairs/detail?${params.toString()}`, { method: "GET" });
+}
+
+export async function getPairDecisionAuditChart(
+  pair: string,
+  timeframe = "1m",
+  startTs?: string | number | null,
+  endTs?: string | number | null,
+  options: PairDecisionAuditChartOptions = {},
+): Promise<PairDecisionAuditChart> {
+  const params = new URLSearchParams({ pair, timeframe });
+  if (startTs !== null && startTs !== undefined && String(startTs).trim()) {
+    params.set("start_ts", String(startTs));
+  }
+  if (endTs !== null && endTs !== undefined && String(endTs).trim()) {
+    params.set("end_ts", String(endTs));
+  }
+  if (options.includeDecisionTimeline !== undefined) {
+    params.set("include_decision_timeline", options.includeDecisionTimeline ? "true" : "false");
+  }
+  if (options.maxTimelinePoints !== undefined) {
+    params.set("max_timeline_points", String(options.maxTimelinePoints));
+  }
+  if (options.downsampleMethod) {
+    params.set("downsample_method", options.downsampleMethod);
+  }
+  if (options.resolution !== null && options.resolution !== undefined && String(options.resolution).trim()) {
+    params.set("resolution", String(options.resolution));
+  }
+  return apiRequest<PairDecisionAuditChart>(`/admin/cointegrated-pairs/decision-audit?${params.toString()}`, { method: "GET" });
+}
+
+export async function getCounterfactualExitStudy(
+  entryId: string,
+  pair: string,
+  timeframe = "1m",
+  startTs?: string | number | null,
+  endTs?: string | number | null,
+): Promise<CounterfactualExitStudy> {
+  const params = new URLSearchParams({ entry_id: entryId, pair, timeframe });
+  if (startTs !== null && startTs !== undefined && String(startTs).trim()) {
+    params.set("start_ts", String(startTs));
+  }
+  if (endTs !== null && endTs !== undefined && String(endTs).trim()) {
+    params.set("end_ts", String(endTs));
+  }
+  return apiRequest<CounterfactualExitStudy>(`/admin/cointegrated-pairs/decision-audit/counterfactual?${params.toString()}`, { method: "GET" });
 }
 
 export async function removeCointegratedPair(sym1: string, sym2: string): Promise<RemoveCointegratedPairResult> {

@@ -15,7 +15,7 @@ class Pair:
     symbol_1: str = "AAA-USDT-SWAP"
     symbol_2: str = "BBB-USDT-SWAP"
     timeframe: str = "1m"
-    window: int = 2880
+    window: int = 200
 
     @property
     def key(self) -> str:

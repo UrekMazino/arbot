@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -44,6 +46,69 @@ from ..services.run_runtime import get_run_runtime_snapshot
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 API_ENV_KEYS = {"OKX_API_KEY", "OKX_API_SECRET", "OKX_FLAG", "OKX_PASSPHRASE"}
+
+
+def _get_pair_decision_audit_chart_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.chart_audit.chart_audit_service import get_pair_decision_audit_chart
+
+    return get_pair_decision_audit_chart
+
+
+def _get_counterfactual_exit_study_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.chart_audit.chart_audit_service import get_counterfactual_exit_study
+
+    return get_counterfactual_exit_study
+
+
+def _get_portfolio_dashboard_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.portfolio_service import get_portfolio_dashboard
+
+    return get_portfolio_dashboard
+
+
+def _get_analytics_dashboard_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.analytics_service import get_analytics_dashboard
+
+    return get_analytics_dashboard
+
+
+def _get_risk_health_dashboard_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.risk_health_service import get_risk_health_dashboard
+
+    return get_risk_health_dashboard
+
+
+def _get_pair_history_summary_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.pair_history_service import get_pair_history_summary
+
+    return get_pair_history_summary
+
+
+def _get_pair_detail_summary_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.pair_detail_service import get_pair_detail_summary
+
+    return get_pair_detail_summary
 
 
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
@@ -95,6 +160,54 @@ def admin_run_runtime(
     db: Session = Depends(get_db_session),
 ):
     return get_run_runtime_snapshot(db, run_key=run_key, include_pair_history=True)
+
+
+@router.get("/dashboard/portfolio")
+def admin_portfolio_dashboard(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_portfolio", "view_dashboard")),
+):
+    try:
+        service = _get_portfolio_dashboard_service()
+        return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/dashboard/analytics")
+def admin_analytics_dashboard(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_analytics", "view_dashboard")),
+):
+    try:
+        service = _get_analytics_dashboard_service()
+        return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/dashboard/risk-health")
+def admin_risk_health_dashboard(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_dashboard")),
+):
+    try:
+        service = _get_risk_health_dashboard_service()
+        return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("/bot/logs/stream")
@@ -293,6 +406,76 @@ def admin_pairs_health(
     return get_pair_health_data()
 
 
+@router.get("/pairs/history")
+def admin_pair_history(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    pair_status: str | None = Query(default=None, alias="status"),
+    pnl_filter: str = Query(default="all", pattern="^(all|winners|losers)$"),
+    min_trade_count: int | None = Query(default=None, ge=0),
+    min_win_rate: float | None = Query(default=None, ge=0.0, le=1.0),
+    max_win_rate: float | None = Query(default=None, ge=0.0, le=1.0),
+    regime: str | None = Query(default=None),
+    hedge_drift_filter: str = Query(default="all", pattern="^(all|high_drift)$"),
+    significant_only: bool = Query(default=False),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="net_pnl_usdt"),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_history_summary_service()
+        return service(
+            start_ts=start_ts,
+            end_ts=end_ts,
+            status=pair_status,
+            pnl_filter=pnl_filter,
+            min_trade_count=min_trade_count,
+            min_win_rate=min_win_rate,
+            max_win_rate=max_win_rate,
+            regime=regime,
+            hedge_drift_filter=hedge_drift_filter,
+            significant_only=significant_only,
+            search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            page_size=page_size,
+            refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/pairs/detail-summary")
+def admin_pair_detail_summary(
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_detail_summary_service()
+        return service(
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
 @router.delete("/pairs/health/graveyard")
 def admin_remove_pair_from_graveyard(
     payload: dict = Body(default_factory=dict),
@@ -334,6 +517,64 @@ def admin_cointegrated_pair_detail(
 ):
     try:
         return get_cointegrated_pair_detail(sym_1=sym_1, sym_2=sym_2, limit=limit, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/decision-audit")
+def admin_cointegrated_pair_decision_audit(
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: str | None = Query(default=None),
+    end_ts: str | None = Query(default=None),
+    include_decision_timeline: bool = Query(default=False),
+    max_timeline_points: int = Query(default=1440, ge=1, le=20000),
+    downsample_method: str = Query(default="last", pattern="^(last|mean|none)$"),
+    resolution: str | None = Query(default=None),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_decision_audit_chart_service()
+        return service(
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            include_decision_timeline=include_decision_timeline,
+            max_timeline_points=max_timeline_points,
+            downsample_method=downsample_method,
+            resolution=resolution,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/cointegrated-pairs/decision-audit/counterfactual")
+def admin_cointegrated_pair_decision_audit_counterfactual(
+    entry_id: str = Query(..., min_length=1),
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: str = Query(..., min_length=1),
+    end_ts: str = Query(..., min_length=1),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_counterfactual_exit_study_service()
+        return service(
+            entry_id=entry_id,
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

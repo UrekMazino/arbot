@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   CartesianGrid,
@@ -16,15 +17,22 @@ import {
 import {
   AdminPairsHealth,
   ApiError,
+  ChartAuditActualMarker,
+  ChartAuditReplayMarker,
   CointegratedPair,
   CointegratedPairDetail,
   CointegratedPairsResponse,
+  CounterfactualExitStudy,
+  DecisionScoreTimelinePoint,
   PairSupplyStatus,
+  PairDecisionAuditChart,
   UserRecord,
   getCointegratedPairDetail,
   getCointegratedPairs,
+  getCounterfactualExitStudy,
   getAdminPairsHealth,
   getMe,
+  getPairDecisionAuditChart,
   getPairSupplyStatus,
   isUnauthorizedError,
   removeCointegratedPair,
@@ -72,6 +80,26 @@ function fmtTick(iso: string): string {
   return dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+function parseTimestampSeconds(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? value / 1000 : value;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? numeric / 1000 : numeric;
+  const parsed = new Date(text).getTime();
+  if (!Number.isFinite(parsed)) return null;
+  return parsed / 1000;
+}
+
+function fmtMarkerTimestamp(value: number | string | null | undefined): string {
+  const seconds = parseTimestampSeconds(value);
+  if (seconds === null) return "n/a";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
 function statusNumber(status: Record<string, unknown> | undefined, key: string): number | null {
   const value = status?.[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -84,6 +112,30 @@ function statusNumber(status: Record<string, unknown> | undefined, key: string):
 
 function statusBool(status: Record<string, unknown> | undefined, key: string): boolean {
   return status?.[key] === true || status?.[key] === "true";
+}
+
+function metadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | null {
+  const value = metadata?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function metadataText(metadata: Record<string, unknown> | undefined, key: string): string | null {
+  const value = metadata?.[key];
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function metadataBoolText(metadata: Record<string, unknown> | undefined, key: string): string {
+  const value = metadata?.[key];
+  if (value === true || value === "true") return "true";
+  if (value === false || value === "false") return "false";
+  return "n/a";
 }
 
 function sleep(ms: number): Promise<void> {
@@ -299,6 +351,38 @@ function ChartEmpty({ message }: { message: string }) {
 }
 
 type PairChartPoint = CointegratedPairDetail["points"][number];
+const EMPTY_PAIR_CHART_POINTS: CointegratedPairDetail["points"] = [];
+
+type MarkerLayerSettings = {
+  statistical: boolean;
+  replay: boolean;
+  actual: boolean;
+  counterfactual: boolean;
+  decisionScore: boolean;
+};
+
+const DEFAULT_MARKER_LAYERS: MarkerLayerSettings = {
+  statistical: true,
+  replay: true,
+  actual: true,
+  counterfactual: false,
+  decisionScore: false,
+};
+
+const MARKER_LAYER_OPTIONS: Array<{ key: keyof MarkerLayerSettings; label: string }> = [
+  { key: "statistical", label: "Statistical" },
+  { key: "replay", label: "Replay" },
+  { key: "actual", label: "Actual" },
+  { key: "counterfactual", label: "Counterfactual" },
+  { key: "decisionScore", label: "Scores" },
+];
+
+type MarkerDotProps = {
+  cx?: number;
+  cy?: number;
+  payload?: PairChartPoint;
+  value?: number | string | null;
+};
 
 type PairTooltipItem = {
   color?: string;
@@ -308,30 +392,441 @@ type PairTooltipItem = {
   value?: number | string | null;
 };
 
+type CounterfactualEntryAnchor = {
+  entryId: string;
+  markerType: "actual_entry" | "replay_entry_candidate";
+  label: string;
+};
+
+function actualMarkerTitle(marker: ChartAuditActualMarker): string {
+  const titles: Record<string, string> = {
+    actual_entry: "Actual entry",
+    actual_exit: "Actual exit",
+    actual_partial_exit: "Actual partial exit",
+    actual_blocked_signal: "Actual blocked signal",
+    actual_regime_exit: "Actual regime exit",
+    actual_manual_exit: "Actual manual exit",
+    actual_advanced_ml_shadow_recommendation: "Advanced ML shadow recommendation",
+  };
+  return titles[marker.marker_type] || marker.marker_type.replace(/_/g, " ");
+}
+
+function actualMarkerSummary(marker: ChartAuditActualMarker): string {
+  const pieces = [
+    marker.side,
+    marker.z_score !== null && marker.z_score !== undefined ? `Z=${fmtNumber(marker.z_score, 2)}` : null,
+    marker.pnl_usdt !== null && marker.pnl_usdt !== undefined ? `PnL ${marker.pnl_usdt >= 0 ? "+" : ""}${fmtNumber(marker.pnl_usdt, 2)} USDT` : null,
+    marker.reason,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return pieces.length ? `${actualMarkerTitle(marker)} ${pieces.join(" | ")}` : actualMarkerTitle(marker);
+}
+
+function replayMarkerTitle(marker: ChartAuditReplayMarker): string {
+  if (marker.marker_type === "replay_entry_candidate") return "Replay entry candidate";
+  if (marker.marker_type === "replay_exit_candidate") return "Replay exit candidate";
+  if (marker.marker_type === "replay_blocked_signal") return "Replay blocked signal";
+  return String(marker.marker_type).replace(/_/g, " ");
+}
+
+function replayMarkerSummary(marker: ChartAuditReplayMarker): string {
+  const pieces = [
+    marker.side,
+    marker.z_score !== null && marker.z_score !== undefined ? `Z=${fmtNumber(marker.z_score, 2)}` : null,
+    marker.passed === true ? "passed" : marker.passed === false ? "blocked" : null,
+    marker.reason,
+  ].filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return pieces.length ? `${replayMarkerTitle(marker)} ${pieces.join(" | ")}` : replayMarkerTitle(marker);
+}
+
+function appendMarkerLabel(existing: string | null | undefined, label: string): string {
+  const current = String(existing || "").trim();
+  return current ? `${current} | ${label}` : label;
+}
+
+function markerPlotValue(marker: ChartAuditActualMarker, point: PairChartPoint): number | null {
+  if (typeof marker.z_score === "number" && Number.isFinite(marker.z_score)) return marker.z_score;
+  if (typeof point.zscore === "number" && Number.isFinite(point.zscore)) return point.zscore;
+  return null;
+}
+
+function replayMarkerPlotValue(marker: ChartAuditReplayMarker, point: PairChartPoint): number | null {
+  if (typeof marker.z_score === "number" && Number.isFinite(marker.z_score)) return marker.z_score;
+  if (typeof point.zscore === "number" && Number.isFinite(point.zscore)) return point.zscore;
+  return null;
+}
+
+function nearestChartPointIndex(points: PairChartPoint[], marker: ChartAuditActualMarker): number | null {
+  const markerTs = parseTimestampSeconds(marker.timestamp);
+  if (markerTs === null || !points.length) return null;
+  let bestIndex: number | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    const pointTs = parseTimestampSeconds(point.ts);
+    if (pointTs === null) return;
+    const delta = Math.abs(pointTs - markerTs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function nearestReplayChartPointIndex(points: PairChartPoint[], marker: ChartAuditReplayMarker): number | null {
+  const markerTs = parseTimestampSeconds(marker.timestamp);
+  if (markerTs === null || !points.length) return null;
+  let bestIndex: number | null = null;
+  let bestDelta = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    const pointTs = parseTimestampSeconds(point.ts);
+    if (pointTs === null) return;
+    const delta = Math.abs(pointTs - markerTs);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function mergeReplayMarkersIntoChartData(
+  points: CointegratedPairDetail["points"],
+  replayMarkers: ChartAuditReplayMarker[],
+): CointegratedPairDetail["points"] {
+  if (!replayMarkers.length) return points;
+  const merged = points.map((point) => ({ ...point, replay_markers: [...(point.replay_markers || [])] }));
+  replayMarkers.forEach((marker) => {
+    const index = nearestReplayChartPointIndex(merged, marker);
+    if (index === null) return;
+    const point = merged[index];
+    const plotValue = replayMarkerPlotValue(marker, point);
+    const label = replayMarkerSummary(marker);
+    point.replay_markers = [...(point.replay_markers || []), marker];
+
+    if (marker.marker_type === "replay_entry_candidate" && marker.side === "BUY_SPREAD") {
+      point.replay_buy_entry_z = plotValue;
+      point.replay_buy_entry_label = appendMarkerLabel(point.replay_buy_entry_label, label);
+      point.replay_buy_entry_count = (point.replay_buy_entry_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_entry_candidate" && marker.side === "SELL_SPREAD") {
+      point.replay_sell_entry_z = plotValue;
+      point.replay_sell_entry_label = appendMarkerLabel(point.replay_sell_entry_label, label);
+      point.replay_sell_entry_count = (point.replay_sell_entry_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_exit_candidate") {
+      point.replay_exit_candidate_z = plotValue;
+      point.replay_exit_candidate_label = appendMarkerLabel(point.replay_exit_candidate_label, label);
+      point.replay_exit_candidate_count = (point.replay_exit_candidate_count || 0) + 1;
+      return;
+    }
+    if (marker.marker_type === "replay_blocked_signal") {
+      point.replay_blocked_signal_z = plotValue;
+      point.replay_blocked_signal_label = appendMarkerLabel(point.replay_blocked_signal_label, label);
+      point.replay_blocked_signal_count = (point.replay_blocked_signal_count || 0) + 1;
+    }
+  });
+  return merged;
+}
+
+function mergeActualMarkersIntoChartData(
+  points: CointegratedPairDetail["points"],
+  actualMarkers: ChartAuditActualMarker[],
+): CointegratedPairDetail["points"] {
+  if (!actualMarkers.length) return points;
+  const merged = points.map((point) => ({ ...point, actual_markers: [...(point.actual_markers || [])] }));
+  actualMarkers.forEach((marker) => {
+    const index = nearestChartPointIndex(merged, marker);
+    if (index === null) return;
+    const point = merged[index];
+    const plotValue = markerPlotValue(marker, point);
+    point.actual_markers = [...(point.actual_markers || []), marker];
+    const label = actualMarkerSummary(marker);
+    if (marker.marker_type === "actual_entry") {
+      point.actual_entry_z = plotValue;
+      point.actual_entry_label = appendMarkerLabel(point.actual_entry_label, label);
+      point.actual_entry_count = (point.actual_entry_count || 0) + 1;
+      return;
+    }
+    if (
+      marker.marker_type === "actual_exit" ||
+      marker.marker_type === "actual_partial_exit" ||
+      marker.marker_type === "actual_regime_exit" ||
+      marker.marker_type === "actual_manual_exit"
+    ) {
+      point.actual_exit_z = plotValue;
+      point.actual_exit_label = appendMarkerLabel(point.actual_exit_label, label);
+      point.actual_exit_count = (point.actual_exit_count || 0) + 1;
+      if (typeof marker.pnl_usdt === "number" && Number.isFinite(marker.pnl_usdt)) {
+        point.actual_exit_pnl_usdt = marker.pnl_usdt;
+      }
+      return;
+    }
+    if (marker.marker_type === "actual_blocked_signal") {
+      point.blocked_entry_z = plotValue;
+      point.blocked_entry_label = appendMarkerLabel(point.blocked_entry_label, label);
+      point.blocked_entry_count = (point.blocked_entry_count || 0) + 1;
+      point.blocked_entry_reason = marker.reason || point.blocked_entry_reason || null;
+    }
+  });
+  return merged;
+}
+
+function actualMarkerTooltipRows(marker: ChartAuditActualMarker): Array<[string, string]> {
+  return [
+    ["trade_id", marker.trade_id || "n/a"],
+    ["side", marker.side || "n/a"],
+    ["z_score", fmtNumber(marker.z_score, 3)],
+    ["spread", fmtNumber(marker.spread, 5)],
+    ["pnl_usdt", fmtNumber(marker.pnl_usdt, 2)],
+    ["fees_usdt", fmtNumber(marker.fees_usdt, 4)],
+    ["slippage_usdt", fmtNumber(marker.slippage_usdt, 4)],
+    ["reason", marker.reason || "n/a"],
+    ["original_event_timestamp", fmtMarkerTimestamp(marker.original_event_timestamp ?? marker.timestamp)],
+  ];
+}
+
+function replayMarkerTooltipRows(marker: ChartAuditReplayMarker): Array<[string, string]> {
+  const metadata = marker.metadata;
+  const scoreSource = metadataText(metadata, "score_source") || "unavailable";
+  const rows: Array<[string, string]> = [
+    ["side", marker.side || "n/a"],
+    ["z_score", fmtNumber(marker.z_score, 3)],
+    ["spread", fmtNumber(marker.spread, 5)],
+    ["curator_state", marker.curator_state || "n/a"],
+    ["curator_state_source", marker.curator_state_source || "n/a"],
+    ["config_source", marker.config_source || "n/a"],
+    ["passed", marker.passed === true ? "true" : marker.passed === false ? "false" : "n/a"],
+    ["block_reasons", marker.block_reasons?.length ? marker.block_reasons.join(", ") : "none"],
+    ["reason", marker.reason || "n/a"],
+    ["score_source", scoreSource],
+  ];
+  if (scoreSource === "unavailable") {
+    rows.push(["advanced_ml", "Advanced ML scores unavailable for this timestamp."]);
+    return rows;
+  }
+  rows.push(
+    ["hard_validation_valid", metadataBoolText(metadata, "hard_validation_valid")],
+    ["regime_name", metadataText(metadata, "regime_name") || "n/a"],
+    ["regime_confidence", fmtNumber(metadataNumber(metadata, "regime_confidence"), 3)],
+    ["break_risk", fmtNumber(metadataNumber(metadata, "break_risk"), 3)],
+    ["bayesian_posterior", fmtNumber(metadataNumber(metadata, "bayesian_posterior"), 3)],
+    ["bayesian_quality_grade", metadataText(metadata, "bayesian_quality_grade") || "n/a"],
+    ["final_rank_score", fmtNumber(metadataNumber(metadata, "final_rank_score"), 3)],
+    ["microstructure_risk", fmtNumber(metadataNumber(metadata, "microstructure_risk"), 3)],
+    ["liquidity_score", fmtNumber(metadataNumber(metadata, "liquidity_score"), 3)],
+    ["ev_hold_value_usdt", fmtNumber(metadataNumber(metadata, "ev_hold_value_usdt"), 2)],
+    ["exit_score", fmtNumber(metadataNumber(metadata, "exit_score"), 3)],
+    ["quality_gate_passed", metadataBoolText(metadata, "quality_gate_passed")],
+  );
+  return rows;
+}
+
+function markerPointCoordinates(props: MarkerDotProps): { cx: number; cy: number } | null {
+  const cx = Number(props.cx);
+  const cy = Number(props.cy);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  return { cx, cy };
+}
+
+function actualEntryAnchorFromPoint(point: PairChartPoint | undefined): CounterfactualEntryAnchor | null {
+  const marker = point?.actual_markers?.find((item) => item.marker_type === "actual_entry");
+  if (!marker) return null;
+  const entryId = String(marker.entry_id || (marker.trade_id ? `actual_${marker.trade_id}` : "")).trim();
+  if (!entryId) return null;
+  return {
+    entryId,
+    markerType: "actual_entry",
+    label: `Actual entry ${marker.side || ""}`.trim(),
+  };
+}
+
+function replayEntryAnchorFromPoint(point: PairChartPoint | undefined, side: "BUY_SPREAD" | "SELL_SPREAD"): CounterfactualEntryAnchor | null {
+  const marker = point?.replay_markers?.find((item) => item.marker_type === "replay_entry_candidate" && item.side === side);
+  const entryId = String(marker?.entry_id || "").trim();
+  if (!marker || !entryId) return null;
+  return {
+    entryId,
+    markerType: "replay_entry_candidate",
+    label: `Replay ${side === "BUY_SPREAD" ? "buy" : "sell"}`,
+  };
+}
+
+type MarkerInteractionProps = {
+  role?: "button";
+  tabIndex?: number;
+  className?: string;
+  "aria-label"?: string;
+  onClick?: (event: ReactMouseEvent<SVGElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<SVGElement>) => void;
+};
+
+function markerInteractionProps(
+  anchor: CounterfactualEntryAnchor | null,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+): MarkerInteractionProps {
+  if (!anchor || !onCompareEntry) return {};
+  return {
+    role: "button",
+    tabIndex: 0,
+    className: "cursor-pointer",
+    "aria-label": `Compare exits for ${anchor.label}`,
+    onClick: (event) => {
+      event.stopPropagation();
+      onCompareEntry(anchor);
+    },
+    onKeyDown: (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCompareEntry(anchor);
+      }
+    },
+  };
+}
+
+function renderActualEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      {...markerInteractionProps(actualEntryAnchorFromPoint(props.payload), onCompareEntry)}
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
+      fill="#22c55e"
+      stroke="#dcfce7"
+      strokeWidth={1.8}
+    />
+  );
+}
+
+function renderActualExitDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx + size} ${coords.cy} L ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy} Z`}
+      fill="#3b82f6"
+      stroke="#dbeafe"
+      strokeWidth={1.8}
+    />
+  );
+}
+
+function renderActualBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <g stroke="#f59e0b" strokeLinecap="round" strokeWidth={fullscreen ? 4 : 3.2}>
+      <line x1={coords.cx - size} y1={coords.cy - size} x2={coords.cx + size} y2={coords.cy + size} />
+      <line x1={coords.cx + size} y1={coords.cy - size} x2={coords.cx - size} y2={coords.cy + size} />
+    </g>
+  );
+}
+
+function renderReplayBuyEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      {...markerInteractionProps(replayEntryAnchorFromPoint(props.payload, "BUY_SPREAD"), onCompareEntry)}
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx - size} ${coords.cy + size} L ${coords.cx + size} ${coords.cy + size} Z`}
+      fill="transparent"
+      stroke="#22c55e"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplaySellEntryDot(
+  props: MarkerDotProps,
+  fullscreen: boolean,
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void,
+) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 8 : 6;
+  return (
+    <path
+      {...markerInteractionProps(replayEntryAnchorFromPoint(props.payload, "SELL_SPREAD"), onCompareEntry)}
+      d={`M ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy - size} L ${coords.cx + size} ${coords.cy - size} Z`}
+      fill="transparent"
+      stroke="#ef4444"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplayExitDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <path
+      d={`M ${coords.cx} ${coords.cy - size} L ${coords.cx + size} ${coords.cy} L ${coords.cx} ${coords.cy + size} L ${coords.cx - size} ${coords.cy} Z`}
+      fill="transparent"
+      stroke="#3b82f6"
+      strokeWidth={fullscreen ? 2.6 : 2.2}
+    />
+  );
+}
+
+function renderReplayBlockedDot(props: MarkerDotProps, fullscreen: boolean) {
+  const coords = markerPointCoordinates(props);
+  if (!coords) return null;
+  const size = fullscreen ? 7 : 5.5;
+  return (
+    <g stroke="#f59e0b" strokeLinecap="round" strokeWidth={fullscreen ? 3.2 : 2.6}>
+      <line x1={coords.cx - size} y1={coords.cy - size} x2={coords.cx + size} y2={coords.cy + size} />
+      <line x1={coords.cx + size} y1={coords.cy - size} x2={coords.cx - size} y2={coords.cy + size} />
+    </g>
+  );
+}
+
 function PairChartTooltip({
   active,
   label,
   payload,
+  markerLayers,
 }: {
   active?: boolean;
   label?: string | number;
   payload?: PairTooltipItem[];
+  markerLayers: MarkerLayerSettings;
 }) {
   if (!active || !payload?.length) return null;
   const point = payload.find((item) => item.payload)?.payload;
   if (!point) return null;
 
   const markerRows = [
-    ["Chart crossing", point.crossing_label],
-    ["Replay entry", point.replay_entry_label],
-    ["Replay exit", point.replay_exit_label],
-    ["Blocked entry", point.blocked_entry_label],
-    ["Actual entry", point.actual_entry_label],
-    ["Actual exit", point.actual_exit_label],
-  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].trim().length > 0);
+    markerLayers.statistical ? ["Chart crossing", point.crossing_label] : null,
+    markerLayers.replay ? ["Replay entry", point.replay_entry_label] : null,
+    markerLayers.replay ? ["Replay exit", point.replay_exit_label] : null,
+    markerLayers.replay ? ["Replay buy", point.replay_buy_entry_label] : null,
+    markerLayers.replay ? ["Replay sell", point.replay_sell_entry_label] : null,
+    markerLayers.replay ? ["Replay blocked", point.replay_blocked_signal_label] : null,
+    markerLayers.replay ? ["Replay exit candidate", point.replay_exit_candidate_label] : null,
+    markerLayers.actual ? ["Blocked entry", point.blocked_entry_label] : null,
+    markerLayers.actual ? ["Actual entry", point.actual_entry_label] : null,
+    markerLayers.actual ? ["Actual exit", point.actual_exit_label] : null,
+  ].filter((row): row is [string, string] => typeof row?.[1] === "string" && row[1].trim().length > 0);
+  const replayMarkers = markerLayers.replay ? point.replay_markers || [] : [];
+  const actualMarkers = markerLayers.actual ? point.actual_markers || [] : [];
 
   return (
-    <div className="max-w-xs rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-gray-800 dark:bg-gray-950">
+    <div className="max-w-sm rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-gray-800 dark:bg-gray-950">
       <p className="font-medium text-gray-900 dark:text-white">{fmtDate(String(label ?? point.ts))}</p>
       <div className="mt-1 space-y-0.5 text-gray-600 dark:text-gray-300">
         <p>Spread: {fmtNumber(point.spread, 5)}</p>
@@ -343,6 +838,34 @@ function PairChartTooltip({
             <p key={`${name}-${value}`} className="text-gray-700 dark:text-gray-200">
               <span className="font-medium">{name}:</span> {value}
             </p>
+          ))}
+        </div>
+      ) : null}
+      {replayMarkers.length ? (
+        <div className="mt-2 space-y-2 border-t border-gray-200 pt-2 dark:border-gray-800">
+          {replayMarkers.map((marker, index) => (
+            <div key={`${marker.marker_type}-${marker.entry_id || marker.timestamp}-${index}`} className="space-y-0.5 text-gray-700 dark:text-gray-200">
+              <p className="font-semibold">{replayMarkerTitle(marker)}</p>
+              {replayMarkerTooltipRows(marker).map(([name, value]) => (
+                <p key={name}>
+                  <span className="font-medium">{name}:</span> {value}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {actualMarkers.length ? (
+        <div className="mt-2 space-y-2 border-t border-gray-200 pt-2 dark:border-gray-800">
+          {actualMarkers.map((marker, index) => (
+            <div key={`${marker.marker_type}-${marker.trade_id || marker.timestamp}-${index}`} className="space-y-0.5 text-gray-700 dark:text-gray-200">
+              <p className="font-semibold">{actualMarkerTitle(marker)}</p>
+              {actualMarkerTooltipRows(marker).map(([name, value]) => (
+                <p key={name}>
+                  <span className="font-medium">{name}:</span> {value}
+                </p>
+              ))}
+            </div>
           ))}
         </div>
       ) : null}
@@ -368,14 +891,56 @@ function activeMarkerDot(fullscreen: boolean, fill: string, stroke = "#f8fafc") 
   };
 }
 
+function MarkerLayerControls({
+  layers,
+  available,
+  onChange,
+}: {
+  layers: MarkerLayerSettings;
+  available: Record<keyof MarkerLayerSettings, boolean>;
+  onChange: (key: keyof MarkerLayerSettings, enabled: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {MARKER_LAYER_OPTIONS.map((option) => {
+        const isAvailable = available[option.key];
+        return (
+          <label
+            key={option.key}
+            className={[
+              "inline-flex h-8 select-none items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold",
+              isAvailable
+                ? "cursor-pointer border-gray-200 bg-white text-gray-700 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300"
+                : "cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-600",
+            ].join(" ")}
+          >
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-50"
+              checked={isAvailable ? layers[option.key] : false}
+              disabled={!isAvailable}
+              onChange={(event) => onChange(option.key, event.target.checked)}
+            />
+            <span>{option.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function PairUniverseCharts({
   chartData,
   fullscreen = false,
   selectedPair,
+  markerLayers,
+  onCompareEntry,
 }: {
   chartData: CointegratedPairDetail["points"];
   fullscreen?: boolean;
   selectedPair: CointegratedPair;
+  markerLayers: MarkerLayerSettings;
+  onCompareEntry?: (anchor: CounterfactualEntryAnchor) => void;
 }) {
   const priceHeight = fullscreen ? 360 : 280;
   const spreadHeight = fullscreen ? 420 : 300;
@@ -413,7 +978,7 @@ function PairUniverseCharts({
             <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
             <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
-            <Tooltip content={<PairChartTooltip />} />
+            <Tooltip content={<PairChartTooltip markerLayers={markerLayers} />} />
             <Legend />
             <Line yAxisId="spread" type="monotone" dataKey="spread" name="Spread" stroke="#94a3b8" strokeWidth={1.6} dot={false} {...lineAnimation} />
             <Line
@@ -427,91 +992,318 @@ function PairUniverseCharts({
               dot={false}
               {...lineAnimation}
             />
-            <Line
-              yAxisId="spread"
-              type="linear"
-              dataKey="crossing_spread"
-              name="Chart crossing"
-              legendType="circle"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#facc15")}
-              activeDot={activeMarkerDot(fullscreen, "#facc15", "#fef3c7")}
-              isAnimationActive={false}
-            />
+            {markerLayers.statistical ? (
+              <Line
+                yAxisId="spread"
+                type="linear"
+                dataKey="crossing_spread"
+                name="Chart crossing"
+                legendType="circle"
+                stroke="transparent"
+                strokeWidth={0}
+                connectNulls={false}
+                dot={markerDot(fullscreen, "#facc15")}
+                activeDot={activeMarkerDot(fullscreen, "#facc15", "#fef3c7")}
+                isAnimationActive={false}
+              />
+            ) : null}
             <Line yAxisId="z" type="monotone" dataKey="zscore" name="Z-score" stroke="#f97316" strokeWidth={2.6} dot={false} {...lineAnimation} />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="replay_entry_z"
-              name="Replay entry"
-              legendType="triangle"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#06b6d4")}
-              activeDot={activeMarkerDot(fullscreen, "#06b6d4")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="replay_exit_z"
-              name="Replay exit"
-              legendType="diamond"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#8b5cf6")}
-              activeDot={activeMarkerDot(fullscreen, "#8b5cf6")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="blocked_entry_z"
-              name="Blocked entry"
-              legendType="cross"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#f59e0b", "#7f1d1d")}
-              activeDot={activeMarkerDot(fullscreen, "#f59e0b", "#fef3c7")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="actual_entry_z"
-              name="Actual entry"
-              legendType="star"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#22c55e")}
-              activeDot={activeMarkerDot(fullscreen, "#22c55e")}
-              isAnimationActive={false}
-            />
-            <Line
-              yAxisId="z"
-              type="linear"
-              dataKey="actual_exit_z"
-              name="Actual exit"
-              legendType="square"
-              stroke="transparent"
-              strokeWidth={0}
-              connectNulls={false}
-              dot={markerDot(fullscreen, "#e11d48")}
-              activeDot={activeMarkerDot(fullscreen, "#e11d48")}
-              isAnimationActive={false}
-            />
+            {markerLayers.replay ? (
+              <>
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_buy_entry_z"
+                  name="Replay buy"
+                  legendType="triangle"
+                  stroke="#22c55e"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderReplayBuyEntryDot(props, fullscreen, onCompareEntry)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_sell_entry_z"
+                  name="Replay sell"
+                  legendType="triangle"
+                  stroke="#ef4444"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderReplaySellEntryDot(props, fullscreen, onCompareEntry)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_exit_candidate_z"
+                  name="Replay exit"
+                  legendType="diamond"
+                  stroke="#3b82f6"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplayExitDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplayExitDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="replay_blocked_signal_z"
+                  name="Replay blocked"
+                  legendType="cross"
+                  stroke="#f59e0b"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderReplayBlockedDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderReplayBlockedDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+              </>
+            ) : null}
+            {markerLayers.actual ? (
+              <>
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="blocked_entry_z"
+                  name="Blocked entry"
+                  legendType="cross"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualBlockedDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderActualBlockedDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="actual_entry_z"
+                  name="Actual entry"
+                  legendType="triangle"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen, onCompareEntry)}
+                  activeDot={(props: MarkerDotProps) => renderActualEntryDot(props, fullscreen, onCompareEntry)}
+                  isAnimationActive={false}
+                />
+                <Line
+                  yAxisId="z"
+                  type="linear"
+                  dataKey="actual_exit_z"
+                  name="Actual exit"
+                  legendType="diamond"
+                  stroke="transparent"
+                  strokeWidth={0}
+                  connectNulls={false}
+                  dot={(props: MarkerDotProps) => renderActualExitDot(props, fullscreen)}
+                  activeDot={(props: MarkerDotProps) => renderActualExitDot(props, fullscreen)}
+                  isAnimationActive={false}
+                />
+              </>
+            ) : null}
             <Line yAxisId="z" type="monotone" dataKey="z_upper" name="+2" stroke="#ef4444" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_lower" name="-2" stroke="#22c55e" strokeDasharray="5 5" dot={false} {...lineAnimation} />
             <Line yAxisId="z" type="monotone" dataKey="z_mid" name="0" stroke="#64748b" strokeDasharray="4 6" dot={false} {...lineAnimation} />
           </LineChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "n/a";
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function prettyCounterfactualPolicy(value: string | null | undefined): string {
+  return String(value || "n/a").replace(/^exit_/, "").replace(/_/g, " ");
+}
+
+function CounterfactualExitComparison({
+  study,
+  loading,
+  error,
+  anchorLabel,
+}: {
+  study: CounterfactualExitStudy | null;
+  loading: boolean;
+  error: string | null;
+  anchorLabel: string | null;
+}) {
+  if (!loading && !error && !study && !anchorLabel) return null;
+  return (
+    <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Compare exits</h4>
+          <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            {study ? `${study.entry_marker_type} | ${fmtMarkerTimestamp(study.entry_timestamp)}` : anchorLabel || "Select an entry marker"}
+          </p>
+        </div>
+        {loading ? <StatusPill label="Loading" tone="neutral" /> : study ? <StatusPill label="Ready" tone="success" /> : null}
+      </div>
+      {error ? (
+        <p className="rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-xs text-error-700 dark:border-error-900/60 dark:bg-error-950/30 dark:text-error-300">
+          {error}
+        </p>
+      ) : null}
+      {!error && loading ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Loading counterfactual exit study...
+        </p>
+      ) : null}
+      {!error && !loading && study ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
+          <table className="min-w-full divide-y divide-gray-200 text-xs dark:divide-gray-800">
+            <thead className="bg-gray-50 text-left text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Policy</th>
+                <th className="px-3 py-2 font-semibold">Status</th>
+                <th className="px-3 py-2 font-semibold">Exit</th>
+                <th className="px-3 py-2 font-semibold">Net PnL</th>
+                <th className="px-3 py-2 font-semibold">Hold</th>
+                <th className="px-3 py-2 font-semibold">Note</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-800 dark:bg-gray-900">
+              {study.results.length ? (
+                study.results.map((result) => (
+                  <tr key={`${result.entry_id}-${result.exit_strategy}`} className="text-gray-700 dark:text-gray-200">
+                    <td className="whitespace-nowrap px-3 py-2 font-medium">{prettyCounterfactualPolicy(result.exit_strategy)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{String(result.status || "n/a").replace(/_/g, " ")}</td>
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {result.hypothetical_exit_timestamp ? fmtMarkerTimestamp(result.hypothetical_exit_timestamp) : "n/a"}
+                      <span className="ml-1 text-gray-400">Z {fmtNumber(result.hypothetical_exit_z, 3)}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 font-mono">{fmtNumber(result.hypothetical_net_pnl_usdt, 2)}</td>
+                    <td className="whitespace-nowrap px-3 py-2">{fmtDuration(result.hold_seconds)}</td>
+                    <td className="min-w-[14rem] px-3 py-2 text-gray-500 dark:text-gray-400">{result.note || "n/a"}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="px-3 py-4 text-center text-gray-500 dark:text-gray-400" colSpan={6}>
+                    No counterfactual rows returned for this entry.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {!error && !loading && study?.warnings?.length ? (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{study.warnings.join(" | ")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function fmtTimelineCell(value: number | null | undefined, digits = 3): string {
+  return value === null || value === undefined ? "n/a" : fmtNumber(value, digits);
+}
+
+function DecisionScoreTimelinePanel({
+  timeline,
+  meta,
+  loading,
+  error,
+}: {
+  timeline: DecisionScoreTimelinePoint[];
+  meta: PairDecisionAuditChart["decision_timeline_meta"] | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  const rows = timeline.slice(-10);
+  return (
+    <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Decision score timeline</h4>
+          <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            {meta
+              ? `${meta.timeline_returned_points} of ${meta.timeline_original_points} points | ${meta.timeline_downsample_method}${meta.timeline_resolution ? ` | ${meta.timeline_resolution}` : ""}`
+              : "Stored scores and point-in-time audit context"}
+          </p>
+        </div>
+        {loading ? <StatusPill label="Loading" tone="neutral" /> : rows.length ? <StatusPill label="Scores" tone="info" /> : null}
+      </div>
+      {error ? (
+        <p className="rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-xs text-error-700 dark:border-error-900/60 dark:bg-error-950/30 dark:text-error-300">
+          {error}
+        </p>
+      ) : null}
+      {!error && loading ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Loading decision score timeline...
+        </p>
+      ) : null}
+      {!error && !loading && !rows.length ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Decision score timeline unavailable or not loaded.
+        </p>
+      ) : null}
+      {!error && rows.length ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
+          <table className="min-w-full divide-y divide-gray-200 text-xs dark:divide-gray-800">
+            <thead className="bg-gray-50 text-left text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Time</th>
+                <th className="px-3 py-2 font-semibold">Regime</th>
+                <th className="px-3 py-2 font-semibold">Risk</th>
+                <th className="px-3 py-2 font-semibold">Scores</th>
+                <th className="px-3 py-2 font-semibold">Liquidity</th>
+                <th className="px-3 py-2 font-semibold">EV / Exit</th>
+                <th className="px-3 py-2 font-semibold">Hedge</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-800 dark:bg-gray-900">
+              {rows.map((row) => (
+                <tr key={`${row.timestamp}-${row.score_source}`} className="text-gray-700 dark:text-gray-200">
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {fmtMarkerTimestamp(row.timestamp)}
+                    <span className="ml-1 text-gray-400">{row.score_source}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {row.regime || "n/a"}
+                    <span className="ml-1 text-gray-400">curator {row.curator_state || "n/a"}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    conf {fmtTimelineCell(row.regime_confidence)}
+                    <span className="ml-1 text-gray-400">break {fmtTimelineCell(row.break_risk)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    bayes {fmtTimelineCell(row.bayesian_posterior)}
+                    <span className="ml-1 text-gray-400">rank {fmtTimelineCell(row.final_rank_score)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    liq {fmtTimelineCell(row.liquidity_score)}
+                    <span className="ml-1 text-gray-400">micro {fmtTimelineCell(row.microstructure_risk)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    EV {fmtTimelineCell(row.ev_hold_value_usdt, 2)}
+                    <span className="ml-1 text-gray-400">exit {fmtTimelineCell(row.exit_score)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    beta {fmtTimelineCell(row.hedge_ratio_at_t)}
+                    <span className="ml-1 text-gray-400">drift {fmtTimelineCell(row.hedge_ratio_drift_pct)}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -541,6 +1333,15 @@ export default function CointegratedPairPage() {
   } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
+  const [auditChart, setAuditChart] = useState<PairDecisionAuditChart | null>(null);
+  const [counterfactualStudy, setCounterfactualStudy] = useState<CounterfactualExitStudy | null>(null);
+  const [counterfactualLoading, setCounterfactualLoading] = useState(false);
+  const [counterfactualError, setCounterfactualError] = useState<string | null>(null);
+  const [counterfactualAnchorLabel, setCounterfactualAnchorLabel] = useState<string | null>(null);
+  const [decisionTimelineLoading, setDecisionTimelineLoading] = useState(false);
+  const [decisionTimelineError, setDecisionTimelineError] = useState<string | null>(null);
+  const [decisionTimelineLoadedKey, setDecisionTimelineLoadedKey] = useState<string | null>(null);
+  const [markerLayers, setMarkerLayers] = useState<MarkerLayerSettings>(DEFAULT_MARKER_LAYERS);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
   const [showGraph, setShowGraph] = useState(true);
   const [query, setQuery] = useState("");
@@ -553,6 +1354,9 @@ export default function CointegratedPairPage() {
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
   const auth = useMemo(() => ({ email: getStoredAdminEmail(), hasToken: true }), []);
+  const updateMarkerLayer = useCallback((key: keyof MarkerLayerSettings, enabled: boolean) => {
+    setMarkerLayers((current) => ({ ...current, [key]: enabled }));
+  }, []);
 
   useEffect(() => {
     getMe()
@@ -619,6 +1423,16 @@ export default function CointegratedPairPage() {
     selectedPairRef.current = selectedPair;
   }, [selectedPair]);
 
+  useEffect(() => {
+    setCounterfactualStudy(null);
+    setCounterfactualError(null);
+    setCounterfactualAnchorLabel(null);
+    setCounterfactualLoading(false);
+    setDecisionTimelineError(null);
+    setDecisionTimelineLoading(false);
+    setDecisionTimelineLoadedKey(null);
+  }, [selectedPair?.id]);
+
   const filteredPairs = useMemo(
     () => (catalog?.pairs || []).filter((pair) => pairMatches(pair, query)),
     [catalog, query],
@@ -642,7 +1456,116 @@ export default function CointegratedPairPage() {
   const curatorWatchCount = Number(curatorCounts.watch || 0) + Number(curatorCounts.degraded || 0) + Number(curatorCounts.hospital_candidate || 0);
   const detailMatchesSelection = Boolean(selectedPair && detail && detail.pair.id === selectedPair.id);
   const detailPairMismatch = Boolean(selectedPair && detail && detail.pair.id !== selectedPair.id);
-  const chartData = detailMatchesSelection ? detail?.points || [] : [];
+  const rawChartPoints = detailMatchesSelection ? detail?.points || EMPTY_PAIR_CHART_POINTS : EMPTY_PAIR_CHART_POINTS;
+  const chartData = useMemo(() => {
+    if (!detailMatchesSelection || !rawChartPoints.length) return [];
+    const auditMatchesSelection = auditChart?.pair === selectedPair?.pair;
+    const withReplayMarkers = mergeReplayMarkersIntoChartData(
+      rawChartPoints,
+      auditMatchesSelection ? auditChart?.replay_markers || [] : [],
+    );
+    return mergeActualMarkersIntoChartData(
+      withReplayMarkers,
+      auditMatchesSelection ? auditChart?.actual_markers || [] : [],
+    );
+  }, [auditChart, detailMatchesSelection, rawChartPoints, selectedPair?.pair]);
+  const decisionTimelineKey = useMemo(() => {
+    if (!selectedPair || !chartData.length) return null;
+    const firstPoint = chartData[0];
+    const lastPoint = chartData[chartData.length - 1];
+    return `${selectedPair.id}:${firstPoint?.ts || ""}:${lastPoint?.ts || ""}`;
+  }, [chartData, selectedPair]);
+  const markerLayerAvailability = useMemo<Record<keyof MarkerLayerSettings, boolean>>(
+    () => ({
+      statistical:
+        rawChartPoints.some((point) => point.crossing_spread !== null && point.crossing_spread !== undefined) ||
+        Boolean(auditChart?.statistical_markers?.length),
+      replay:
+        chartData.some(
+          (point) =>
+            Boolean(point.replay_markers?.length) ||
+            (point.replay_buy_entry_z !== null && point.replay_buy_entry_z !== undefined) ||
+            (point.replay_sell_entry_z !== null && point.replay_sell_entry_z !== undefined) ||
+            (point.replay_exit_candidate_z !== null && point.replay_exit_candidate_z !== undefined) ||
+            (point.replay_blocked_signal_z !== null && point.replay_blocked_signal_z !== undefined),
+        ) || Boolean(auditChart?.replay_markers?.length),
+      actual:
+        chartData.some(
+          (point) =>
+            Boolean(point.actual_markers?.length) ||
+            (point.actual_entry_z !== null && point.actual_entry_z !== undefined) ||
+            (point.actual_exit_z !== null && point.actual_exit_z !== undefined) ||
+            (point.blocked_entry_z !== null && point.blocked_entry_z !== undefined),
+        ) || Boolean(auditChart?.actual_markers?.length),
+      counterfactual: Boolean(auditChart?.counterfactual_exit_studies?.length),
+      decisionScore: Boolean(detailMatchesSelection && rawChartPoints.length),
+    }),
+    [auditChart, chartData, detailMatchesSelection, rawChartPoints],
+  );
+  const compareCounterfactualEntry = useCallback(
+    async (anchor: CounterfactualEntryAnchor) => {
+      if (!selectedPair || !chartData.length) {
+        setCounterfactualError("No chart window is available for counterfactual analysis.");
+        return;
+      }
+      const firstPoint = chartData[0];
+      const lastPoint = chartData[chartData.length - 1];
+      setCounterfactualAnchorLabel(anchor.label);
+      setCounterfactualLoading(true);
+      setCounterfactualError(null);
+      setCounterfactualStudy(null);
+      try {
+        const study = await getCounterfactualExitStudy(
+          anchor.entryId,
+          selectedPair.pair,
+          "1m",
+          firstPoint?.ts,
+          lastPoint?.ts,
+        );
+        setCounterfactualStudy(study);
+      } catch (err) {
+        setCounterfactualError(cleanApiMessage(err, "Failed to load counterfactual exit study"));
+      } finally {
+        setCounterfactualLoading(false);
+      }
+    },
+    [chartData, selectedPair],
+  );
+  const loadDecisionTimeline = useCallback(async () => {
+    if (!selectedPair || !chartData.length || !decisionTimelineKey || decisionTimelineLoading) return;
+    if (decisionTimelineLoadedKey === decisionTimelineKey) return;
+    const firstPoint = chartData[0];
+    const lastPoint = chartData[chartData.length - 1];
+    setDecisionTimelineLoading(true);
+    setDecisionTimelineError(null);
+    try {
+      const timelineData = await getPairDecisionAuditChart(
+        selectedPair.pair,
+        "1m",
+        firstPoint?.ts,
+        lastPoint?.ts,
+        {
+          includeDecisionTimeline: true,
+          maxTimelinePoints: 360,
+          downsampleMethod: "last",
+          resolution: "5m",
+        },
+      );
+      setAuditChart(timelineData);
+      setDecisionTimelineLoadedKey(decisionTimelineKey);
+    } catch (err) {
+      setDecisionTimelineError(cleanApiMessage(err, "Failed to load decision score timeline"));
+      setDecisionTimelineLoadedKey(decisionTimelineKey);
+    } finally {
+      setDecisionTimelineLoading(false);
+    }
+  }, [chartData, decisionTimelineKey, decisionTimelineLoadedKey, decisionTimelineLoading, selectedPair]);
+
+  useEffect(() => {
+    if (!markerLayers.decisionScore) return;
+    void loadDecisionTimeline();
+  }, [loadDecisionTimeline, markerLayers.decisionScore]);
+
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
@@ -675,17 +1598,37 @@ export default function CointegratedPairPage() {
       foregroundDetailRequestIdRef.current = requestId;
       setDetailLoading(true);
       setError(null);
+      setAuditChart(null);
+      setCounterfactualStudy(null);
+      setCounterfactualError(null);
+      setCounterfactualAnchorLabel(null);
+      setCounterfactualLoading(false);
+      setDecisionTimelineError(null);
+      setDecisionTimelineLoading(false);
+      setDecisionTimelineLoadedKey(null);
     }
     try {
       const data = await getCointegratedPairDetail(sym1, sym2, 720);
       if (detailRequestIdRef.current !== requestId) return;
       if (options.expectedPairId && selectedPairRef.current?.id !== options.expectedPairId) return;
       setDetail(data);
+      const firstPoint = data.points[0];
+      const lastPoint = data.points[data.points.length - 1];
+      const auditData = await getPairDecisionAuditChart(
+        `${sym1}/${sym2}`,
+        "1m",
+        firstPoint?.ts,
+        lastPoint?.ts,
+      ).catch(() => null);
+      if (detailRequestIdRef.current !== requestId) return;
+      if (options.expectedPairId && selectedPairRef.current?.id !== options.expectedPairId) return;
+      setAuditChart(auditData);
     } catch (err) {
       if (detailRequestIdRef.current !== requestId) return;
       if (!background) {
         setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load selected pair graph");
         setDetail(null);
+        setAuditChart(null);
       }
     } finally {
       if (background) {
@@ -744,6 +1687,7 @@ export default function CointegratedPairPage() {
   useEffect(() => {
     if (!selectedSym1 || !selectedSym2) {
       setDetail(null);
+      setAuditChart(null);
       setGraphFullscreen(false);
       return;
     }
@@ -928,6 +1872,13 @@ export default function CointegratedPairPage() {
                 <p className="font-mono text-sm font-semibold text-white sm:text-base">{selectedPair.pair}</p>
                 <p className="mt-1 text-xs text-gray-400">Pair Universe fullscreen chart</p>
               </div>
+              <div className="hidden min-w-0 flex-1 justify-end sm:flex">
+                <MarkerLayerControls
+                  layers={markerLayers}
+                  available={markerLayerAvailability}
+                  onChange={updateMarkerLayer}
+                />
+              </div>
               <button
                 type="button"
                 className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-white hover:bg-white/15"
@@ -939,7 +1890,34 @@ export default function CointegratedPairPage() {
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-4 custom-scrollbar sm:p-6">
-              <PairUniverseCharts key={`fullscreen-${selectedPair.id}`} chartData={chartData} selectedPair={selectedPair} fullscreen />
+              <PairUniverseCharts
+                key={`fullscreen-${selectedPair.id}`}
+                chartData={chartData}
+                selectedPair={selectedPair}
+                markerLayers={markerLayers}
+                onCompareEntry={compareCounterfactualEntry}
+                fullscreen
+              />
+              {markerLayers.decisionScore ? (
+                <div className="mt-6 rounded-lg border border-white/10 bg-gray-950/70 p-4">
+                  <DecisionScoreTimelinePanel
+                    timeline={auditChart?.decision_score_timeline || []}
+                    meta={auditChart?.decision_timeline_meta}
+                    loading={decisionTimelineLoading}
+                    error={decisionTimelineError}
+                  />
+                </div>
+              ) : null}
+              {counterfactualLoading || counterfactualError || counterfactualStudy || counterfactualAnchorLabel ? (
+                <div className="mt-6 rounded-lg border border-white/10 bg-gray-950/70 p-4">
+                  <CounterfactualExitComparison
+                    study={counterfactualStudy}
+                    loading={counterfactualLoading}
+                    error={counterfactualError}
+                    anchorLabel={counterfactualAnchorLabel}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1311,7 +2289,34 @@ export default function CointegratedPairPage() {
               ) : !chartData.length ? (
                 <ChartEmpty message="No chart data available for this pair." />
               ) : (
-                <PairUniverseCharts key={selectedPair.id} chartData={chartData} selectedPair={selectedPair} />
+                <div className="space-y-4">
+                  <MarkerLayerControls
+                    layers={markerLayers}
+                    available={markerLayerAvailability}
+                    onChange={updateMarkerLayer}
+                  />
+                  <PairUniverseCharts
+                    key={selectedPair.id}
+                    chartData={chartData}
+                    selectedPair={selectedPair}
+                    markerLayers={markerLayers}
+                    onCompareEntry={compareCounterfactualEntry}
+                  />
+                  {markerLayers.decisionScore ? (
+                    <DecisionScoreTimelinePanel
+                      timeline={auditChart?.decision_score_timeline || []}
+                      meta={auditChart?.decision_timeline_meta}
+                      loading={decisionTimelineLoading}
+                      error={decisionTimelineError}
+                    />
+                  ) : null}
+                  <CounterfactualExitComparison
+                    study={counterfactualStudy}
+                    loading={counterfactualLoading}
+                    error={counterfactualError}
+                    anchorLabel={counterfactualAnchorLabel}
+                  />
+                </div>
               )}
             </PanelCard>
 

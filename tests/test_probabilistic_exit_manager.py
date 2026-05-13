@@ -21,7 +21,7 @@ from core.trade_management.probabilistic_exit_manager import (
 
 @dataclass(frozen=True)
 class Pair:
-    key: str = "AAA|BBB|1m|2880"
+    key: str = "AAA|BBB|1m|200"
 
 
 class FakeExistingBotAdapter:

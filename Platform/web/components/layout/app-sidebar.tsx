@@ -14,11 +14,12 @@ type AppSidebarProps = {
 
 export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
   const { isExpanded, isMobileOpen, closeMobileSidebar } = useSidebar();
+  const normalizedActiveHref = normalizeHref(activeHref);
   const [openSubmenus, setOpenSubmenus] = useState<Set<string>>(() => {
     // Auto-open submenus that contain the active page
     const toOpen = new Set<string>();
     navItems.forEach((item) => {
-      if (item.children?.some((child) => child.href === activeHref)) {
+      if (item.children?.some((child) => normalizeHref(child.href) === normalizedActiveHref)) {
         toOpen.add(item.href);
       }
     });
@@ -85,8 +86,9 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
             </p>
             <ul className="space-y-1.5">
               {section.items.map((item) => {
-                const active = item.href === activeHref || (item.children?.some((child) => child.href === activeHref));
-                const hasChildren = item.children && item.children.length > 0;
+                const active = normalizeHref(item.href) === normalizedActiveHref || (item.children?.some((child) => normalizeHref(child.href) === normalizedActiveHref));
+                const visibleChildren = item.children?.filter((child) => !child.hiddenFromSidebar) ?? [];
+                const hasChildren = visibleChildren.length > 0;
                 const submenuOpen = isSubmenuOpen(item.href);
 
                 return (
@@ -120,8 +122,8 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
                         </button>
                         {submenuOpen && showLabel && (
                           <ul className="ml-4 mt-1 space-y-1 border-l-2 border-gray-200 pl-2 dark:border-gray-700">
-                            {item.children!.map((child) => {
-                              const childActive = child.href === activeHref;
+                            {visibleChildren.map((child) => {
+                              const childActive = normalizeHref(child.href) === normalizedActiveHref;
                               return (
                                 <li key={child.href}>
                                   <Link
@@ -172,4 +174,12 @@ export function AppSidebar({ activeHref, navItems }: AppSidebarProps) {
       </nav>
     </aside>
   );
+}
+
+function normalizeHref(href: string): string {
+  const path = String(href || "").split(/[?#]/)[0]?.trim() || "";
+  if (path.length > 1) {
+    return path.replace(/\/+$/, "");
+  }
+  return path || "/";
 }

@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+from core.chart_audit import chart_audit_service as service
+from core.chart_audit.curator_state_source import CuratorStateAtResult
+from core.chart_audit.marker_types import ActualMarkerType, CuratorState, ReplayMarkerType, StatisticalMarkerType
+from core.chart_audit.replay_snapshot import ReplayConfigSnapshot
+
+
+def test_pair_decision_audit_chart_returns_phase_1_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service,
+        "_load_existing_pair_chart_detail",
+        lambda pair, timeframe, start_ts, end_ts: {
+            "points": [
+                {
+                    "ts": 1_715_000_000,
+                    "zscore": None,
+                    "spread": -4.20,
+                    "spread_mean": -4.18,
+                    "crossing_spread": None,
+                    "crossing_label": None,
+                },
+                {
+                    "ts": 1_715_000_060,
+                    "zscore": 0.12,
+                    "spread": -4.18,
+                    "spread_mean": -4.18,
+                    "crossing_spread": -4.18,
+                    "crossing_label": "#1",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_load_actual_records",
+        lambda pair, start_ts, end_ts: [
+            {
+                "event_type": "trade_open",
+                "event_id": "evt-entry",
+                "timestamp": 1_715_000_023.527,
+                "payload": {
+                    "trade_id": "trade-1",
+                    "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                    "side": "buy_spread",
+                    "z_score": -2.1,
+                },
+            }
+        ],
+    )
+
+    payload = service.get_pair_decision_audit_chart(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "1m",
+        1_715_000_000,
+        1_715_000_120,
+    )
+
+    assert payload["pair"] == "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    assert payload["timeframe"] == "1m"
+    assert len(payload["zscore_series"]) == 2
+    assert payload["zscore_series"][1]["zscore"] == 0.12
+    assert payload["statistical_markers"] == [
+        {
+            "timestamp": 1_715_000_060.0,
+            "marker_category": "statistical",
+            "marker_type": StatisticalMarkerType.HISTORICAL_MEAN_CROSSING.value,
+            "spread": -4.18,
+            "zscore": 0.12,
+            "label": "#1",
+            "metadata": {"source": "existing_chart_data"},
+        }
+    ]
+    assert payload["replay_markers"] == []
+    assert payload["counterfactual_exit_studies"] == []
+    assert payload["counterfactuals_lazy_load"] is True
+    assert payload["decision_score_timeline"] == []
+
+    actual_marker = payload["actual_markers"][0]
+    assert actual_marker["marker_type"] == ActualMarkerType.ACTUAL_ENTRY.value
+    assert actual_marker["entry_id"] == "actual_trade-1"
+    assert actual_marker["timestamp"] == 1_715_000_023.527
+    assert actual_marker["original_event_timestamp"] == 1_715_000_023.527
+    assert actual_marker["timestamp_alignment"] == "exact"
+
+
+def test_pair_decision_audit_chart_degrades_when_sources_are_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(service, "_load_existing_pair_chart_detail", lambda *args: None)
+    monkeypatch.setattr(service, "_load_actual_records", lambda *args: [])
+
+    payload = service.get_pair_decision_audit_chart(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "1m",
+        None,
+        None,
+    )
+
+    assert payload["zscore_series"] == []
+    assert payload["statistical_markers"] == []
+    assert payload["actual_markers"] == []
+    assert payload["replay_markers"] == []
+    assert payload["counterfactual_exit_studies"] == []
+    assert payload["counterfactuals_lazy_load"] is True
+    assert payload["decision_score_timeline"] == []
+
+
+def test_pair_decision_audit_chart_returns_phase_2_replay_markers(monkeypatch) -> None:
+    base_ts = 1_715_000_000
+    spreads = [0.0, 0.0, 0.0, 0.0, 0.0, -10.0]
+    monkeypatch.setattr(
+        service,
+        "_load_existing_pair_chart_detail",
+        lambda pair, timeframe, start_ts, end_ts: {
+            "points": [
+                {
+                    "ts": base_ts + idx * 60,
+                    "spread": spread,
+                    "crossing_spread": None,
+                }
+                for idx, spread in enumerate(spreads)
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_load_actual_records",
+        lambda *args: [
+            {
+                "event_type": "advanced_ml_regime_shadow",
+                "timestamp": base_ts - 60,
+                "payload": {
+                    "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                    "advanced_regime": "mean_reverting",
+                    "confidence": 0.81,
+                    "break_risk": 0.22,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "curator_state_at",
+        lambda pair, timestamp: CuratorStateAtResult(
+            curator_state=CuratorState.TRADABLE,
+            curator_state_source="historical",
+            transition_timestamp=timestamp,
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "config_at",
+        lambda timestamp: ReplayConfigSnapshot(
+            config_version="test",
+            config_source="historical",
+            entry_z_threshold=2.0,
+            exit_z_threshold=0.35,
+            persistence_candles=1,
+            max_hold_seconds=3600.0,
+            min_zero_crossings=0,
+        ),
+    )
+
+    payload = service.get_pair_decision_audit_chart(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "1m",
+        base_ts,
+        base_ts + 5 * 60,
+    )
+
+    assert payload["counterfactual_exit_studies"] == []
+    assert payload["counterfactuals_lazy_load"] is True
+    assert payload["decision_score_timeline"] == []
+    assert len(payload["replay_markers"]) == 1
+
+    marker = payload["replay_markers"][0]
+    assert marker["marker_type"] == ReplayMarkerType.REPLAY_BLOCKED_SIGNAL.value
+    assert marker["side"] == "BUY_SPREAD"
+    assert marker["timestamp"] == base_ts + 5 * 60
+    assert marker["curator_state"] == CuratorState.TRADABLE.value
+    assert marker["config_source"] == "historical"
+    assert marker["metadata"]["score_source"] == "stored_live"
+    assert marker["metadata"]["regime_name"] == "mean_reverting"
+    assert marker["metadata"]["break_risk"] == 0.22

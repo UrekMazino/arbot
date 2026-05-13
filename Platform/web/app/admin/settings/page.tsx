@@ -154,7 +154,7 @@ const SETTING_TOOLTIPS: Record<string, SettingTooltip> = {
   // Strategy settings (exposed ones)
   STRATEGY_TIMEFRAME: { description: "Strategy candle timeframe used for discovery scans", default: "1m" },
   STRATEGY_Z_SCORE_WINDOW: { description: "Rolling window used for Strategy-side Z-score analytics", default: "60" },
-  STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "2880" },
+  STRATEGY_KLINE_LIMIT: { description: "Historical candle count fetched per symbol for strategy discovery", default: "200" },
   STRATEGY_INTERNAL_KLINE_WORKERS: { description: "Parallel worker count for Strategy kline fetches; lower values reduce CPU and request bursts", default: "2" },
   STRATEGY_INTERNAL_MIN_PAIRS: { description: "Minimum usable pairs Strategy tries to find before accepting a fallback scan result", default: "3" },
   STRATEGY_STARTUP_RETRY_SECONDS: { description: "Sleep seconds between startup Strategy discovery retries when no pairs are found", default: "5" },

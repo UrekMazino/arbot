@@ -8,6 +8,7 @@ export type AdminNavItem = {
   hint?: string;
   group?: string;
   icon?: SidebarIconName;
+  hiddenFromSidebar?: boolean;
   requiredPermissions?: string[];
   children?: AdminNavItem[];
 };
@@ -16,50 +17,97 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   {
     href: "/admin/dashboard",
     label: "Dashboard",
-    hint: "Analytics & Portfolio",
+    hint: "Portfolio, analytics, risk",
     group: "Monitor",
     icon: "dashboard",
     requiredPermissions: ["view_dashboard"],
     children: [
       {
-        href: "/admin/dashboard/analytics",
-        label: "Analytics",
-        group: "Monitor",
-        requiredPermissions: ["view_analytics"],
-      },
-      {
         href: "/admin/dashboard/portfolio",
         label: "Portfolio",
-        group: "Monitor",
-        requiredPermissions: ["view_portfolio"],
+        group: "Dashboard",
+        requiredPermissions: ["view_portfolio", "view_dashboard"],
       },
       {
-        href: "/admin/dashboard/cointegrated-pair",
-        label: "Cointegration",
-        group: "Monitor",
+        href: "/admin/dashboard/analytics",
+        label: "Analytics",
+        group: "Dashboard",
+        requiredPermissions: ["view_analytics", "view_dashboard"],
+      },
+      {
+        href: "/admin/dashboard/risk-health",
+        label: "Risk & Health",
+        group: "Dashboard",
+        requiredPermissions: ["view_dashboard"],
+      },
+    ],
+  },
+  {
+    href: "/admin/dashboard/pairs",
+    label: "Pairs",
+    hint: "Review pair performance",
+    group: "Monitor",
+    icon: "dashboard",
+    requiredPermissions: ["view_pair_universe", "view_dashboard"],
+    children: [
+      {
+        href: "/admin/dashboard/pairs/history",
+        label: "Pair History",
+        group: "Pairs",
+        requiredPermissions: ["view_pair_universe", "view_dashboard"],
+      },
+      {
+        href: "/admin/dashboard/pair-detail",
+        label: "Pair Detail",
+        group: "Pairs",
+        hiddenFromSidebar: true,
         requiredPermissions: ["view_pair_universe", "view_dashboard"],
       },
     ],
   },
   {
-    href: "/admin/console",
-    label: "Console",
-    hint: "Control plane",
+    href: "/admin/dashboard/audit",
+    label: "Audit",
+    hint: "Chart decision audit",
+    group: "Monitor",
+    icon: "dashboard",
+    requiredPermissions: ["view_pair_universe", "view_dashboard"],
+    children: [
+      {
+        href: "/admin/dashboard/cointegrated-pair",
+        label: "Chart Decision Audit",
+        group: "Audit",
+        requiredPermissions: ["view_pair_universe", "view_dashboard"],
+      },
+    ],
+  },
+  {
+    href: "/admin/bot",
+    label: "Bot",
+    hint: "Console and logs",
     group: "Operate",
     icon: "console",
-    requiredPermissions: [
-      "view_logs",
-      "manage_bot",
-      "switch_active_pair",
-      "manage_logs_reports",
-      "view_reports",
+    requiredPermissions: ["view_logs", "manage_bot"],
+    children: [
+      {
+        href: "/admin/console",
+        label: "Console",
+        group: "Bot",
+        requiredPermissions: ["view_logs", "manage_bot"],
+      },
+      {
+        href: "/admin/console/logs",
+        label: "Logs",
+        group: "Bot",
+        requiredPermissions: ["view_logs"],
+      },
     ],
   },
   {
     href: "/admin/settings",
     label: "Settings",
     hint: "Configuration & credentials",
-    group: "Operate",
+    group: "Settings",
     icon: "settings",
     requiredPermissions: ["edit_settings", "manage_api"],
   },
@@ -67,7 +115,7 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     href: "/admin/access",
     label: "Access",
     hint: "Users, roles, permissions",
-    group: "Operate",
+    group: "Settings",
     icon: "access",
     requiredPermissions: ["manage_users", "manage_roles"],
   },
@@ -98,10 +146,19 @@ export function hasAnyPermission(user: UserRecord | null | undefined, permission
   return permissionIds.some((permissionId) => granted.has(permissionId));
 }
 
+export function normalizeAdminPath(href: string): string {
+  const path = String(href || "").split(/[?#]/)[0]?.trim() || "";
+  if (path.length > 1) {
+    return path.replace(/\/+$/, "");
+  }
+  return path || "/";
+}
+
 export function canAccessAdminPath(user: UserRecord | null | undefined, href: string): boolean {
+  const targetHref = normalizeAdminPath(href);
   const findItem = (items: AdminNavItem[]): AdminNavItem | undefined => {
     for (const item of items) {
-      if (item.href === href) return item;
+      if (normalizeAdminPath(item.href) === targetHref) return item;
       if (item.children) {
         const found = findItem(item.children);
         if (found) return found;
@@ -125,6 +182,7 @@ export function getAdminNavItems(user: UserRecord | null | undefined): Omit<Admi
     hint: item.hint,
     group: item.group,
     icon: item.icon,
+    hiddenFromSidebar: item.hiddenFromSidebar,
   });
 
   const processItems = (items: AdminNavItem[]) => {
@@ -165,7 +223,8 @@ export function getFirstAccessibleAdminPath(user: UserRecord | null | undefined)
     const first = items[0];
     // If the first item has children, return the first child's href
     if (first.children && first.children.length > 0) {
-      return first.children[0].href || null;
+      const firstVisibleChild = first.children.find((child) => !child.hiddenFromSidebar);
+      return firstVisibleChild?.href || null;
     }
     return first.href || null;
   }

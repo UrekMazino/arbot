@@ -248,7 +248,7 @@ def test_replay_trade_markers_use_rolling_zscore_rules(monkeypatch):
     monkeypatch.setenv("STATBOT_MIN_PERSIST_BARS", "3")
     monkeypatch.setenv("STATBOT_ENTRY_MIN_QUALIFIED_BARS", "2")
     monkeypatch.setenv("STATBOT_ENTRY_EXTREME_CLEAN_BARS", "2")
-    monkeypatch.setenv("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", "60")
+    monkeypatch.setenv("STATBOT_ENTRY_MIN_CONTINUOUS_SECONDS", "0")
 
     base_ts = 1_776_700_000
     zscores = [None, -1.0, -2.1, -2.2, -2.1, -0.2, 1.8, 2.05, 2.2, 0.1]

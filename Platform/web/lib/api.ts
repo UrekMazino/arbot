@@ -703,7 +703,52 @@ export type PairDecisionAuditChart = {
   actual_markers: ChartAuditActualMarker[];
   counterfactual_exit_studies: Array<Record<string, unknown>>;
   counterfactuals_lazy_load: boolean;
-  decision_score_timeline: Array<Record<string, unknown>>;
+  decision_score_timeline: DecisionScoreTimelinePoint[];
+  decision_timeline_meta?: DecisionScoreTimelineMeta;
+};
+
+export type DecisionScoreTimelinePoint = {
+  timestamp: number | string;
+  score_source: "stored_live" | "recomputed_point_in_time" | "current_approximate" | "unavailable" | string;
+  curator_state?: string | null;
+  curator_state_source?: string | null;
+  regime?: string | null;
+  regime_confidence?: number | null;
+  break_risk?: number | null;
+  bayesian_posterior?: number | null;
+  bayesian_quality_grade?: string | null;
+  final_rank_score?: number | null;
+  linucb_score?: number | null;
+  trade_quality_score?: number | null;
+  liquidity_score?: number | null;
+  microstructure_risk?: number | null;
+  ev_hold_value_usdt?: number | null;
+  exit_score?: number | null;
+  quality_gate_passed?: boolean | null;
+  hedge_ratio_at_t?: number | null;
+  hedge_ratio_drift_pct?: number | null;
+  config_source?: string | null;
+  warning?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type DecisionScoreTimelineMeta = {
+  timeline_resolution: string | null;
+  timeline_downsample_method: "last" | "mean" | "none" | string;
+  timeline_original_points: number;
+  timeline_returned_points: number;
+  score_source_summary: Record<string, number>;
+  unavailable_count: number;
+  stored_live_count: number;
+  recomputed_point_in_time_count: number;
+  current_approximate_count: number;
+};
+
+export type PairDecisionAuditChartOptions = {
+  includeDecisionTimeline?: boolean;
+  maxTimelinePoints?: number;
+  downsampleMethod?: "last" | "mean" | "none";
+  resolution?: string | null;
 };
 
 export type CounterfactualExitResult = {
@@ -1131,6 +1176,7 @@ export async function getPairDecisionAuditChart(
   timeframe = "1m",
   startTs?: string | number | null,
   endTs?: string | number | null,
+  options: PairDecisionAuditChartOptions = {},
 ): Promise<PairDecisionAuditChart> {
   const params = new URLSearchParams({ pair, timeframe });
   if (startTs !== null && startTs !== undefined && String(startTs).trim()) {
@@ -1138,6 +1184,18 @@ export async function getPairDecisionAuditChart(
   }
   if (endTs !== null && endTs !== undefined && String(endTs).trim()) {
     params.set("end_ts", String(endTs));
+  }
+  if (options.includeDecisionTimeline !== undefined) {
+    params.set("include_decision_timeline", options.includeDecisionTimeline ? "true" : "false");
+  }
+  if (options.maxTimelinePoints !== undefined) {
+    params.set("max_timeline_points", String(options.maxTimelinePoints));
+  }
+  if (options.downsampleMethod) {
+    params.set("downsample_method", options.downsampleMethod);
+  }
+  if (options.resolution !== null && options.resolution !== undefined && String(options.resolution).trim()) {
+    params.set("resolution", String(options.resolution));
   }
   return apiRequest<PairDecisionAuditChart>(`/admin/cointegrated-pairs/decision-audit?${params.toString()}`, { method: "GET" });
 }

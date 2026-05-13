@@ -368,11 +368,24 @@ def admin_cointegrated_pair_decision_audit(
     timeframe: str = Query(default="1m", min_length=1),
     start_ts: str | None = Query(default=None),
     end_ts: str | None = Query(default=None),
+    include_decision_timeline: bool = Query(default=False),
+    max_timeline_points: int = Query(default=1440, ge=1, le=20000),
+    downsample_method: str = Query(default="last", pattern="^(last|mean|none)$"),
+    resolution: str | None = Query(default=None),
     _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
 ):
     try:
         service = _get_pair_decision_audit_chart_service()
-        return service(pair=pair, timeframe=timeframe, start_ts=start_ts, end_ts=end_ts)
+        return service(
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            include_decision_timeline=include_decision_timeline,
+            max_timeline_points=max_timeline_points,
+            downsample_method=downsample_method,
+            resolution=resolution,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except FileNotFoundError as exc:

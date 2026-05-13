@@ -1,8 +1,8 @@
-"""Phase 2 chart decision audit service.
+"""Chart decision audit service.
 
-This service assembles read-only chart audit data. Phase 2 returns historical
-chart series, actual bot markers, and point-in-time replay markers.
-Counterfactuals and decision score timelines are intentionally left empty here.
+This service assembles read-only chart audit data. It returns historical chart
+series, actual bot markers, point-in-time replay markers, lazy counterfactual
+hooks, and optional decision score timelines.
 """
 
 from __future__ import annotations
@@ -20,6 +20,11 @@ from core.chart_audit.counterfactual_exit_study import (
     build_counterfactual_exit_study,
 )
 from core.chart_audit.curator_state_source import curator_state_at
+from core.chart_audit.decision_score_timeline import (
+    DecisionScoreTimelineConfig,
+    build_decision_score_timeline,
+    empty_decision_score_timeline,
+)
 from core.chart_audit.marker_types import MarkerCategory, StatisticalMarkerType
 from core.chart_audit.ml_replay_scoring_bridge import ReplayMLScoringBridge
 from core.chart_audit.ml_score_lookup import StoredMLScoreLookup, get_score_source_for_range
@@ -35,8 +40,12 @@ def get_pair_decision_audit_chart(
     timeframe: str,
     start_ts: int | float | datetime | str | None,
     end_ts: int | float | datetime | str | None,
+    include_decision_timeline: bool = False,
+    max_timeline_points: int = 1440,
+    downsample_method: str = "last",
+    resolution: str | None = None,
 ) -> dict[str, Any]:
-    """Return the Phase 1 decision-audit chart payload for one pair."""
+    """Return the decision-audit chart payload for one pair."""
 
     pair_key = _normalize_pair_key_text(pair)
     start_value = _coerce_timestamp(start_ts)
@@ -66,6 +75,22 @@ def get_pair_decision_audit_chart(
         start_ts=start_value,
         end_ts=end_value,
     )
+    actual_marker_dicts = [marker.to_dict() for marker in actual_markers]
+    decision_timeline = _decision_timeline_from_points(
+        pair_key=pair_key,
+        timeframe=timeframe,
+        chart_points=chart_points,
+        actual_records=actual_records,
+        actual_markers=actual_marker_dicts,
+        replay_markers=replay_markers,
+        start_ts=start_value,
+        end_ts=end_value,
+        include_decision_timeline=include_decision_timeline,
+        max_timeline_points=max_timeline_points,
+        downsample_method=downsample_method,
+        resolution=resolution,
+    )
+    decision_timeline_payload = decision_timeline.to_dict()
 
     return {
         "pair": pair_key,
@@ -75,10 +100,11 @@ def get_pair_decision_audit_chart(
         "zscore_series": zscore_series,
         "statistical_markers": statistical_markers,
         "replay_markers": replay_markers,
-        "actual_markers": [marker.to_dict() for marker in actual_markers],
+        "actual_markers": actual_marker_dicts,
         "counterfactual_exit_studies": [],
         "counterfactuals_lazy_load": True,
-        "decision_score_timeline": [],
+        "decision_score_timeline": decision_timeline_payload["decision_score_timeline"],
+        "decision_timeline_meta": decision_timeline_payload["decision_timeline_meta"],
     }
 
 
@@ -371,6 +397,76 @@ def _replay_candles_from_points(
             }
         )
         candles.append(candle)
+    return candles
+
+
+def _decision_timeline_from_points(
+    *,
+    pair_key: str,
+    timeframe: str,
+    chart_points: list[dict[str, Any]],
+    actual_records: list[Any],
+    actual_markers: list[dict[str, Any]],
+    replay_markers: list[dict[str, Any]],
+    start_ts: float | None,
+    end_ts: float | None,
+    include_decision_timeline: bool,
+    max_timeline_points: int,
+    downsample_method: str,
+    resolution: str | None,
+):
+    config = DecisionScoreTimelineConfig(
+        include_decision_timeline=include_decision_timeline,
+        max_timeline_points=max_timeline_points,
+        downsample_method=downsample_method,
+        resolution=resolution,
+    )
+    if not config.include_decision_timeline:
+        return empty_decision_score_timeline(config)
+
+    candles = _decision_timeline_candles_from_points(chart_points, start_ts, end_ts)
+    if not candles:
+        return empty_decision_score_timeline(config)
+
+    try:
+        score_rows = get_score_source_for_range(
+            pair_key,
+            None,
+            end_ts,
+            stored_events=actual_records,
+        )
+        return build_decision_score_timeline(
+            pair=pair_key,
+            timeframe=str(timeframe or "").strip() or "",
+            candles=candles,
+            stored_scores=score_rows,
+            config=config,
+            curator_state_at=lambda timestamp: curator_state_at(pair_key, timestamp),
+            config_at=config_at,
+            entry_markers=[*actual_markers, *replay_markers],
+        )
+    except Exception as exc:
+        logger.debug("chart audit decision timeline unavailable for %s: %s", pair_key, exc)
+        return empty_decision_score_timeline(config)
+
+
+def _decision_timeline_candles_from_points(
+    points: list[dict[str, Any]],
+    start_ts: float | None,
+    end_ts: float | None,
+) -> list[dict[str, Any]]:
+    candles: list[dict[str, Any]] = []
+    for point in points:
+        timestamp = _coerce_timestamp(point.get("timestamp") or point.get("ts"))
+        if timestamp is None or not _timestamp_in_range(timestamp, start_ts, end_ts):
+            continue
+        price_1 = _safe_float(point.get("price_1"))
+        price_2 = _safe_float(point.get("price_2"))
+        spread = _safe_float(point.get("spread"))
+        if price_1 is not None and price_2 is not None:
+            candles.append({"timestamp": timestamp, "close_1": price_1, "close_2": price_2})
+        elif spread is not None:
+            candles.append({"timestamp": timestamp, "spread": spread})
     return candles
 
 

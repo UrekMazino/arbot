@@ -28,6 +28,14 @@ from core.chart_audit.curator_state_source import (
     normalize_pair_key,
     same_pair,
 )
+from core.chart_audit.decision_score_timeline import (
+    DecisionScoreTimeline,
+    DecisionScoreTimelineConfig,
+    DecisionScoreTimelineMeta,
+    DecisionScoreTimelinePoint,
+    build_decision_score_timeline,
+    empty_decision_score_timeline,
+)
 from core.chart_audit.marker_types import (
     ActualAdvancedMLShadowRecommendationMarker,
     ActualBlockedSignalMarker,
@@ -157,6 +165,10 @@ __all__ = [
     "BlockReason",
     "CuratorStateAtResult",
     "CuratorState",
+    "DecisionScoreTimeline",
+    "DecisionScoreTimelineConfig",
+    "DecisionScoreTimelineMeta",
+    "DecisionScoreTimelinePoint",
     "MarkerCategory",
     "ReplayMarkerStatus",
     "ReplayMarkerType",
@@ -191,6 +203,7 @@ __all__ = [
     "build_sizing_preview",
     "build_replay_snapshots",
     "build_replay_entry_id",
+    "build_decision_score_timeline",
     "candle_timestamp",
     "config_at",
     "ConfigProvider",
@@ -206,6 +219,7 @@ __all__ = [
     "compute_hedge_ratio_execution_error_pct",
     "compute_hedge_sizing_error_pct",
     "equal_notional_sizing",
+    "empty_decision_score_timeline",
     "freeze_actual_bot_event",
     "freeze_cointegration_result",
     "freeze_orderbook_snapshot",

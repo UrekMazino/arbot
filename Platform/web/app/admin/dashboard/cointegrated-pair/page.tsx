@@ -23,6 +23,7 @@ import {
   CointegratedPairDetail,
   CointegratedPairsResponse,
   CounterfactualExitStudy,
+  DecisionScoreTimelinePoint,
   PairSupplyStatus,
   PairDecisionAuditChart,
   UserRecord,
@@ -1208,6 +1209,105 @@ function CounterfactualExitComparison({
   );
 }
 
+function fmtTimelineCell(value: number | null | undefined, digits = 3): string {
+  return value === null || value === undefined ? "n/a" : fmtNumber(value, digits);
+}
+
+function DecisionScoreTimelinePanel({
+  timeline,
+  meta,
+  loading,
+  error,
+}: {
+  timeline: DecisionScoreTimelinePoint[];
+  meta: PairDecisionAuditChart["decision_timeline_meta"] | undefined;
+  loading: boolean;
+  error: string | null;
+}) {
+  const rows = timeline.slice(-10);
+  return (
+    <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Decision score timeline</h4>
+          <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            {meta
+              ? `${meta.timeline_returned_points} of ${meta.timeline_original_points} points | ${meta.timeline_downsample_method}${meta.timeline_resolution ? ` | ${meta.timeline_resolution}` : ""}`
+              : "Stored scores and point-in-time audit context"}
+          </p>
+        </div>
+        {loading ? <StatusPill label="Loading" tone="neutral" /> : rows.length ? <StatusPill label="Scores" tone="info" /> : null}
+      </div>
+      {error ? (
+        <p className="rounded-lg border border-error-200 bg-error-50 px-3 py-2 text-xs text-error-700 dark:border-error-900/60 dark:bg-error-950/30 dark:text-error-300">
+          {error}
+        </p>
+      ) : null}
+      {!error && loading ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Loading decision score timeline...
+        </p>
+      ) : null}
+      {!error && !loading && !rows.length ? (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-400">
+          Decision score timeline unavailable or not loaded.
+        </p>
+      ) : null}
+      {!error && rows.length ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
+          <table className="min-w-full divide-y divide-gray-200 text-xs dark:divide-gray-800">
+            <thead className="bg-gray-50 text-left text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Time</th>
+                <th className="px-3 py-2 font-semibold">Regime</th>
+                <th className="px-3 py-2 font-semibold">Risk</th>
+                <th className="px-3 py-2 font-semibold">Scores</th>
+                <th className="px-3 py-2 font-semibold">Liquidity</th>
+                <th className="px-3 py-2 font-semibold">EV / Exit</th>
+                <th className="px-3 py-2 font-semibold">Hedge</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-800 dark:bg-gray-900">
+              {rows.map((row) => (
+                <tr key={`${row.timestamp}-${row.score_source}`} className="text-gray-700 dark:text-gray-200">
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {fmtMarkerTimestamp(row.timestamp)}
+                    <span className="ml-1 text-gray-400">{row.score_source}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {row.regime || "n/a"}
+                    <span className="ml-1 text-gray-400">curator {row.curator_state || "n/a"}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    conf {fmtTimelineCell(row.regime_confidence)}
+                    <span className="ml-1 text-gray-400">break {fmtTimelineCell(row.break_risk)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    bayes {fmtTimelineCell(row.bayesian_posterior)}
+                    <span className="ml-1 text-gray-400">rank {fmtTimelineCell(row.final_rank_score)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    liq {fmtTimelineCell(row.liquidity_score)}
+                    <span className="ml-1 text-gray-400">micro {fmtTimelineCell(row.microstructure_risk)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    EV {fmtTimelineCell(row.ev_hold_value_usdt, 2)}
+                    <span className="ml-1 text-gray-400">exit {fmtTimelineCell(row.exit_score)}</span>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    beta {fmtTimelineCell(row.hedge_ratio_at_t)}
+                    <span className="ml-1 text-gray-400">drift {fmtTimelineCell(row.hedge_ratio_drift_pct)}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function CointegratedPairPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -1238,6 +1338,9 @@ export default function CointegratedPairPage() {
   const [counterfactualLoading, setCounterfactualLoading] = useState(false);
   const [counterfactualError, setCounterfactualError] = useState<string | null>(null);
   const [counterfactualAnchorLabel, setCounterfactualAnchorLabel] = useState<string | null>(null);
+  const [decisionTimelineLoading, setDecisionTimelineLoading] = useState(false);
+  const [decisionTimelineError, setDecisionTimelineError] = useState<string | null>(null);
+  const [decisionTimelineLoadedKey, setDecisionTimelineLoadedKey] = useState<string | null>(null);
   const [markerLayers, setMarkerLayers] = useState<MarkerLayerSettings>(DEFAULT_MARKER_LAYERS);
   const [graphFullscreen, setGraphFullscreen] = useState(false);
   const [showGraph, setShowGraph] = useState(true);
@@ -1325,6 +1428,9 @@ export default function CointegratedPairPage() {
     setCounterfactualError(null);
     setCounterfactualAnchorLabel(null);
     setCounterfactualLoading(false);
+    setDecisionTimelineError(null);
+    setDecisionTimelineLoading(false);
+    setDecisionTimelineLoadedKey(null);
   }, [selectedPair?.id]);
 
   const filteredPairs = useMemo(
@@ -1363,6 +1469,12 @@ export default function CointegratedPairPage() {
       auditMatchesSelection ? auditChart?.actual_markers || [] : [],
     );
   }, [auditChart, detailMatchesSelection, rawChartPoints, selectedPair?.pair]);
+  const decisionTimelineKey = useMemo(() => {
+    if (!selectedPair || !chartData.length) return null;
+    const firstPoint = chartData[0];
+    const lastPoint = chartData[chartData.length - 1];
+    return `${selectedPair.id}:${firstPoint?.ts || ""}:${lastPoint?.ts || ""}`;
+  }, [chartData, selectedPair]);
   const markerLayerAvailability = useMemo<Record<keyof MarkerLayerSettings, boolean>>(
     () => ({
       statistical:
@@ -1386,9 +1498,9 @@ export default function CointegratedPairPage() {
             (point.blocked_entry_z !== null && point.blocked_entry_z !== undefined),
         ) || Boolean(auditChart?.actual_markers?.length),
       counterfactual: Boolean(auditChart?.counterfactual_exit_studies?.length),
-      decisionScore: Boolean(auditChart?.decision_score_timeline?.length),
+      decisionScore: Boolean(detailMatchesSelection && rawChartPoints.length),
     }),
-    [auditChart, chartData, rawChartPoints],
+    [auditChart, chartData, detailMatchesSelection, rawChartPoints],
   );
   const compareCounterfactualEntry = useCallback(
     async (anchor: CounterfactualEntryAnchor) => {
@@ -1419,6 +1531,41 @@ export default function CointegratedPairPage() {
     },
     [chartData, selectedPair],
   );
+  const loadDecisionTimeline = useCallback(async () => {
+    if (!selectedPair || !chartData.length || !decisionTimelineKey || decisionTimelineLoading) return;
+    if (decisionTimelineLoadedKey === decisionTimelineKey) return;
+    const firstPoint = chartData[0];
+    const lastPoint = chartData[chartData.length - 1];
+    setDecisionTimelineLoading(true);
+    setDecisionTimelineError(null);
+    try {
+      const timelineData = await getPairDecisionAuditChart(
+        selectedPair.pair,
+        "1m",
+        firstPoint?.ts,
+        lastPoint?.ts,
+        {
+          includeDecisionTimeline: true,
+          maxTimelinePoints: 360,
+          downsampleMethod: "last",
+          resolution: "5m",
+        },
+      );
+      setAuditChart(timelineData);
+      setDecisionTimelineLoadedKey(decisionTimelineKey);
+    } catch (err) {
+      setDecisionTimelineError(cleanApiMessage(err, "Failed to load decision score timeline"));
+      setDecisionTimelineLoadedKey(decisionTimelineKey);
+    } finally {
+      setDecisionTimelineLoading(false);
+    }
+  }, [chartData, decisionTimelineKey, decisionTimelineLoadedKey, decisionTimelineLoading, selectedPair]);
+
+  useEffect(() => {
+    if (!markerLayers.decisionScore) return;
+    void loadDecisionTimeline();
+  }, [loadDecisionTimeline, markerLayers.decisionScore]);
+
   const canManageSupply = hasAnyPermission(user, ["manage_pair_supply", "manage_bot"]);
   const canSwitchPair = hasAnyPermission(user, ["switch_active_pair", "manage_bot"]);
   const canForceSwitchPair = hasAnyPermission(user, ["manage_bot"]);
@@ -1456,6 +1603,9 @@ export default function CointegratedPairPage() {
       setCounterfactualError(null);
       setCounterfactualAnchorLabel(null);
       setCounterfactualLoading(false);
+      setDecisionTimelineError(null);
+      setDecisionTimelineLoading(false);
+      setDecisionTimelineLoadedKey(null);
     }
     try {
       const data = await getCointegratedPairDetail(sym1, sym2, 720);
@@ -1748,6 +1898,16 @@ export default function CointegratedPairPage() {
                 onCompareEntry={compareCounterfactualEntry}
                 fullscreen
               />
+              {markerLayers.decisionScore ? (
+                <div className="mt-6 rounded-lg border border-white/10 bg-gray-950/70 p-4">
+                  <DecisionScoreTimelinePanel
+                    timeline={auditChart?.decision_score_timeline || []}
+                    meta={auditChart?.decision_timeline_meta}
+                    loading={decisionTimelineLoading}
+                    error={decisionTimelineError}
+                  />
+                </div>
+              ) : null}
               {counterfactualLoading || counterfactualError || counterfactualStudy || counterfactualAnchorLabel ? (
                 <div className="mt-6 rounded-lg border border-white/10 bg-gray-950/70 p-4">
                   <CounterfactualExitComparison
@@ -2142,6 +2302,14 @@ export default function CointegratedPairPage() {
                     markerLayers={markerLayers}
                     onCompareEntry={compareCounterfactualEntry}
                   />
+                  {markerLayers.decisionScore ? (
+                    <DecisionScoreTimelinePanel
+                      timeline={auditChart?.decision_score_timeline || []}
+                      meta={auditChart?.decision_timeline_meta}
+                      loading={decisionTimelineLoading}
+                      error={decisionTimelineError}
+                    />
+                  ) : null}
                   <CounterfactualExitComparison
                     study={counterfactualStudy}
                     loading={counterfactualLoading}

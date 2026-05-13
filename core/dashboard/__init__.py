@@ -15,6 +15,11 @@ from core.dashboard.contracts import (
     TradeSummary,
     SUPPORTED_DASHBOARD_TAGS,
 )
+from core.dashboard.portfolio_service import (
+    PortfolioDataBundle,
+    clear_portfolio_dashboard_cache,
+    get_portfolio_dashboard,
+)
 
 __all__ = [
     "AnalyticsSummary",
@@ -25,9 +30,12 @@ __all__ = [
     "HedgeRatioSummary",
     "PairPerformanceSummary",
     "PairSummary",
+    "PortfolioDataBundle",
     "PortfolioSummary",
     "ReplaySignalSummary",
     "RiskEventSummary",
     "SUPPORTED_DASHBOARD_TAGS",
     "TradeSummary",
+    "clear_portfolio_dashboard_cache",
+    "get_portfolio_dashboard",
 ]

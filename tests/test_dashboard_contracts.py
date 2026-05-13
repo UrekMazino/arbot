@@ -75,7 +75,7 @@ def test_dashboard_contracts_default_to_null_or_empty_values() -> None:
     assert pair_payload["best_trade"] is None
     assert pair_payload["tags"] == []
     assert portfolio_payload["total_equity_usdt"] is None
-    assert portfolio_payload["open_positions"] == []
+    assert portfolio_payload["open_positions"] is None
     assert portfolio_payload["cache"]["refresh_supported"] is True
     assert analytics_payload["performance"] == {}
     assert analytics_payload["pnl_timeseries"] == []

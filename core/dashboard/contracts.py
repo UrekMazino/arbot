@@ -210,14 +210,15 @@ class PortfolioSummary(DashboardDTO):
     win_rate: float | None = None
     profit_factor: float | None = None
     max_drawdown_usdt: float | None = None
-    open_positions: Sequence[Mapping[str, Any]] = field(default_factory=list)
+    open_positions: Sequence[Mapping[str, Any]] | None = None
     active_pair: str | None = None
     bot_status: str | None = None
     open_exposure_usdt: float | None = None
     cache: DashboardCacheMeta | Mapping[str, Any] = field(default_factory=DashboardCacheMeta)
 
     def __post_init__(self) -> None:
-        self.open_positions = list(self.open_positions or [])
+        if self.open_positions is not None:
+            self.open_positions = list(self.open_positions)
 
 
 @dataclass

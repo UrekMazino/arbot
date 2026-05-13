@@ -334,7 +334,7 @@ export type PortfolioSummary = {
   win_rate: number | null;
   profit_factor: number | null;
   max_drawdown_usdt: number | null;
-  open_positions: Array<Record<string, unknown>>;
+  open_positions: Array<Record<string, unknown>> | null;
   active_pair: string | null;
   bot_status: string | null;
   open_exposure_usdt: number | null;

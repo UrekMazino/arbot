@@ -51,6 +51,12 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
         group: "Monitor",
         requiredPermissions: ["view_pair_universe", "view_dashboard"],
       },
+      {
+        href: "/admin/dashboard/risk-health",
+        label: "Risk & Health",
+        group: "Monitor",
+        requiredPermissions: ["view_dashboard"],
+      },
     ],
   },
   {

@@ -84,6 +84,15 @@ def _get_analytics_dashboard_service():
     return get_analytics_dashboard
 
 
+def _get_risk_health_dashboard_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.risk_health_service import get_risk_health_dashboard
+
+    return get_risk_health_dashboard
+
+
 def _get_pair_history_summary_service():
     workspace_root = Path(__file__).resolve().parents[4]
     if str(workspace_root) not in sys.path:
@@ -178,6 +187,22 @@ def admin_analytics_dashboard(
 ):
     try:
         service = _get_analytics_dashboard_service()
+        return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/dashboard/risk-health")
+def admin_risk_health_dashboard(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_dashboard")),
+):
+    try:
+        service = _get_risk_health_dashboard_service()
         return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

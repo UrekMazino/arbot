@@ -519,6 +519,29 @@ export type AnalyticsDashboardResponse = {
   cache: DashboardCacheMeta;
 };
 
+export type RiskHealthDashboardResponse = {
+  bot_status: Record<string, unknown>;
+  risk_kpis: {
+    current_drawdown_usdt: number | null;
+    daily_loss_limit_usage_pct: number | null;
+    open_exposure_usdt: number | null;
+    open_positions: number | null;
+    orphan_desync_status: string | null;
+    api_latency_ms: number | null;
+    order_failure_count: number | null;
+    orderbook_stale_count: number | null;
+  };
+  pair_health: {
+    hospital_pairs: Array<string | Record<string, unknown>>;
+    graveyard_pairs: Array<string | Record<string, unknown>>;
+    high_break_risk_pairs: Array<Record<string, unknown>>;
+    high_hedge_drift_positions: Array<Record<string, unknown>>;
+    liquidity_stress_pairs: Array<Record<string, unknown>>;
+  };
+  alerts: RiskEventSummary[];
+  cache: DashboardCacheMeta;
+};
+
 export type DataQualityIssue = {
   event_id: string;
   ts: string;
@@ -1417,6 +1440,28 @@ export async function getAnalyticsDashboard(params?: {
   const suffix = query.toString();
   return apiRequest<AnalyticsDashboardResponse>(
     `/admin/dashboard/analytics${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getRiskHealthDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<RiskHealthDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<RiskHealthDashboardResponse>(
+    `/admin/dashboard/risk-health${suffix ? `?${suffix}` : ""}`,
     { method: "GET" },
   );
 }

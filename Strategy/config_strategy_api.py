@@ -79,7 +79,7 @@ cointegration_zero_cross_threshold_ratio = _env_float("STATBOT_COINT_ZERO_CROSS_
 if cointegration_zero_cross_threshold_ratio < 0:
     cointegration_zero_cross_threshold_ratio = 0.0
 
-kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 2880)  # 2 days @ 1m bars; balanced quality/cost default
+kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 200)  # 2 days @ 1m bars; balanced quality/cost default
 min_equity_filter_usdt = _env_float("STATBOT_STRATEGY_MIN_EQUITY", 0)
 settle_ccy_filter = _env_list("STATBOT_STRATEGY_SETTLE_CCY", "USDT")
 max_pairs_per_ticker = _env_int("STATBOT_STRATEGY_MAX_PAIRS_PER_TICKER", 10)

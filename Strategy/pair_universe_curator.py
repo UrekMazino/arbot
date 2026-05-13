@@ -601,7 +601,7 @@ def run_curator_once() -> dict[str, Any]:
     previous_pairs = previous_pairs if isinstance(previous_pairs, dict) else {}
     lifecycle = _load_pair_lifecycle_state(time.time())
 
-    strategy_kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 2880, minimum=100)
+    strategy_kline_limit = _env_int("STATBOT_STRATEGY_KLINE_LIMIT", 200, minimum=100)
     settings = {
         "critical_p": _env_float("STATBOT_P_VALUE_CRITICAL", 0.15, minimum=0.000001),
         "z_window": _env_int("STATBOT_STRATEGY_Z_SCORE_WINDOW", 60, minimum=2),

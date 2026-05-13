@@ -15,6 +15,7 @@ export type DashboardNavItem = {
   hint?: string;
   group?: string;
   icon?: SidebarIconName;
+  hiddenFromSidebar?: boolean;
   children?: DashboardNavItem[];
 };
 

@@ -25,6 +25,11 @@ from core.dashboard.pair_history_service import (
     clear_pair_history_cache,
     get_pair_history_summary,
 )
+from core.dashboard.pair_detail_service import (
+    PairDetailDataBundle,
+    clear_pair_detail_cache,
+    get_pair_detail_summary,
+)
 
 __all__ = [
     "AnalyticsSummary",
@@ -35,6 +40,7 @@ __all__ = [
     "HedgeRatioSummary",
     "PairPerformanceSummary",
     "PairHistoryDataBundle",
+    "PairDetailDataBundle",
     "PairSummary",
     "PortfolioDataBundle",
     "PortfolioSummary",
@@ -44,6 +50,8 @@ __all__ = [
     "TradeSummary",
     "clear_portfolio_dashboard_cache",
     "clear_pair_history_cache",
+    "clear_pair_detail_cache",
     "get_pair_history_summary",
+    "get_pair_detail_summary",
     "get_portfolio_dashboard",
 ]

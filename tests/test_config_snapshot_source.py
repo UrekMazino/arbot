@@ -26,6 +26,15 @@ def _historical_record(version: str, activated_at: int, entry_z: float) -> dict[
         "max_orderbook_age_ms": 1200.0,
         "max_spread_bps": 6.0,
         "max_slippage_bps": 9.0,
+        "hedge_ratio_sizing_enabled": False,
+        "hedge_sizing_mode": "equal_notional",
+        "min_hedge_ratio": 0.2,
+        "max_hedge_ratio": 5.0,
+        "reject_negative_hedge_ratio": True,
+        "max_hedge_sizing_error_pct": 0.10,
+        "max_hedge_ratio_drift_pct": 0.20,
+        "severe_hedge_ratio_drift_pct": 0.35,
+        "min_cointegration_window": 120,
     }
 
 
@@ -92,6 +101,8 @@ def test_config_at_falls_back_to_current_approximate_when_historical_unavailable
     assert result.max_orderbook_age_ms == 900.0
     assert result.max_spread_bps == 4.5
     assert result.max_slippage_bps == 7.5
+    assert result.hedge_sizing_mode == "equal_notional"
+    assert result.min_cointegration_window == 120
 
 
 def test_current_config_snapshot_copies_only_replay_fields() -> None:
@@ -180,6 +191,15 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
             "STATBOT_EXIT_MAX_BOOK_AGE_MS": "800",
             "STATBOT_REPLAY_MAX_SPREAD_BPS": "3.5",
             "STATBOT_ADVANCED_ML_MAX_ALLOWED_SLIPPAGE_BPS": "4.5",
+            "STATBOT_HEDGE_RATIO_SIZING_ENABLED": "true",
+            "STATBOT_HEDGE_SIZING_MODE": "gross_normalized_beta",
+            "STATBOT_MIN_HEDGE_RATIO": "0.25",
+            "STATBOT_MAX_HEDGE_RATIO": "4.5",
+            "STATBOT_REJECT_NEGATIVE_HEDGE_RATIO": "false",
+            "STATBOT_MAX_HEDGE_SIZING_ERROR_PCT": "0.08",
+            "STATBOT_MAX_HEDGE_RATIO_DRIFT_PCT": "0.18",
+            "STATBOT_SEVERE_HEDGE_RATIO_DRIFT_PCT": "0.30",
+            "STATBOT_MIN_COINTEGRATION_WINDOW": "90",
         },
     )
 
@@ -194,3 +214,43 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
     assert result.max_orderbook_age_ms == 800.0
     assert result.max_spread_bps == 3.5
     assert result.max_slippage_bps == 4.5
+    assert result.hedge_ratio_sizing_enabled is True
+    assert result.hedge_sizing_mode == "gross_normalized_beta"
+    assert result.min_hedge_ratio == 0.25
+    assert result.max_hedge_ratio == 4.5
+    assert result.reject_negative_hedge_ratio is False
+    assert result.max_hedge_sizing_error_pct == 0.08
+    assert result.max_hedge_ratio_drift_pct == 0.18
+    assert result.severe_hedge_ratio_drift_pct == 0.30
+    assert result.min_cointegration_window == 90
+
+
+def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
+    result = config_at(
+        200,
+        historical_configs=[
+            {
+                **_historical_record("v1", 100, 2.0),
+                "hedge_ratio_sizing_enabled": True,
+                "hedge_sizing_mode": "gross_normalized_beta",
+                "min_hedge_ratio": 0.3,
+                "max_hedge_ratio": 3.5,
+                "reject_negative_hedge_ratio": False,
+                "max_hedge_sizing_error_pct": 0.07,
+                "max_hedge_ratio_drift_pct": 0.16,
+                "severe_hedge_ratio_drift_pct": 0.28,
+                "min_cointegration_window": 80,
+            }
+        ],
+    )
+
+    assert result.config_source == CONFIG_SOURCE_HISTORICAL
+    assert result.hedge_ratio_sizing_enabled is True
+    assert result.hedge_sizing_mode == "gross_normalized_beta"
+    assert result.min_hedge_ratio == 0.3
+    assert result.max_hedge_ratio == 3.5
+    assert result.reject_negative_hedge_ratio is False
+    assert result.max_hedge_sizing_error_pct == 0.07
+    assert result.max_hedge_ratio_drift_pct == 0.16
+    assert result.severe_hedge_ratio_drift_pct == 0.28
+    assert result.min_cointegration_window == 80

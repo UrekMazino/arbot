@@ -173,6 +173,101 @@ def current_config_snapshot(
             env_names=("STATBOT_ADVANCED_ML_MAX_ALLOWED_SLIPPAGE_BPS",),
             default=8.0,
         ),
+        hedge_ratio_sizing_enabled=_bool_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("hedge_ratio_sizing_enabled",),
+                ("hedge_sizing", "enabled"),
+                ("hedge_ratio", "sizing_enabled"),
+                ("strategy", "hedge_ratio_sizing_enabled"),
+            ),
+            env_names=("STATBOT_HEDGE_RATIO_SIZING_ENABLED",),
+            default=False,
+        ),
+        hedge_sizing_mode=_text_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("hedge_sizing_mode",),
+                ("hedge_sizing", "mode"),
+                ("hedge_ratio", "sizing_mode"),
+                ("strategy", "hedge_sizing_mode"),
+            ),
+            env_names=("STATBOT_HEDGE_SIZING_MODE",),
+            default="equal_notional",
+        ),
+        min_hedge_ratio=_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(("min_hedge_ratio",), ("hedge_ratio", "min"), ("strategy", "min_hedge_ratio")),
+            env_names=("STATBOT_MIN_HEDGE_RATIO",),
+            default=0.20,
+        ),
+        max_hedge_ratio=_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(("max_hedge_ratio",), ("hedge_ratio", "max"), ("strategy", "max_hedge_ratio")),
+            env_names=("STATBOT_MAX_HEDGE_RATIO",),
+            default=5.00,
+        ),
+        reject_negative_hedge_ratio=_bool_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("reject_negative_hedge_ratio",),
+                ("hedge_ratio", "reject_negative"),
+                ("strategy", "reject_negative_hedge_ratio"),
+            ),
+            env_names=("STATBOT_REJECT_NEGATIVE_HEDGE_RATIO",),
+            default=True,
+        ),
+        max_hedge_sizing_error_pct=_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("max_hedge_sizing_error_pct",),
+                ("hedge_sizing", "max_error_pct"),
+                ("strategy", "max_hedge_sizing_error_pct"),
+            ),
+            env_names=("STATBOT_MAX_HEDGE_SIZING_ERROR_PCT",),
+            default=0.10,
+        ),
+        max_hedge_ratio_drift_pct=_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("max_hedge_ratio_drift_pct",),
+                ("hedge_ratio", "max_drift_pct"),
+                ("strategy", "max_hedge_ratio_drift_pct"),
+            ),
+            env_names=("STATBOT_MAX_HEDGE_RATIO_DRIFT_PCT",),
+            default=0.20,
+        ),
+        severe_hedge_ratio_drift_pct=_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("severe_hedge_ratio_drift_pct",),
+                ("hedge_ratio", "severe_drift_pct"),
+                ("strategy", "severe_hedge_ratio_drift_pct"),
+            ),
+            env_names=("STATBOT_SEVERE_HEDGE_RATIO_DRIFT_PCT",),
+            default=0.35,
+        ),
+        min_cointegration_window=int(
+            _number_from_config_or_env(
+                current_config,
+                env_source,
+                aliases=(
+                    ("min_cointegration_window",),
+                    ("cointegration", "min_window"),
+                    ("strategy", "min_cointegration_window"),
+                ),
+                env_names=("STATBOT_MIN_COINTEGRATION_WINDOW",),
+                default=120.0,
+            )
+        ),
         warning=CURRENT_CONFIG_WARNING,
     )
 
@@ -287,6 +382,98 @@ def _snapshot_from_historical_payload(record: Any, payload: Mapping[str, Any]) -
                 ("max_slippage_bps",),
                 ("max_allowed_slippage_bps",),
                 ("microstructure", "max_allowed_slippage_bps"),
+            ),
+            hedge_ratio_sizing_enabled=(
+                _optional_config_bool(
+                    payload,
+                    ("hedge_ratio_sizing_enabled",),
+                    ("hedge_sizing", "enabled"),
+                    ("hedge_ratio", "sizing_enabled"),
+                    ("strategy", "hedge_ratio_sizing_enabled"),
+                )
+                or False
+            ),
+            hedge_sizing_mode=(
+                _optional_config_text(
+                    payload,
+                    ("hedge_sizing_mode",),
+                    ("hedge_sizing", "mode"),
+                    ("hedge_ratio", "sizing_mode"),
+                    ("strategy", "hedge_sizing_mode"),
+                )
+                or "equal_notional"
+            ),
+            min_hedge_ratio=(
+                _optional_config_number(
+                    payload,
+                    ("min_hedge_ratio",),
+                    ("hedge_ratio", "min"),
+                    ("strategy", "min_hedge_ratio"),
+                )
+                or 0.20
+            ),
+            max_hedge_ratio=(
+                _optional_config_number(
+                    payload,
+                    ("max_hedge_ratio",),
+                    ("hedge_ratio", "max"),
+                    ("strategy", "max_hedge_ratio"),
+                )
+                or 5.00
+            ),
+            reject_negative_hedge_ratio=(
+                True
+                if _optional_config_bool(
+                    payload,
+                    ("reject_negative_hedge_ratio",),
+                    ("hedge_ratio", "reject_negative"),
+                    ("strategy", "reject_negative_hedge_ratio"),
+                )
+                is None
+                else bool(
+                    _optional_config_bool(
+                        payload,
+                        ("reject_negative_hedge_ratio",),
+                        ("hedge_ratio", "reject_negative"),
+                        ("strategy", "reject_negative_hedge_ratio"),
+                    )
+                )
+            ),
+            max_hedge_sizing_error_pct=(
+                _optional_config_number(
+                    payload,
+                    ("max_hedge_sizing_error_pct",),
+                    ("hedge_sizing", "max_error_pct"),
+                    ("strategy", "max_hedge_sizing_error_pct"),
+                )
+                or 0.10
+            ),
+            max_hedge_ratio_drift_pct=(
+                _optional_config_number(
+                    payload,
+                    ("max_hedge_ratio_drift_pct",),
+                    ("hedge_ratio", "max_drift_pct"),
+                    ("strategy", "max_hedge_ratio_drift_pct"),
+                )
+                or 0.20
+            ),
+            severe_hedge_ratio_drift_pct=(
+                _optional_config_number(
+                    payload,
+                    ("severe_hedge_ratio_drift_pct",),
+                    ("hedge_ratio", "severe_drift_pct"),
+                    ("strategy", "severe_hedge_ratio_drift_pct"),
+                )
+                or 0.35
+            ),
+            min_cointegration_window=int(
+                _optional_config_number(
+                    payload,
+                    ("min_cointegration_window",),
+                    ("cointegration", "min_window"),
+                    ("strategy", "min_cointegration_window"),
+                )
+                or 120
             ),
         )
     except (TypeError, ValueError):
@@ -404,6 +591,40 @@ def _optional_number_from_config_or_env(
     return default
 
 
+def _bool_from_config_or_env(
+    current_config: Any,
+    env: Mapping[str, str],
+    *,
+    aliases: tuple[tuple[str, ...], ...],
+    env_names: tuple[str, ...],
+    default: bool,
+) -> bool:
+    config_value = _find_bool(current_config, *aliases)
+    if config_value is not None:
+        return config_value
+    env_value = _parse_bool(_first_env_value(env, *env_names))
+    if env_value is not None:
+        return env_value
+    return default
+
+
+def _text_from_config_or_env(
+    current_config: Any,
+    env: Mapping[str, str],
+    *,
+    aliases: tuple[tuple[str, ...], ...],
+    env_names: tuple[str, ...],
+    default: str,
+) -> str:
+    config_value = _find_text(current_config, *aliases)
+    if config_value is not None:
+        return config_value
+    env_value = _first_env_value(env, *env_names)
+    if env_value is not None:
+        return env_value
+    return default
+
+
 def _required_config_number(payload: Any, *paths: tuple[str, ...]) -> float:
     value = _find_number(payload, *paths)
     if value is None:
@@ -415,12 +636,40 @@ def _optional_config_number(payload: Any, *paths: tuple[str, ...]) -> float | No
     return _find_number(payload, *paths)
 
 
+def _optional_config_bool(payload: Any, *paths: tuple[str, ...]) -> bool | None:
+    return _find_bool(payload, *paths)
+
+
+def _optional_config_text(payload: Any, *paths: tuple[str, ...]) -> str | None:
+    return _find_text(payload, *paths)
+
+
 def _find_number(source: Any, *paths: tuple[str, ...]) -> float | None:
     for path in paths:
         value = _extract_value(source, path)
         parsed = _parse_float(value)
         if parsed is not None:
             return parsed
+    return None
+
+
+def _find_bool(source: Any, *paths: tuple[str, ...]) -> bool | None:
+    for path in paths:
+        value = _extract_value(source, path)
+        parsed = _parse_bool(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _find_text(source: Any, *paths: tuple[str, ...]) -> str | None:
+    for path in paths:
+        value = _extract_value(source, path)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
     return None
 
 
@@ -461,6 +710,23 @@ def _parse_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"1", "true", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled"}:
+        return False
+    return None
 
 
 def _required_timestamp(value: Any) -> int:

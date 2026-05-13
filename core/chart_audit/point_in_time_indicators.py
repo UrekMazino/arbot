@@ -10,10 +10,11 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
-from core.chart_audit.marker_types import BlockReason, CuratorState
-from core.chart_audit.replay_snapshot import ReplayConfigSnapshot, ReplaySnapshot
+from core.chart_audit.marker_types import BlockReason, CuratorState, ReplayMarkerStatus
+from core.chart_audit.replay_snapshot import FrozenCointegrationResult, ReplayConfigSnapshot, ReplaySnapshot
 
 try:
     from shared_cointegration_validator import (
@@ -26,28 +27,28 @@ except Exception:  # pragma: no cover - dependency fallback for constrained envs
 
 
 STATUS_OK = "ok"
-STATUS_INSUFFICIENT_DATA = "insufficient_data"
-STATUS_VALID_CANDIDATE = "valid_candidate"
-STATUS_BLOCKED_CANDIDATE = "blocked_candidate"
+STATUS_INSUFFICIENT_DATA = ReplayMarkerStatus.INSUFFICIENT_DATA
+STATUS_VALID_CANDIDATE = ReplayMarkerStatus.VALID_CANDIDATE
+STATUS_BLOCKED_CANDIDATE = ReplayMarkerStatus.BLOCKED_CANDIDATE
 
 
 @dataclass(frozen=True)
 class SpreadPointInTimeResult:
-    status: str
+    status: str | ReplayMarkerStatus
     spread_until_t: tuple[float, ...] = ()
     latest_spread: float | None = None
     hedge_ratio: float | None = None
-    cointegration_result: Mapping[str, Any] | None = None
+    cointegration_result: FrozenCointegrationResult | None = None
     reason: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "status": self.status,
+            "status": _json_value(self.status),
             "spread_until_t": list(self.spread_until_t),
             "latest_spread": self.latest_spread,
             "hedge_ratio": self.hedge_ratio,
-            "cointegration_result": _json_mapping(self.cointegration_result),
+            "cointegration_result": _json_value(self.cointegration_result),
             "reason": self.reason,
             "metadata": _json_mapping(self.metadata),
         }
@@ -55,27 +56,27 @@ class SpreadPointInTimeResult:
 
 @dataclass(frozen=True)
 class ZScorePointInTimeResult:
-    status: str
+    status: str | ReplayMarkerStatus
     zscore_until_t: tuple[float, ...] = ()
     latest_zscore: float | None = None
     spread_until_t: tuple[float, ...] = ()
     rolling_mean: float | None = None
     rolling_std: float | None = None
     hedge_ratio: float | None = None
-    cointegration_result: Mapping[str, Any] | None = None
+    cointegration_result: FrozenCointegrationResult | None = None
     reason: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "status": self.status,
+            "status": _json_value(self.status),
             "zscore_until_t": list(self.zscore_until_t),
             "latest_zscore": self.latest_zscore,
             "spread_until_t": list(self.spread_until_t),
             "rolling_mean": self.rolling_mean,
             "rolling_std": self.rolling_std,
             "hedge_ratio": self.hedge_ratio,
-            "cointegration_result": _json_mapping(self.cointegration_result),
+            "cointegration_result": _json_value(self.cointegration_result),
             "reason": self.reason,
             "metadata": _json_mapping(self.metadata),
         }
@@ -83,13 +84,13 @@ class ZScorePointInTimeResult:
 
 @dataclass(frozen=True)
 class ZeroCrossingsPointInTimeResult:
-    status: str
+    status: str | ReplayMarkerStatus
     zero_crossings: int = 0
     reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "status": self.status,
+            "status": _json_value(self.status),
             "zero_crossings": self.zero_crossings,
             "reason": self.reason,
         }
@@ -97,7 +98,7 @@ class ZeroCrossingsPointInTimeResult:
 
 @dataclass(frozen=True)
 class BasicHardValidationPointInTimeResult:
-    status: str
+    status: ReplayMarkerStatus
     passed: bool
     block_reasons: tuple[BlockReason, ...] = ()
     reason: str | None = None
@@ -105,7 +106,7 @@ class BasicHardValidationPointInTimeResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "status": self.status,
+            "status": self.status.value,
             "passed": self.passed,
             "block_reasons": [reason.value for reason in self.block_reasons],
             "reason": self.reason,
@@ -119,19 +120,21 @@ def compute_spread_point_in_time(
 ) -> SpreadPointInTimeResult:
     """Compute spread and hedge ratio from candles available up to t only."""
 
-    del config_snapshot  # Reserved for later replay config fields.
     candles = tuple(candles_until_t or ())
+    min_cointegration_window = max(int(config_snapshot.min_cointegration_window), 1)
     provided_spreads = _finite_values(_extract_spread_value(candle) for candle in candles)
     if provided_spreads and len(provided_spreads) == len(candles):
         return SpreadPointInTimeResult(
             status=STATUS_OK,
             spread_until_t=tuple(provided_spreads),
             latest_spread=provided_spreads[-1],
-            cointegration_result={
-                "status": STATUS_INSUFFICIENT_DATA,
-                "reason": "price history unavailable; used provided point-in-time spread values",
+            hedge_ratio=None,
+            cointegration_result=None,
+            metadata={
+                "spread_source": "provided_candle_spread",
+                "cointegration_status": STATUS_INSUFFICIENT_DATA.value,
+                "min_cointegration_window": min_cointegration_window,
             },
-            metadata={"spread_source": "provided_candle_spread"},
         )
 
     price_pairs = [_extract_price_pair(candle) for candle in candles]
@@ -147,6 +150,12 @@ def compute_spread_point_in_time(
         return SpreadPointInTimeResult(
             status=STATUS_INSUFFICIENT_DATA,
             reason="at least two candles are required to compute point-in-time spread",
+        )
+    if len(prices_1) < min_cointegration_window or len(prices_2) < min_cointegration_window:
+        return SpreadPointInTimeResult(
+            status=STATUS_INSUFFICIENT_DATA,
+            reason="insufficient history for point-in-time hedge ratio and cointegration",
+            metadata={"min_cointegration_window": min_cointegration_window},
         )
     if any(value <= 0 for value in prices_1 + prices_2):
         return SpreadPointInTimeResult(
@@ -169,7 +178,7 @@ def compute_spread_point_in_time(
         spread_until_t=spread,
         latest_spread=spread[-1],
         hedge_ratio=hedge_ratio,
-        cointegration_result=_cointegration_result_point_in_time(log_1, log_2),
+        cointegration_result=_cointegration_result_point_in_time(log_1, log_2, hedge_ratio),
         metadata={"spread_source": "log_price_ols"},
     )
 
@@ -251,11 +260,16 @@ def compute_basic_hard_validation_point_in_time(
 
     block_reasons: list[BlockReason] = []
     insufficient = False
+    min_cointegration_window = max(int(snapshot.config_snapshot.min_cointegration_window), 1)
 
     if not _finite_values(snapshot.zscore_until_t):
         insufficient = True
         block_reasons.append(BlockReason.INSUFFICIENT_HISTORY)
     if not _finite_values(snapshot.spread_until_t):
+        insufficient = True
+        if BlockReason.INSUFFICIENT_HISTORY not in block_reasons:
+            block_reasons.append(BlockReason.INSUFFICIENT_HISTORY)
+    if len(snapshot.candles_until_t) < min_cointegration_window:
         insufficient = True
         if BlockReason.INSUFFICIENT_HISTORY not in block_reasons:
             block_reasons.append(BlockReason.INSUFFICIENT_HISTORY)
@@ -267,13 +281,12 @@ def compute_basic_hard_validation_point_in_time(
         insufficient = True
         block_reasons.append(BlockReason.CURATOR_STATE_UNAVAILABLE)
 
-    coint_result = snapshot.cointegration_result_until_t if isinstance(snapshot.cointegration_result_until_t, Mapping) else {}
-    coint_status = str(coint_result.get("status") or "").strip().lower()
-    if coint_status == STATUS_INSUFFICIENT_DATA:
+    coint_result = snapshot.cointegration_result_until_t
+    if coint_result is None:
         insufficient = True
-        block_reasons.append(BlockReason.INSUFFICIENT_HISTORY)
-    coint_flag = _optional_int(coint_result.get("coint_flag"))
-    if coint_flag is not None and coint_flag != 1:
+        if BlockReason.INSUFFICIENT_HISTORY not in block_reasons:
+            block_reasons.append(BlockReason.INSUFFICIENT_HISTORY)
+    elif not coint_result.is_valid:
         block_reasons.append(BlockReason.COINTEGRATION_INVALID)
 
     zero_crossings = snapshot.zero_crossing_count_until_t
@@ -284,7 +297,16 @@ def compute_basic_hard_validation_point_in_time(
         block_reasons.append(BlockReason.ZERO_CROSSINGS_TOO_LOW)
 
     hedge_ratio = _optional_float(snapshot.hedge_ratio_until_t)
-    if hedge_ratio is not None and (hedge_ratio == 0.0 or not math.isfinite(hedge_ratio)):
+    if hedge_ratio is None:
+        if not insufficient:
+            block_reasons.append(BlockReason.HEDGE_RATIO_INVALID)
+    elif not math.isfinite(hedge_ratio) or hedge_ratio == 0.0:
+        block_reasons.append(BlockReason.HEDGE_RATIO_INVALID)
+    elif snapshot.config_snapshot.reject_negative_hedge_ratio and hedge_ratio < 0:
+        block_reasons.append(BlockReason.HEDGE_RATIO_INVALID)
+    elif abs(hedge_ratio) < float(snapshot.config_snapshot.min_hedge_ratio) or abs(hedge_ratio) > float(
+        snapshot.config_snapshot.max_hedge_ratio
+    ):
         block_reasons.append(BlockReason.HEDGE_RATIO_UNSTABLE)
 
     block_reasons.extend(_orderbook_block_reasons(snapshot.orderbook_snapshot, snapshot.config_snapshot))
@@ -308,6 +330,8 @@ def compute_basic_hard_validation_point_in_time(
             "zero_crossings": zero_crossings,
             "min_zero_crossings": int(snapshot.config_snapshot.min_zero_crossings),
             "hedge_ratio": hedge_ratio,
+            "min_cointegration_window": min_cointegration_window,
+            "cointegration_result": coint_result.to_dict() if coint_result is not None else None,
             "curator_state": snapshot.curator_state.value,
             "curator_state_source": snapshot.curator_state_source,
             "config_source": snapshot.config_snapshot.config_source,
@@ -315,17 +339,15 @@ def compute_basic_hard_validation_point_in_time(
     )
 
 
-def _cointegration_result_point_in_time(log_1: Sequence[float], log_2: Sequence[float]) -> Mapping[str, Any]:
+def _cointegration_result_point_in_time(
+    log_1: Sequence[float],
+    log_2: Sequence[float],
+    hedge_ratio: float | None,
+) -> FrozenCointegrationResult | None:
     if len(log_1) < 3 or len(log_2) < 3:
-        return {
-            "status": STATUS_INSUFFICIENT_DATA,
-            "reason": "at least three candles are required for cointegration evaluation",
-        }
+        return None
     if evaluate_cointegration is None:
-        return {
-            "status": STATUS_INSUFFICIENT_DATA,
-            "reason": "cointegration evaluator unavailable",
-        }
+        return None
     try:
         metrics = evaluate_cointegration(
             log_1,
@@ -334,11 +356,18 @@ def _cointegration_result_point_in_time(log_1: Sequence[float], log_2: Sequence[
             already_logged=True,
         )
     except Exception:
-        return {
-            "status": STATUS_INSUFFICIENT_DATA,
-            "reason": "cointegration evaluator failed for candles_until_t",
-        }
-    return _json_mapping({"status": STATUS_OK, **dict(metrics)})
+        return None
+    result = FrozenCointegrationResult.from_mapping({"status": STATUS_OK, **dict(metrics), "hedge_ratio": hedge_ratio})
+    if result.zero_crossings is None:
+        return FrozenCointegrationResult(
+            p_value=result.p_value,
+            adf_stat=result.adf_stat,
+            hedge_ratio=result.hedge_ratio,
+            zero_crossings=_fallback_mean_reversion_crossings(tuple(float(y - x) for y, x in zip(log_1, log_2))),
+            is_valid=result.is_valid,
+            reasons=result.reasons,
+        )
+    return result
 
 
 def _rolling_zscores_point_in_time(values: Sequence[float], window: int) -> tuple[float, ...]:
@@ -436,6 +465,9 @@ def _orderbook_block_reasons(orderbook_snapshot: Any, config: ReplayConfigSnapsh
     if orderbook_snapshot is None:
         return []
     reasons: list[BlockReason] = []
+    is_fresh = _get_any(orderbook_snapshot, "is_fresh")
+    if is_fresh is False:
+        reasons.append(BlockReason.ORDERBOOK_STALE)
     age_ms = _optional_float(_get_any(orderbook_snapshot, "book_freshness_ms", "freshness_ms", "update_age_ms", "age_ms"))
     if config.max_orderbook_age_ms is not None and age_ms is not None and age_ms > float(config.max_orderbook_age_ms):
         reasons.append(BlockReason.ORDERBOOK_STALE)
@@ -455,7 +487,7 @@ def _orderbook_block_reasons(orderbook_snapshot: Any, config: ReplayConfigSnapsh
     return reasons
 
 
-def _validation_reason(status: str, block_reasons: tuple[BlockReason, ...]) -> str:
+def _validation_reason(status: ReplayMarkerStatus, block_reasons: tuple[BlockReason, ...]) -> str:
     if status == STATUS_VALID_CANDIDATE:
         return "point-in-time hard validation passed"
     if status == STATUS_INSUFFICIENT_DATA:
@@ -553,6 +585,10 @@ def _json_mapping(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, FrozenCointegrationResult):
+        return value.to_dict()
     if isinstance(value, Mapping):
         return _json_mapping(value)
     if isinstance(value, tuple):

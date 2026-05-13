@@ -4,7 +4,7 @@ import pytest
 
 from core.chart_audit.curator_state_source import CuratorStateAtResult
 from core.chart_audit.marker_types import CuratorState
-from core.chart_audit.replay_snapshot import ReplayConfigSnapshot, ReplaySnapshot
+from core.chart_audit.replay_snapshot import ActualBotEvent, FrozenOrderBookSnapshot, ReplayConfigSnapshot, ReplaySnapshot
 from core.chart_audit.replay_snapshot_factory import ReplaySnapshotFactory, build_replay_snapshots
 
 
@@ -24,6 +24,7 @@ def _config() -> ReplayConfigSnapshot:
         max_orderbook_age_ms=1000.0,
         max_spread_bps=5.0,
         max_slippage_bps=8.0,
+        min_cointegration_window=1,
     )
 
 
@@ -125,10 +126,38 @@ def test_factory_attaches_orderbook_and_actual_events_at_timestamp() -> None:
         actual_events={BASE_TS + 60: [event]},
     )
 
-    assert snapshots[1].orderbook_snapshot == orderbooks[BASE_TS]
-    assert snapshots[1].actual_events_at_t == (event,)
-    assert snapshots[2].orderbook_snapshot == orderbooks[BASE_TS + 120]
+    assert isinstance(snapshots[1].orderbook_snapshot, FrozenOrderBookSnapshot)
+    assert snapshots[1].orderbook_snapshot.timestamp == BASE_TS
+    assert snapshots[1].orderbook_snapshot.spread_bps == 1.5
+    assert isinstance(snapshots[1].actual_events_at_t[0], ActualBotEvent)
+    assert snapshots[1].actual_events_at_t[0].event_type == "trade_open"
+    assert snapshots[1].actual_events_at_t[0].trade_id == "T1"
+    assert isinstance(snapshots[2].orderbook_snapshot, FrozenOrderBookSnapshot)
+    assert snapshots[2].orderbook_snapshot.timestamp == BASE_TS + 120
+    assert snapshots[2].orderbook_snapshot.spread_bps == 2.5
     assert snapshots[2].actual_events_at_t == ()
+
+
+def test_factory_nulls_hedge_and_cointegration_until_min_window() -> None:
+    snapshots = build_replay_snapshots(
+        "AAA/BBB",
+        "1m",
+        _candles([1.0, 2.0, 3.0]),
+        curator_state_at=_curator,
+        config_at=lambda _timestamp: ReplayConfigSnapshot(
+            config_version="test",
+            config_source="historical",
+            entry_z_threshold=2.0,
+            exit_z_threshold=0.35,
+            persistence_candles=1,
+            max_hold_seconds=3600.0,
+            min_zero_crossings=0,
+            min_cointegration_window=4,
+        ),
+    )
+
+    assert snapshots[-1].hedge_ratio_until_t is None
+    assert snapshots[-1].cointegration_result_until_t is None
 
 
 def test_replay_loop_passes_each_snapshot_to_engine_without_future_candles() -> None:

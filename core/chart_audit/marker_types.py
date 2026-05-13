@@ -30,6 +30,13 @@ class ReplayMarkerType(str, Enum):
     REPLAY_BLOCKED_SIGNAL = "replay_blocked_signal"
 
 
+class ReplayMarkerStatus(str, Enum):
+    VALID_CANDIDATE = "valid_candidate"
+    BLOCKED_CANDIDATE = "blocked_candidate"
+    IGNORED_CANDIDATE = "ignored_candidate"
+    INSUFFICIENT_DATA = "insufficient_data"
+
+
 class ActualMarkerType(str, Enum):
     ACTUAL_ENTRY = "actual_entry"
     ACTUAL_EXIT = "actual_exit"
@@ -62,6 +69,8 @@ class BlockReason(str, Enum):
     COINTEGRATION_INVALID = "cointegration_invalid"
     ADF_FAILED = "adf_failed"
     ZERO_CROSSINGS_TOO_LOW = "zero_crossings_too_low"
+    HEDGE_RATIO_INVALID = "hedge_ratio_invalid"
+    HEDGE_RATIO_DRIFT = "hedge_ratio_drift"
     HEDGE_RATIO_UNSTABLE = "hedge_ratio_unstable"
     LIQUIDITY_FAILED = "liquidity_failed"
     ORDER_CAPACITY_FAILED = "order_capacity_failed"
@@ -208,6 +217,7 @@ __all__ = [
     "BlockReason",
     "CuratorState",
     "MarkerCategory",
+    "ReplayMarkerStatus",
     "ReplayMarkerType",
     "StatisticalMarkerType",
     "build_actual_entry_id",

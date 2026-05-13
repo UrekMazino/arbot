@@ -13,10 +13,10 @@ from core.chart_audit.point_in_time_indicators import (
     compute_zero_crossings_point_in_time,
     compute_zscore_point_in_time,
 )
-from core.chart_audit.replay_snapshot import ReplayConfigSnapshot, ReplaySnapshot
+from core.chart_audit.replay_snapshot import FrozenCointegrationResult, ReplayConfigSnapshot, ReplaySnapshot
 
 
-def _config(min_zero_crossings: int = 3) -> ReplayConfigSnapshot:
+def _config(min_zero_crossings: int = 3, min_cointegration_window: int = 3) -> ReplayConfigSnapshot:
     return ReplayConfigSnapshot(
         config_version="test",
         config_source="historical",
@@ -29,6 +29,7 @@ def _config(min_zero_crossings: int = 3) -> ReplayConfigSnapshot:
         max_orderbook_age_ms=1_000.0,
         max_spread_bps=5.0,
         max_slippage_bps=8.0,
+        min_cointegration_window=min_cointegration_window,
     )
 
 
@@ -50,7 +51,14 @@ def _snapshot(**overrides: object) -> ReplaySnapshot:
         "rolling_mean_until_t": 2.0,
         "rolling_std_until_t": 1.0,
         "hedge_ratio_until_t": 1.0,
-        "cointegration_result_until_t": {"status": STATUS_OK, "coint_flag": 1},
+        "cointegration_result_until_t": FrozenCointegrationResult(
+            p_value=0.01,
+            adf_stat=-3.0,
+            hedge_ratio=1.0,
+            zero_crossings=3,
+            is_valid=True,
+            reasons=(),
+        ),
         "zero_crossing_count_until_t": 3,
         "curator_state": CuratorState.TRADABLE,
         "curator_state_source": "historical",
@@ -169,3 +177,26 @@ def test_basic_hard_validation_blocks_orderbook_liquidity_failures() -> None:
     assert result.status == STATUS_BLOCKED_CANDIDATE
     assert BlockReason.ORDERBOOK_STALE in result.block_reasons
     assert BlockReason.LIQUIDITY_FAILED in result.block_reasons
+
+
+def test_basic_hard_validation_enforces_min_cointegration_window() -> None:
+    result = compute_basic_hard_validation_point_in_time(
+        _snapshot(
+            config_snapshot=_config(min_cointegration_window=4),
+            cointegration_result_until_t=None,
+            hedge_ratio_until_t=None,
+        )
+    )
+
+    assert result.status == STATUS_INSUFFICIENT_DATA
+    assert result.passed is False
+    assert BlockReason.INSUFFICIENT_HISTORY in result.block_reasons
+
+
+def test_basic_hard_validation_blocks_when_hedge_ratio_is_invalid() -> None:
+    result = compute_basic_hard_validation_point_in_time(
+        _snapshot(hedge_ratio_until_t=-1.0)
+    )
+
+    assert result.status == STATUS_BLOCKED_CANDIDATE
+    assert BlockReason.HEDGE_RATIO_INVALID in result.block_reasons

@@ -16,6 +16,7 @@ from core.chart_audit.marker_types import (
     BlockReason,
     CuratorState,
     MarkerCategory,
+    ReplayMarkerStatus,
     ReplayMarkerType,
     build_replay_entry_id,
 )
@@ -46,7 +47,7 @@ class ReplayMarkerBase:
     side: str | None
     z_score: float | None
     spread: float | None
-    status: str
+    status: ReplayMarkerStatus
     curator_state: CuratorState
     curator_state_source: str
     config_source: str
@@ -74,6 +75,7 @@ class ReplayEntryCandidateMarker(ReplayMarkerBase):
 
 @dataclass(frozen=True)
 class ReplayExitCandidateMarker(ReplayMarkerBase):
+    exit_trigger: str | None = None
     marker_type: ReplayMarkerType = field(default=ReplayMarkerType.REPLAY_EXIT_CANDIDATE, init=False)
 
 
@@ -203,6 +205,14 @@ class PointInTimeReplayEngine:
                 "entry_z_threshold": float(snapshot.config_snapshot.entry_z_threshold),
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
+                "hedge_ratio_at_t": snapshot.hedge_ratio_until_t,
+                "hedge_ratio_source": "point_in_time_cointegration"
+                if snapshot.cointegration_result_until_t is not None
+                else None,
+                "replay_sizing_mode": snapshot.config_snapshot.hedge_sizing_mode,
+                "hedge_ratio_valid": snapshot.cointegration_result_until_t.is_valid
+                if snapshot.cointegration_result_until_t is not None
+                else False,
                 "hard_validation": hard_validation.to_dict(),
             },
         )
@@ -215,7 +225,7 @@ class PointInTimeReplayEngine:
         z_score: float,
         spread: float | None,
         block_reasons: Sequence[BlockReason],
-        status: str,
+        status: ReplayMarkerStatus,
         reason: str,
         hard_validation: BasicHardValidationPointInTimeResult | None,
     ) -> ReplayBlockedSignalMarker:
@@ -237,6 +247,14 @@ class PointInTimeReplayEngine:
                 "entry_z_threshold": float(snapshot.config_snapshot.entry_z_threshold),
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
+                "hedge_ratio_at_t": snapshot.hedge_ratio_until_t,
+                "hedge_ratio_source": "point_in_time_cointegration"
+                if snapshot.cointegration_result_until_t is not None
+                else None,
+                "replay_sizing_mode": snapshot.config_snapshot.hedge_sizing_mode,
+                "hedge_ratio_valid": snapshot.cointegration_result_until_t.is_valid
+                if snapshot.cointegration_result_until_t is not None
+                else False,
                 "hard_validation": hard_validation.to_dict() if hard_validation is not None else None,
             },
         )
@@ -252,14 +270,18 @@ class PointInTimeReplayEngine:
             return None
 
         exit_reasons: list[str] = []
+        exit_triggers: list[str] = []
         block_reasons: list[BlockReason] = []
         hold_seconds = max(float(snapshot.timestamp - position.entry_timestamp), 0.0)
         if abs(latest_z) <= float(snapshot.config_snapshot.exit_z_threshold):
             exit_reasons.append("z_reverted_to_exit_threshold")
+            exit_triggers.append("z_reversion")
         if hold_seconds >= float(snapshot.config_snapshot.max_hold_seconds):
             exit_reasons.append("max_hold_reached")
+            exit_triggers.append("max_hold")
         if snapshot.curator_state != CuratorState.TRADABLE:
             exit_reasons.append("curator_state_no_longer_tradable")
+            exit_triggers.append("curator_state_non_tradable")
             block_reasons.extend(_curator_exit_block_reasons(snapshot.curator_state))
 
         if not exit_reasons:
@@ -280,13 +302,16 @@ class PointInTimeReplayEngine:
             entry_id=position.entry_id,
             hold_seconds=hold_seconds,
             position_state=ReplayPositionState.CLOSED,
+            exit_trigger=exit_triggers[0] if len(exit_triggers) == 1 else "multiple",
             metadata={
                 "exit_reasons": exit_reasons,
+                "exit_triggers": exit_triggers,
                 "exit_z_threshold": float(snapshot.config_snapshot.exit_z_threshold),
                 "max_hold_seconds": float(snapshot.config_snapshot.max_hold_seconds),
                 "entry_timestamp": position.entry_timestamp,
                 "entry_z_score": position.entry_z_score,
                 "entry_spread": position.entry_spread,
+                "hedge_ratio_at_exit": snapshot.hedge_ratio_until_t,
                 "config_version": snapshot.config_snapshot.config_version,
             },
         )
@@ -355,7 +380,7 @@ def _curator_exit_block_reasons(curator_state: CuratorState) -> tuple[BlockReaso
     return (reason,)
 
 
-def _blocked_reason(status: str, block_reasons: Sequence[BlockReason]) -> str:
+def _blocked_reason(status: ReplayMarkerStatus, block_reasons: Sequence[BlockReason]) -> str:
     if status == STATUS_INSUFFICIENT_DATA:
         return "entry threshold reached but point-in-time replay data is insufficient"
     if not block_reasons:

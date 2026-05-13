@@ -22,11 +22,18 @@ from core.chart_audit.curator_state_source import (
 )
 from core.chart_audit.marker_types import CuratorState
 from core.chart_audit.point_in_time_indicators import (
+    STATUS_INSUFFICIENT_DATA,
     compute_zero_crossings_point_in_time,
     compute_zscore_point_in_time,
 )
 from core.chart_audit.point_in_time_replay import PointInTimeReplayEngine, ReplayMarker
-from core.chart_audit.replay_snapshot import ReplayConfigSnapshot, ReplaySnapshot, candle_timestamp
+from core.chart_audit.replay_snapshot import (
+    ReplayConfigSnapshot,
+    ReplaySnapshot,
+    candle_timestamp,
+    freeze_actual_bot_event,
+    freeze_orderbook_snapshot,
+)
 
 
 CuratorStateProvider: TypeAlias = Callable[
@@ -98,6 +105,7 @@ class ReplaySnapshotFactory:
             spread_until_t = tuple(zscore_result.spread_until_t)
             zero_crossings = compute_zero_crossings_point_in_time(spread_until_t)
             curator_result = self._curator_state_at(timestamp)
+            has_min_cointegration_history = len(prefix) >= int(config_snapshot.min_cointegration_window)
 
             yield ReplaySnapshot(
                 pair=self.pair,
@@ -108,24 +116,25 @@ class ReplaySnapshotFactory:
                 spread_until_t=spread_until_t,
                 rolling_mean_until_t=zscore_result.rolling_mean,
                 rolling_std_until_t=zscore_result.rolling_std,
-                hedge_ratio_until_t=zscore_result.hedge_ratio,
+                hedge_ratio_until_t=zscore_result.hedge_ratio if has_min_cointegration_history else None,
                 cointegration_result_until_t=(
-                    dict(zscore_result.cointegration_result)
-                    if isinstance(zscore_result.cointegration_result, Mapping)
-                    else None
+                    zscore_result.cointegration_result if has_min_cointegration_history else None
                 ),
                 zero_crossing_count_until_t=(
                     zero_crossings.zero_crossings
-                    if zero_crossings.status != "insufficient_data"
+                    if zero_crossings.status != STATUS_INSUFFICIENT_DATA
                     else None
                 ),
                 curator_state=curator_result.curator_state,
                 curator_state_source=curator_result.curator_state_source,
                 pair_health_state=self._pair_health_state_at(timestamp),
-                orderbook_snapshot=self._orderbook_at(timestamp),
+                orderbook_snapshot=_freeze_optional_orderbook(self._orderbook_at(timestamp), timestamp),
                 config_snapshot=config_snapshot,
                 config_source=config_snapshot.config_source,
-                actual_events_at_t=tuple(_as_event_tuple(self._actual_events_at(timestamp))),
+                actual_events_at_t=tuple(
+                    freeze_actual_bot_event(event, pair=self.pair, timestamp=timestamp)
+                    for event in _as_event_tuple(self._actual_events_at(timestamp))
+                ),
             )
 
     def build_snapshots(self) -> tuple[ReplaySnapshot, ...]:
@@ -313,6 +322,12 @@ def _as_event_tuple(value: Iterable[Any] | Any | None) -> tuple[Any, ...]:
     if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray, Mapping)):
         return tuple(value)
     return (value,)
+
+
+def _freeze_optional_orderbook(value: Any | None, timestamp: int) -> Any | None:
+    if value is None:
+        return None
+    return freeze_orderbook_snapshot(value, timestamp=timestamp)
 
 
 def _iter_records(value: Iterable[Any]) -> Iterator[Any]:

@@ -6,6 +6,9 @@ import pytest
 
 from core.chart_audit.marker_types import CuratorState
 from core.chart_audit.replay_snapshot import (
+    ActualBotEvent,
+    FrozenCointegrationResult,
+    FrozenOrderBookSnapshot,
     ReplayConfigSnapshot,
     ReplaySnapshot,
     candle_timestamp,
@@ -26,6 +29,15 @@ def _config(source: str = "historical") -> ReplayConfigSnapshot:
         max_orderbook_age_ms=1500.0,
         max_spread_bps=12.0,
         max_slippage_bps=18.0,
+        hedge_ratio_sizing_enabled=False,
+        hedge_sizing_mode="equal_notional",
+        min_hedge_ratio=0.2,
+        max_hedge_ratio=5.0,
+        reject_negative_hedge_ratio=True,
+        max_hedge_sizing_error_pct=0.10,
+        max_hedge_ratio_drift_pct=0.20,
+        severe_hedge_ratio_drift_pct=0.35,
+        min_cointegration_window=3,
     )
 
 
@@ -44,7 +56,14 @@ def _snapshot(**overrides: object) -> ReplaySnapshot:
         "rolling_mean_until_t": -4.25,
         "rolling_std_until_t": 0.12,
         "hedge_ratio_until_t": 0.8,
-        "cointegration_result_until_t": {"p_value": 0.01, "lags": [1, 2]},
+        "cointegration_result_until_t": FrozenCointegrationResult(
+            p_value=0.01,
+            adf_stat=-3.2,
+            hedge_ratio=0.8,
+            zero_crossings=4,
+            is_valid=True,
+            reasons=(),
+        ),
         "zero_crossing_count_until_t": 4,
         "curator_state": CuratorState.TRADABLE,
         "curator_state_source": "historical",
@@ -91,9 +110,105 @@ def test_replay_snapshot_uses_tuple_fields_and_is_frozen() -> None:
     assert isinstance(snapshot.zscore_until_t, tuple)
     assert isinstance(snapshot.spread_until_t, tuple)
     assert isinstance(snapshot.actual_events_at_t, tuple)
-    assert isinstance(snapshot.cointegration_result_until_t["lags"], tuple)
+    assert isinstance(snapshot.actual_events_at_t[0], ActualBotEvent)
+    assert isinstance(snapshot.cointegration_result_until_t, FrozenCointegrationResult)
     with pytest.raises(FrozenInstanceError):
         snapshot.timestamp = 1  # type: ignore[misc]
+
+
+def test_replay_snapshot_coerces_cointegration_mapping_to_frozen_result() -> None:
+    snapshot = _snapshot(
+        cointegration_result_until_t={
+            "status": "ok",
+            "p_value": "0.02",
+            "adf_stat": "-3.4",
+            "hedge_ratio": "1.25",
+            "zero_crossings": "5",
+            "coint_flag": 1,
+            "reasons": ["accepted"],
+        }
+    )
+
+    assert isinstance(snapshot.cointegration_result_until_t, FrozenCointegrationResult)
+    assert snapshot.cointegration_result_until_t.p_value == 0.02
+    assert snapshot.cointegration_result_until_t.is_valid is True
+    assert snapshot.cointegration_result_until_t.reasons == ("accepted",)
+
+
+def test_replay_snapshot_maps_insufficient_cointegration_mapping_to_none() -> None:
+    snapshot = _snapshot(
+        cointegration_result_until_t={
+            "status": "insufficient_data",
+            "reason": "not enough candles",
+        }
+    )
+
+    assert snapshot.cointegration_result_until_t is None
+
+
+def test_replay_snapshot_coerces_orderbook_mapping_to_frozen_snapshot() -> None:
+    snapshot = _snapshot(
+        orderbook_snapshot={
+            "timestamp": 1_715_000_120,
+            "bid_depth_usdt": 10_000,
+            "ask_depth_usdt": 11_000,
+            "spread_bps": 1.5,
+            "slippage_bps": 2.5,
+            "liquidity_score": 0.9,
+            "book_freshness_ms": 500,
+            "source": "historical_book",
+        }
+    )
+
+    assert isinstance(snapshot.orderbook_snapshot, FrozenOrderBookSnapshot)
+    assert snapshot.orderbook_snapshot.spread_bps == 1.5
+    assert snapshot.orderbook_snapshot.age_ms == 500.0
+    with pytest.raises(FrozenInstanceError):
+        snapshot.orderbook_snapshot.spread_bps = 3.0  # type: ignore[misc]
+
+
+def test_actual_bot_event_metadata_is_stable_and_immutable() -> None:
+    snapshot = _snapshot(
+        actual_events_at_t=[
+            {
+                "event_id": "evt-1",
+                "event_type": "trade_open",
+                "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                "timestamp": 1_715_000_120,
+                "metadata": {"b": [2, 3], "a": "first"},
+            }
+        ]
+    )
+
+    event = snapshot.actual_events_at_t[0]
+    assert isinstance(event, ActualBotEvent)
+    assert event.metadata == (("a", "first"), ("b", (2, 3)))
+    with pytest.raises(FrozenInstanceError):
+        event.reason = "changed"  # type: ignore[misc]
+
+
+def test_replay_snapshot_nulls_cointegration_before_min_window() -> None:
+    snapshot = _snapshot(config_snapshot=_config(), config_source="historical")
+
+    assert len(snapshot.candles_until_t) == snapshot.config_snapshot.min_cointegration_window
+    assert snapshot.hedge_ratio_until_t == 0.8
+    assert snapshot.cointegration_result_until_t is not None
+
+    insufficient_snapshot = _snapshot(
+        config_snapshot=ReplayConfigSnapshot(
+            config_version="test-v1",
+            config_source="historical",
+            entry_z_threshold=2.0,
+            exit_z_threshold=0.35,
+            persistence_candles=4,
+            max_hold_seconds=3600.0,
+            min_zero_crossings=3,
+            min_cointegration_window=4,
+        ),
+    )
+
+    assert insufficient_snapshot.hedge_ratio_until_t is None
+    assert insufficient_snapshot.cointegration_result_until_t is None
 
 
 def test_replay_snapshot_rejects_timestamp_that_does_not_match_last_candle() -> None:
@@ -134,6 +249,15 @@ def test_replay_config_snapshot_uses_replay_relevant_fields_only() -> None:
         "max_orderbook_age_ms",
         "max_spread_bps",
         "max_slippage_bps",
+        "hedge_ratio_sizing_enabled",
+        "hedge_sizing_mode",
+        "min_hedge_ratio",
+        "max_hedge_ratio",
+        "reject_negative_hedge_ratio",
+        "max_hedge_sizing_error_pct",
+        "max_hedge_ratio_drift_pct",
+        "severe_hedge_ratio_drift_pct",
+        "min_cointegration_window",
         "warning",
     }
 

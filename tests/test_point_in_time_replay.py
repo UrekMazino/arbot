@@ -2,12 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from core.chart_audit.marker_types import BlockReason, CuratorState, MarkerCategory, ReplayMarkerType
-from core.chart_audit.point_in_time_indicators import (
-    STATUS_BLOCKED_CANDIDATE,
-    STATUS_INSUFFICIENT_DATA,
-    STATUS_VALID_CANDIDATE,
-)
+from core.chart_audit.marker_types import BlockReason, CuratorState, MarkerCategory, ReplayMarkerStatus, ReplayMarkerType
+from core.chart_audit.point_in_time_indicators import STATUS_VALID_CANDIDATE
 from core.chart_audit.point_in_time_replay import (
     BUY_SPREAD,
     SELL_SPREAD,
@@ -15,7 +11,7 @@ from core.chart_audit.point_in_time_replay import (
     ReplayPositionState,
     generate_replay_markers,
 )
-from core.chart_audit.replay_snapshot import ReplayConfigSnapshot, ReplaySnapshot
+from core.chart_audit.replay_snapshot import FrozenCointegrationResult, ReplayConfigSnapshot, ReplaySnapshot
 
 
 BASE_TS = 1_715_000_000
@@ -39,6 +35,7 @@ def _config(
         max_orderbook_age_ms=1_000.0,
         max_spread_bps=5.0,
         max_slippage_bps=8.0,
+        min_cointegration_window=1,
     )
 
 
@@ -62,9 +59,18 @@ def _snapshot(
             "slippage_bps": 3.0,
             "liquidity_score": 0.8,
         }
-    coint_result = {"status": "ok"}
-    if coint_flag is not None:
-        coint_result["coint_flag"] = coint_flag
+    coint_result = (
+        FrozenCointegrationResult(
+            p_value=0.01,
+            adf_stat=-3.0,
+            hedge_ratio=1.0,
+            zero_crossings=zero_crossings,
+            is_valid=coint_flag in {None, 1},
+            reasons=() if coint_flag in {None, 1} else ("cointegration_invalid",),
+        )
+        if coint_flag is not None
+        else None
+    )
     return ReplaySnapshot(
         pair="AAA-USDT-SWAP/BBB-USDT-SWAP",
         timeframe="1m",
@@ -99,7 +105,7 @@ def test_buy_spread_entry_candidate_when_threshold_and_gates_pass() -> None:
     marker = markers[0]
     assert marker.marker_category == MarkerCategory.REPLAY
     assert marker.marker_type == ReplayMarkerType.REPLAY_ENTRY_CANDIDATE
-    assert marker.status == STATUS_VALID_CANDIDATE
+    assert marker.status == ReplayMarkerStatus.VALID_CANDIDATE
     assert marker.passed is True
     assert marker.side == BUY_SPREAD
     assert marker.entry_id == "replay_AAA-USDT-SWAP/BBB-USDT-SWAP_1715000060_BUY_SPREAD"
@@ -128,7 +134,7 @@ def test_threshold_reached_but_curator_gate_fails_emits_blocked_signal() -> None
     assert len(markers) == 1
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_BLOCKED_SIGNAL
-    assert marker.status == STATUS_BLOCKED_CANDIDATE
+    assert marker.status == ReplayMarkerStatus.BLOCKED_CANDIDATE
     assert marker.passed is False
     assert BlockReason.PAIR_IN_HOSPITAL in marker.block_reasons
 
@@ -141,7 +147,7 @@ def test_threshold_reached_but_persistence_fails_emits_blocked_signal() -> None:
     assert len(markers) == 1
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_BLOCKED_SIGNAL
-    assert marker.status == STATUS_BLOCKED_CANDIDATE
+    assert marker.status == ReplayMarkerStatus.BLOCKED_CANDIDATE
     assert BlockReason.Z_PERSISTENCE_FAILED in marker.block_reasons
 
 
@@ -159,7 +165,7 @@ def test_threshold_reached_but_insufficient_replay_data_is_marked() -> None:
     assert len(markers) == 1
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_BLOCKED_SIGNAL
-    assert marker.status == STATUS_INSUFFICIENT_DATA
+    assert marker.status == ReplayMarkerStatus.INSUFFICIENT_DATA
     assert BlockReason.INSUFFICIENT_HISTORY in marker.block_reasons
     assert BlockReason.CURATOR_STATE_UNAVAILABLE in marker.block_reasons
 
@@ -173,10 +179,11 @@ def test_open_position_exits_when_z_reverts_to_exit_threshold() -> None:
     assert len(markers) == 1
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_EXIT_CANDIDATE
-    assert marker.status == STATUS_VALID_CANDIDATE
+    assert marker.status == ReplayMarkerStatus.VALID_CANDIDATE
     assert marker.passed is True
     assert marker.position_state == ReplayPositionState.CLOSED
     assert marker.reason == "z_reverted_to_exit_threshold"
+    assert marker.exit_trigger == "z_reversion"
     assert engine.position_state == ReplayPositionState.CLOSED
 
 
@@ -191,6 +198,7 @@ def test_open_position_exits_when_max_hold_reached() -> None:
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_EXIT_CANDIDATE
     assert marker.reason == "max_hold_reached"
+    assert marker.exit_trigger == "max_hold"
     assert marker.hold_seconds == 60.0
 
 
@@ -206,6 +214,7 @@ def test_open_position_exits_when_curator_no_longer_tradable() -> None:
     marker = markers[0]
     assert marker.marker_type == ReplayMarkerType.REPLAY_EXIT_CANDIDATE
     assert marker.reason == "curator_state_no_longer_tradable"
+    assert marker.exit_trigger == "curator_state_non_tradable"
     assert BlockReason.PAIR_IN_GRAVEYARD in marker.block_reasons
 
 
@@ -232,3 +241,38 @@ def test_generate_replay_markers_is_deterministic_for_same_snapshots() -> None:
     second = [marker.to_dict() for marker in generate_replay_markers(snapshots)]
 
     assert first == second
+
+
+def test_replay_marker_to_dict_serializes_status_enum() -> None:
+    marker = PointInTimeReplayEngine().evaluate(_snapshot([-2.1, -2.2]))[0]
+
+    assert marker.status == ReplayMarkerStatus.VALID_CANDIDATE
+    assert marker.to_dict()["status"] == STATUS_VALID_CANDIDATE.value
+
+
+def test_valid_entry_is_not_emitted_when_hedge_ratio_or_cointegration_unavailable() -> None:
+    marker = PointInTimeReplayEngine().evaluate(
+        _snapshot([-2.1, -2.2], coint_flag=None)
+    )[0]
+
+    assert marker.marker_type == ReplayMarkerType.REPLAY_BLOCKED_SIGNAL
+    assert marker.status == ReplayMarkerStatus.INSUFFICIENT_DATA
+    assert BlockReason.INSUFFICIENT_HISTORY in marker.block_reasons
+
+
+def test_replay_exit_candidate_to_dict_has_v1_4_schema_fields() -> None:
+    engine = PointInTimeReplayEngine()
+    engine.evaluate(_snapshot([-2.1, -2.2]))
+
+    marker = engine.evaluate(_snapshot([-2.1, -2.2, -0.2]))[0].to_dict()
+
+    assert marker["marker_type"] == ReplayMarkerType.REPLAY_EXIT_CANDIDATE.value
+    assert marker["entry_id"]
+    assert marker["timestamp"] == BASE_TS + 120
+    assert marker["side"] == BUY_SPREAD
+    assert marker["z_score"] == -0.2
+    assert marker["spread"] == 2.0
+    assert marker["status"] == ReplayMarkerStatus.VALID_CANDIDATE.value
+    assert marker["reason"] == "z_reverted_to_exit_threshold"
+    assert marker["exit_trigger"] == "z_reversion"
+    assert isinstance(marker["metadata"], dict)

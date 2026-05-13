@@ -8,6 +8,7 @@ from core.chart_audit.marker_types import (
     ActualMarkerType,
     BlockReason,
     MarkerCategory,
+    ReplayMarkerStatus,
     ReplayMarkerType,
     StatisticalMarkerType,
     build_actual_entry_id,
@@ -64,3 +65,13 @@ def test_marker_contract_enums_include_phase_1_categories() -> None:
     assert StatisticalMarkerType.HISTORICAL_MEAN_CROSSING.value == "historical_mean_crossing"
     assert ReplayMarkerType.REPLAY_ENTRY_CANDIDATE.value == "replay_entry_candidate"
     assert ActualMarkerType.ACTUAL_BLOCKED_SIGNAL.value == "actual_blocked_signal"
+
+
+def test_replay_marker_status_and_v1_4_block_reasons_are_defined() -> None:
+    assert ReplayMarkerStatus.VALID_CANDIDATE.value == "valid_candidate"
+    assert ReplayMarkerStatus.BLOCKED_CANDIDATE.value == "blocked_candidate"
+    assert ReplayMarkerStatus.IGNORED_CANDIDATE.value == "ignored_candidate"
+    assert ReplayMarkerStatus.INSUFFICIENT_DATA.value == "insufficient_data"
+    assert BlockReason.HEDGE_RATIO_INVALID.value == "hedge_ratio_invalid"
+    assert BlockReason.HEDGE_RATIO_DRIFT.value == "hedge_ratio_drift"
+    assert BlockReason.HEDGE_RATIO_UNSTABLE.value == "hedge_ratio_unstable"

@@ -280,6 +280,44 @@ export type PairHistoryResponse = {
   cache: DashboardCacheMeta;
 };
 
+export type PairDetailSummaryResponse = {
+  pair: string;
+  timeframe: string;
+  status: string | null;
+  summary: {
+    total_pnl_usdt: number | null;
+    total_trades: number | null;
+    win_rate: number | null;
+    profit_factor: number | null;
+    avg_reversion_time_seconds: number | null;
+    avg_hedge_ratio: number | null;
+    current_hedge_ratio: number | null;
+    avg_hedge_drift_pct: number | null;
+    current_regime: string | null;
+    current_bayesian_posterior: number | null;
+    current_final_rank_score: number | null;
+  };
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  latest_trade: TradeSummary | null;
+  block_reason_counts: Record<string, number>;
+  counterfactual_summary: {
+    best_exit_policy: string | null;
+    avg_missed_profit_usdt: number | null;
+    avg_avoided_loss_usdt: number | null;
+    actual_exit_efficiency: number | null;
+  };
+  hedge_summary: {
+    avg_entry_hedge_ratio: number | null;
+    avg_exit_hedge_ratio: number | null;
+    avg_hedge_drift_pct: number | null;
+    equal_notional_total_pnl: number | null;
+    hedge_ratio_sized_total_pnl: number | null;
+    sizing_pnl_delta_usdt: number | null;
+  };
+  cache: DashboardCacheMeta;
+};
+
 export type PairPerformanceSummary = {
   pair: string | null;
   total_trades: number | null;
@@ -1347,6 +1385,26 @@ export async function getPairHistory(params?: {
   const suffix = query.toString();
   return apiRequest<PairHistoryResponse>(
     `/admin/pairs/history${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
+}
+
+export async function getPairDetailSummary(params: {
+  pair: string;
+  timeframe?: string;
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<PairDetailSummaryResponse> {
+  const query = new URLSearchParams({
+    pair: params.pair,
+    timeframe: params.timeframe || "1m",
+  });
+  if (params.startTs !== undefined) query.set("start_ts", String(params.startTs));
+  if (params.endTs !== undefined) query.set("end_ts", String(params.endTs));
+  if (params.refresh !== undefined) query.set("refresh", params.refresh ? "true" : "false");
+  return apiRequest<PairDetailSummaryResponse>(
+    `/admin/pairs/detail-summary?${query.toString()}`,
     { method: "GET" },
   );
 }

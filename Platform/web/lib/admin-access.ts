@@ -45,6 +45,12 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
         group: "Monitor",
         requiredPermissions: ["view_pair_universe", "view_dashboard"],
       },
+      {
+        href: "/admin/dashboard/pair-detail",
+        label: "Pair Detail",
+        group: "Monitor",
+        requiredPermissions: ["view_pair_universe", "view_dashboard"],
+      },
     ],
   },
   {

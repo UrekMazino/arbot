@@ -84,6 +84,15 @@ def _get_pair_history_summary_service():
     return get_pair_history_summary
 
 
+def _get_pair_detail_summary_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.pair_detail_service import get_pair_detail_summary
+
+    return get_pair_detail_summary
+
+
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
     filtered: dict[str, str] = {}
     for key, value in values.items():
@@ -385,6 +394,30 @@ def admin_pair_history(
             sort_dir=sort_dir,
             page=page,
             page_size=page_size,
+            refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get("/pairs/detail-summary")
+def admin_pair_detail_summary(
+    pair: str = Query(..., min_length=1),
+    timeframe: str = Query(default="1m", min_length=1),
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_pair_universe", "view_dashboard")),
+):
+    try:
+        service = _get_pair_detail_summary_service()
+        return service(
+            pair=pair,
+            timeframe=timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
             refresh=refresh,
         )
     except ValueError as exc:

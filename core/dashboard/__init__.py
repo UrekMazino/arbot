@@ -35,6 +35,11 @@ from core.dashboard.analytics_service import (
     clear_analytics_cache,
     get_analytics_dashboard,
 )
+from core.dashboard.risk_health_service import (
+    RiskHealthDataBundle,
+    clear_risk_health_cache,
+    get_risk_health_dashboard,
+)
 
 __all__ = [
     "AnalyticsSummary",
@@ -51,6 +56,7 @@ __all__ = [
     "PortfolioDataBundle",
     "PortfolioSummary",
     "ReplaySignalSummary",
+    "RiskHealthDataBundle",
     "RiskEventSummary",
     "SUPPORTED_DASHBOARD_TAGS",
     "TradeSummary",
@@ -58,8 +64,10 @@ __all__ = [
     "clear_pair_history_cache",
     "clear_pair_detail_cache",
     "clear_analytics_cache",
+    "clear_risk_health_cache",
     "get_pair_history_summary",
     "get_pair_detail_summary",
     "get_analytics_dashboard",
     "get_portfolio_dashboard",
+    "get_risk_health_dashboard",
 ]

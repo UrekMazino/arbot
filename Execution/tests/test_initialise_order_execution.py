@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,11 @@ sys.path.insert(0, str(ROOT_DIR))
 
 from func_execution_calls import initialise_order_execution
 from config_execution_api import ticker_1, dry_run
+
+exchange_demo_disabled = pytest.mark.skipif(
+    os.getenv("RUN_EXCHANGE_TESTS") != "1",
+    reason="Exchange demo tests are disabled by default.",
+)
 
 
 def _print_result(label, result):
@@ -71,8 +77,13 @@ def test_live_data_dry_run():
     assert _print_result("Live-data dry-run", result), "Live-data dry-run returned failed result"
 
 
+@pytest.mark.integration
+@pytest.mark.exchange_demo
+@exchange_demo_disabled
 def test_demo_execution():
     print("\n[3] Demo execution (real orders)")
+    if os.getenv("RUN_EXCHANGE_TESTS") != "1":
+        pytest.skip("Exchange demo tests are disabled by default.")
     if dry_run:
         pytest.skip("Demo execution skipped: dry_run=True. Set dry_run=False to enable.")
 

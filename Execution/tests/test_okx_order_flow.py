@@ -1,5 +1,8 @@
 import sys
+import os
 from pathlib import Path
+
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
@@ -11,6 +14,11 @@ from config_execution_api import (
     market_session,
 )
 from func_execution_calls import place_limit_order, cancel_order, get_open_orders, get_order_history
+
+exchange_demo_disabled = pytest.mark.skipif(
+    os.getenv("RUN_EXCHANGE_TESTS") != "1",
+    reason="Exchange demo tests are disabled by default.",
+)
 
 
 def _get_last_price(inst_id):
@@ -35,8 +43,13 @@ def _get_last_price(inst_id):
         return None
 
 
+@pytest.mark.integration
+@pytest.mark.exchange_demo
+@exchange_demo_disabled
 def test_demo_order_flow():
     print("OKX demo order flow")
+    if os.getenv("RUN_EXCHANGE_TESTS") != "1":
+        pytest.skip("Exchange demo tests are disabled by default.")
     print(f"Mode: {'DRY RUN' if dry_run else 'LIVE/DEMO ORDERS'}")
 
     last_price = _get_last_price(ticker_1)

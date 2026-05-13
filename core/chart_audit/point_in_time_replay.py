@@ -12,6 +12,11 @@ from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, TypeAlias
 
+from core.chart_audit.hedge_ratio_drift_audit import compute_hedge_ratio_drift_pct
+from core.chart_audit.hedge_ratio_sizing_audit import (
+    HEDGE_RATIO_SOURCE_FRESH,
+    build_sizing_preview,
+)
 from core.chart_audit.marker_types import (
     BlockReason,
     CuratorState,
@@ -94,6 +99,7 @@ class _ReplayPosition:
     entry_timestamp: int
     entry_z_score: float | None
     entry_spread: float | None
+    entry_hedge_ratio: float | None
 
 
 class PointInTimeReplayEngine:
@@ -160,6 +166,7 @@ class PointInTimeReplayEngine:
                 entry_timestamp=int(snapshot.timestamp),
                 entry_z_score=latest_z,
                 entry_spread=latest_spread,
+                entry_hedge_ratio=snapshot.hedge_ratio_until_t,
             )
             self.position_state = _open_state_for_side(side)
             return [marker]
@@ -205,14 +212,7 @@ class PointInTimeReplayEngine:
                 "entry_z_threshold": float(snapshot.config_snapshot.entry_z_threshold),
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
-                "hedge_ratio_at_t": snapshot.hedge_ratio_until_t,
-                "hedge_ratio_source": "point_in_time_cointegration"
-                if snapshot.cointegration_result_until_t is not None
-                else None,
-                "replay_sizing_mode": snapshot.config_snapshot.hedge_sizing_mode,
-                "hedge_ratio_valid": snapshot.cointegration_result_until_t.is_valid
-                if snapshot.cointegration_result_until_t is not None
-                else False,
+                **_replay_hedge_metadata(snapshot, side),
                 "hard_validation": hard_validation.to_dict(),
             },
         )
@@ -247,14 +247,7 @@ class PointInTimeReplayEngine:
                 "entry_z_threshold": float(snapshot.config_snapshot.entry_z_threshold),
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
-                "hedge_ratio_at_t": snapshot.hedge_ratio_until_t,
-                "hedge_ratio_source": "point_in_time_cointegration"
-                if snapshot.cointegration_result_until_t is not None
-                else None,
-                "replay_sizing_mode": snapshot.config_snapshot.hedge_sizing_mode,
-                "hedge_ratio_valid": snapshot.cointegration_result_until_t.is_valid
-                if snapshot.cointegration_result_until_t is not None
-                else False,
+                **_replay_hedge_metadata(snapshot, side),
                 "hard_validation": hard_validation.to_dict() if hard_validation is not None else None,
             },
         )
@@ -283,6 +276,13 @@ class PointInTimeReplayEngine:
             exit_reasons.append("curator_state_no_longer_tradable")
             exit_triggers.append("curator_state_non_tradable")
             block_reasons.extend(_curator_exit_block_reasons(snapshot.curator_state))
+        hedge_ratio_drift_pct = _hedge_ratio_drift_pct(position.entry_hedge_ratio, snapshot.hedge_ratio_until_t)
+        if (
+            hedge_ratio_drift_pct is not None
+            and hedge_ratio_drift_pct >= float(snapshot.config_snapshot.max_hedge_ratio_drift_pct)
+        ):
+            exit_reasons.append("hedge_ratio_drift")
+            exit_triggers.append("hedge_ratio_drift")
 
         if not exit_reasons:
             return None
@@ -311,8 +311,11 @@ class PointInTimeReplayEngine:
                 "entry_timestamp": position.entry_timestamp,
                 "entry_z_score": position.entry_z_score,
                 "entry_spread": position.entry_spread,
+                "hedge_ratio_at_entry": position.entry_hedge_ratio,
                 "hedge_ratio_at_exit": snapshot.hedge_ratio_until_t,
+                "hedge_ratio_drift_pct": hedge_ratio_drift_pct,
                 "config_version": snapshot.config_snapshot.config_version,
+                **_replay_hedge_metadata(snapshot, position.side),
             },
         )
         self._position = None
@@ -380,6 +383,44 @@ def _curator_exit_block_reasons(curator_state: CuratorState) -> tuple[BlockReaso
     return (reason,)
 
 
+def _replay_hedge_metadata(snapshot: ReplaySnapshot, side: str | None) -> dict[str, Any]:
+    hedge_ratio = snapshot.hedge_ratio_until_t
+    hedge_ratio_source = HEDGE_RATIO_SOURCE_FRESH if snapshot.cointegration_result_until_t is not None else None
+    preview = build_sizing_preview(
+        gross_pair_notional_usdt=snapshot.config_snapshot.target_gross_pair_notional_usdt,
+        hedge_ratio=hedge_ratio,
+        hedge_ratio_source=hedge_ratio_source,
+        config=snapshot.config_snapshot,
+        side=side,
+    )
+    selected = preview.selected
+    return _compact_mapping(
+        {
+            "hedge_ratio_at_t": hedge_ratio,
+            "hedge_ratio_source": hedge_ratio_source,
+            "replay_sizing_mode": preview.selected_mode,
+            "target_leg1_notional_usdt": selected.leg1_notional_usdt if selected is not None else None,
+            "target_leg2_notional_usdt": selected.leg2_notional_usdt if selected is not None else None,
+            "target_gross_pair_notional_usdt": snapshot.config_snapshot.target_gross_pair_notional_usdt,
+            "hedge_ratio_valid": preview.hedge_ratio_valid,
+            "hedge_ratio_sizing_enabled": snapshot.config_snapshot.hedge_ratio_sizing_enabled,
+            "hedge_sizing_preview": preview.to_dict(),
+        }
+    )
+
+
+def _hedge_ratio_drift_pct(entry_hedge_ratio: float | None, current_hedge_ratio: float | None) -> float | None:
+    if entry_hedge_ratio is None or current_hedge_ratio is None:
+        return None
+    try:
+        return compute_hedge_ratio_drift_pct(
+            entry_hedge_ratio=entry_hedge_ratio,
+            current_hedge_ratio=current_hedge_ratio,
+        )
+    except ValueError:
+        return None
+
+
 def _blocked_reason(status: ReplayMarkerStatus, block_reasons: Sequence[BlockReason]) -> str:
     if status == STATUS_INSUFFICIENT_DATA:
         return "entry threshold reached but point-in-time replay data is insufficient"
@@ -402,6 +443,10 @@ def _unique_reasons(reasons: Sequence[BlockReason]) -> tuple[BlockReason, ...]:
 def _latest_finite(values: Sequence[Any]) -> float | None:
     finite = _finite_values(values)
     return finite[-1] if finite else None
+
+
+def _compact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(key): item for key, item in value.items() if item is not None}
 
 
 def _finite_values(values: Sequence[Any]) -> list[float]:

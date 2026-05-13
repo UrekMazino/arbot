@@ -273,6 +273,7 @@ class ReplayConfigSnapshot:
     max_hedge_ratio_drift_pct: float = 0.20
     severe_hedge_ratio_drift_pct: float = 0.35
     min_cointegration_window: int = 120
+    target_gross_pair_notional_usdt: float | None = None
 
     warning: str | None = None
 
@@ -294,6 +295,7 @@ class ReplayConfigSnapshot:
         object.__setattr__(self, "max_hedge_ratio_drift_pct", float(self.max_hedge_ratio_drift_pct))
         object.__setattr__(self, "severe_hedge_ratio_drift_pct", float(self.severe_hedge_ratio_drift_pct))
         object.__setattr__(self, "min_cointegration_window", max(int(self.min_cointegration_window), 1))
+        object.__setattr__(self, "target_gross_pair_notional_usdt", _optional_float(self.target_gross_pair_notional_usdt))
 
 
 @dataclass(frozen=True)

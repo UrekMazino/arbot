@@ -268,6 +268,19 @@ def current_config_snapshot(
                 default=120.0,
             )
         ),
+        target_gross_pair_notional_usdt=_optional_number_from_config_or_env(
+            current_config,
+            env_source,
+            aliases=(
+                ("target_gross_pair_notional_usdt",),
+                ("target_total_pair_notional_usdt",),
+                ("entry_notional_usdt",),
+                ("entry_notional",),
+                ("strategy", "target_gross_pair_notional_usdt"),
+            ),
+            env_names=("STATBOT_TARGET_GROSS_PAIR_NOTIONAL_USDT", "STATBOT_ENTRY_NOTIONAL_USDT"),
+            default=None,
+        ),
         warning=CURRENT_CONFIG_WARNING,
     )
 
@@ -474,6 +487,14 @@ def _snapshot_from_historical_payload(record: Any, payload: Mapping[str, Any]) -
                     ("strategy", "min_cointegration_window"),
                 )
                 or 120
+            ),
+            target_gross_pair_notional_usdt=_optional_config_number(
+                payload,
+                ("target_gross_pair_notional_usdt",),
+                ("target_total_pair_notional_usdt",),
+                ("entry_notional_usdt",),
+                ("entry_notional",),
+                ("strategy", "target_gross_pair_notional_usdt"),
             ),
         )
     except (TypeError, ValueError):

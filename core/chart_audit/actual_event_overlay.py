@@ -12,6 +12,11 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+from core.chart_audit.hedge_ratio_sizing_audit import (
+    build_entry_hedge_metadata,
+    compute_hedge_ratio_execution_error_pct,
+    compute_hedge_sizing_error_pct,
+)
 from core.chart_audit.marker_types import (
     ActualAdvancedMLShadowRecommendationMarker,
     ActualBlockedSignalMarker,
@@ -119,12 +124,15 @@ def actual_markers_from_trade_rows(
                     spread=_coerce_float(_get_any(trade, "entry_spread", "spread")),
                     trade_id=trade_id,
                     reason=_normalize_text(_get_any(trade, "entry_reason")) or "trade_row_entry",
-                    metadata=_compact_metadata(
-                        {
-                            "source": "trade_row",
-                            "pair": trade_pair,
-                        }
-                    ),
+                    metadata={
+                        **_compact_metadata(
+                            {
+                                "source": "trade_row",
+                                "pair": trade_pair,
+                            }
+                        ),
+                        **_hedge_entry_metadata(trade),
+                    },
                 )
             )
 
@@ -232,6 +240,8 @@ def normalize_block_reason(reason: Any) -> BlockReason:
 def _actual_entry_marker(event: Any, payload: Mapping[str, Any], timestamp: float, original_timestamp: float) -> ActualMarker:
     trade_id = _trade_id(payload) or _event_id(event, payload) or str(timestamp)
     z_score = _coerce_float(_get_any(payload, "entry_z", "z_score", "current_z"))
+    metadata = _event_metadata(event, payload, source="event")
+    metadata.update(_hedge_entry_metadata(payload))
     return ActualEntryMarker(
         timestamp=timestamp,
         original_event_timestamp=original_timestamp,
@@ -240,7 +250,7 @@ def _actual_entry_marker(event: Any, payload: Mapping[str, Any], timestamp: floa
         spread=_coerce_float(_get_any(payload, "spread", "entry_spread")),
         trade_id=trade_id,
         reason=_normalize_text(_get_any(payload, "reason")) or "trade_open",
-        metadata=_event_metadata(event, payload, source="event"),
+        metadata=metadata,
     )
 
 
@@ -429,6 +439,92 @@ def _event_metadata(
     return metadata
 
 
+def _hedge_entry_metadata(record: Any) -> dict[str, Any]:
+    hedge_keys = (
+        "entry_hedge_ratio",
+        "hedge_ratio",
+        "hedge_ratio_at_entry",
+        "target_gross_pair_notional_usdt",
+        "target_total_pair_notional_usdt",
+        "target_leg1_notional_usdt",
+        "target_leg2_notional_usdt",
+        "actual_leg1_notional_usdt",
+        "actual_leg2_notional_usdt",
+        "hedge_sizing_mode",
+        "hedge_ratio_sizing_enabled",
+    )
+    if all(_get_any(record, key) is None for key in hedge_keys):
+        return {}
+    hedge_ratio = _coerce_float(_get_any(record, "entry_hedge_ratio", "hedge_ratio", "hedge_ratio_at_entry"))
+    gross = _coerce_float(
+        _get_any(
+            record,
+            "target_gross_pair_notional_usdt",
+            "target_total_pair_notional_usdt",
+            "entry_notional_usdt",
+            "entry_notional",
+        )
+    )
+    actual_leg1 = _coerce_float(
+        _get_any(record, "actual_leg1_notional_usdt", "leg1_notional_usdt", "long_notional_usdt")
+    )
+    actual_leg2 = _coerce_float(
+        _get_any(record, "actual_leg2_notional_usdt", "leg2_notional_usdt", "short_notional_usdt")
+    )
+    explicit_target_leg1 = _coerce_float(_get_any(record, "target_leg1_notional_usdt"))
+    explicit_target_leg2 = _coerce_float(_get_any(record, "target_leg2_notional_usdt"))
+    metadata = build_entry_hedge_metadata(
+        gross_pair_notional_usdt=gross,
+        hedge_ratio=hedge_ratio,
+        hedge_ratio_source=_normalize_text(
+            _get_any(record, "hedge_ratio_source") or ("fresh_cointegration_at_entry" if hedge_ratio is not None else None)
+        ),
+        config={
+            "hedge_ratio_sizing_enabled": _coerce_bool(_get_any(record, "hedge_ratio_sizing_enabled")),
+            "hedge_sizing_mode": _get_any(record, "hedge_sizing_mode") or "equal_notional",
+            "min_hedge_ratio": _get_any(record, "min_hedge_ratio") or 0.20,
+            "max_hedge_ratio": _get_any(record, "max_hedge_ratio") or 5.00,
+            "reject_negative_hedge_ratio": (
+                True
+                if _get_any(record, "reject_negative_hedge_ratio") is None
+                else _coerce_bool(_get_any(record, "reject_negative_hedge_ratio"))
+            ),
+        },
+        side=_normalize_side(_get_any(record, "side", "spread_side", "signal_side")),
+        actual_leg1_notional_usdt=actual_leg1,
+        actual_leg2_notional_usdt=actual_leg2,
+    )
+    if explicit_target_leg1 is not None:
+        metadata["target_leg1_notional_usdt"] = explicit_target_leg1
+    if explicit_target_leg2 is not None:
+        metadata["target_leg2_notional_usdt"] = explicit_target_leg2
+    if (
+        actual_leg1 is not None
+        and actual_leg2 is not None
+        and metadata.get("target_leg1_notional_usdt") is not None
+        and metadata.get("target_leg2_notional_usdt") is not None
+    ):
+        metadata["hedge_sizing_error_pct"] = compute_hedge_sizing_error_pct(
+            actual_leg1_notional_usdt=actual_leg1,
+            actual_leg2_notional_usdt=actual_leg2,
+            target_leg1_notional_usdt=float(metadata["target_leg1_notional_usdt"]),
+            target_leg2_notional_usdt=float(metadata["target_leg2_notional_usdt"]),
+        )
+    if actual_leg1 is not None and actual_leg2 is not None and hedge_ratio is not None:
+        metadata["hedge_ratio_execution_error_pct"] = compute_hedge_ratio_execution_error_pct(
+            actual_leg1_notional_usdt=actual_leg1,
+            actual_leg2_notional_usdt=actual_leg2,
+            hedge_ratio=hedge_ratio,
+        )
+    explicit_error = _coerce_float(_get_any(record, "hedge_sizing_error_pct"))
+    if explicit_error is not None:
+        metadata["hedge_sizing_error_pct"] = explicit_error
+    explicit_ratio_error = _coerce_float(_get_any(record, "hedge_ratio_execution_error_pct"))
+    if explicit_ratio_error is not None:
+        metadata["hedge_ratio_execution_error_pct"] = explicit_ratio_error
+    return metadata
+
+
 def _payload(event: Any) -> Mapping[str, Any]:
     payload = _get_any(event, "payload", "payload_json")
     if isinstance(payload, Mapping):
@@ -543,6 +639,14 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "pass", "passed"}
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "enabled"}
 
 
 def _compact_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:

@@ -22,6 +22,7 @@ def _config(
     persistence_candles: int = 2,
     exit_z_threshold: float = 0.35,
     max_hold_seconds: float = 180.0,
+    target_gross_pair_notional_usdt: float | None = None,
 ) -> ReplayConfigSnapshot:
     return ReplayConfigSnapshot(
         config_version="test",
@@ -36,6 +37,7 @@ def _config(
         max_spread_bps=5.0,
         max_slippage_bps=8.0,
         min_cointegration_window=1,
+        target_gross_pair_notional_usdt=target_gross_pair_notional_usdt,
     )
 
 
@@ -48,6 +50,7 @@ def _snapshot(
     curator_state_source: str = "historical",
     zero_crossings: int | None = 3,
     coint_flag: int | None = 1,
+    hedge_ratio: float | None = 1.0,
     orderbook_snapshot: dict[str, float] | None = None,
 ) -> ReplaySnapshot:
     timestamp = start_ts + (len(zscores) - 1) * 60
@@ -63,7 +66,7 @@ def _snapshot(
         FrozenCointegrationResult(
             p_value=0.01,
             adf_stat=-3.0,
-            hedge_ratio=1.0,
+            hedge_ratio=hedge_ratio,
             zero_crossings=zero_crossings,
             is_valid=coint_flag in {None, 1},
             reasons=() if coint_flag in {None, 1} else ("cointegration_invalid",),
@@ -83,7 +86,7 @@ def _snapshot(
         spread_until_t=spreads,
         rolling_mean_until_t=None,
         rolling_std_until_t=None,
-        hedge_ratio_until_t=1.0,
+        hedge_ratio_until_t=hedge_ratio,
         cointegration_result_until_t=coint_result,
         zero_crossing_count_until_t=zero_crossings,
         curator_state=curator_state,
@@ -276,3 +279,37 @@ def test_replay_exit_candidate_to_dict_has_v1_4_schema_fields() -> None:
     assert marker["reason"] == "z_reverted_to_exit_threshold"
     assert marker["exit_trigger"] == "z_reversion"
     assert isinstance(marker["metadata"], dict)
+
+
+def test_replay_marker_includes_hedge_ratio_sizing_metadata() -> None:
+    marker = PointInTimeReplayEngine().evaluate(
+        _snapshot(
+            [-2.1, -2.2],
+            config=_config(
+                target_gross_pair_notional_usdt=1500.0,
+                persistence_candles=2,
+            ),
+        )
+    )[0]
+
+    assert marker.marker_type == ReplayMarkerType.REPLAY_ENTRY_CANDIDATE
+    assert marker.metadata["hedge_ratio_at_t"] == 1.0
+    assert marker.metadata["hedge_ratio_source"] == "fresh_cointegration_at_entry"
+    assert marker.metadata["replay_sizing_mode"] == "equal_notional"
+    assert marker.metadata["target_gross_pair_notional_usdt"] == 1500.0
+    assert marker.metadata["target_leg1_notional_usdt"] == 750.0
+    assert marker.metadata["target_leg2_notional_usdt"] == 750.0
+    assert marker.metadata["hedge_ratio_valid"] is True
+    assert marker.metadata["hedge_ratio_sizing_enabled"] is False
+
+
+def test_open_replay_position_can_exit_on_hedge_ratio_drift() -> None:
+    engine = PointInTimeReplayEngine()
+    config = _config(persistence_candles=2)
+    engine.evaluate(_snapshot([-2.1, -2.2], config=config, hedge_ratio=1.8))
+
+    marker = engine.evaluate(_snapshot([-2.1, -2.2, -1.8], config=config, hedge_ratio=1.2))[0]
+
+    assert marker.marker_type == ReplayMarkerType.REPLAY_EXIT_CANDIDATE
+    assert marker.exit_trigger == "hedge_ratio_drift"
+    assert marker.metadata["hedge_ratio_drift_pct"] == pytest.approx(abs(1.2 - 1.8) / 1.8)

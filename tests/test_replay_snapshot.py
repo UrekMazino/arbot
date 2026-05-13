@@ -258,6 +258,7 @@ def test_replay_config_snapshot_uses_replay_relevant_fields_only() -> None:
         "max_hedge_ratio_drift_pct",
         "severe_hedge_ratio_drift_pct",
         "min_cointegration_window",
+        "target_gross_pair_notional_usdt",
         "warning",
     }
 

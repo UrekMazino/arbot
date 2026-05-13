@@ -169,3 +169,40 @@ def test_trade_rows_emit_actual_entry_and_exit_markers() -> None:
     assert isinstance(markers[1], ActualManualExitMarker)
     assert markers[1].side == "SELL_SPREAD"
     assert markers[1].pnl_usdt == 1.25
+
+
+def test_actual_entry_marker_attaches_hedge_ratio_sizing_metadata() -> None:
+    marker = actual_marker_from_event(
+        {
+            "event_type": "trade_open",
+            "event_id": "evt-hedge",
+            "timestamp": 1_777_777_777,
+            "payload": {
+                "trade_id": "hedge-trade",
+                "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                "side": "buy_spread",
+                "entry_hedge_ratio": 1.8,
+                "hedge_ratio_source": "fresh_cointegration_at_entry",
+                "hedge_sizing_mode": "gross_normalized_beta",
+                "hedge_ratio_sizing_enabled": True,
+                "target_gross_pair_notional_usdt": 1500.0,
+                "actual_leg1_notional_usdt": 534.9,
+                "actual_leg2_notional_usdt": 963.8,
+            },
+        }
+    )
+
+    assert isinstance(marker, ActualEntryMarker)
+    assert marker.metadata["entry_hedge_ratio"] == 1.8
+    assert marker.metadata["hedge_ratio_source"] == "fresh_cointegration_at_entry"
+    assert marker.metadata["hedge_sizing_mode"] == "gross_normalized_beta"
+    assert marker.metadata["hedge_ratio_sizing_enabled"] is True
+    assert marker.metadata["target_gross_pair_notional_usdt"] == 1500.0
+    assert marker.metadata["target_leg1_notional_usdt"] > 0
+    assert marker.metadata["target_leg2_notional_usdt"] > 0
+    assert marker.metadata["actual_leg1_notional_usdt"] == 534.9
+    assert marker.metadata["actual_leg2_notional_usdt"] == 963.8
+    assert marker.metadata["hedge_sizing_error_pct"] >= 0
+    assert marker.metadata["hedge_ratio_execution_error_pct"] >= 0
+    assert marker.metadata["leg1_side"] == "long"
+    assert marker.metadata["leg2_side"] == "short"

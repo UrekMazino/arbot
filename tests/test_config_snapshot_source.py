@@ -35,6 +35,7 @@ def _historical_record(version: str, activated_at: int, entry_z: float) -> dict[
         "max_hedge_ratio_drift_pct": 0.20,
         "severe_hedge_ratio_drift_pct": 0.35,
         "min_cointegration_window": 120,
+        "target_gross_pair_notional_usdt": 1500.0,
     }
 
 
@@ -103,6 +104,7 @@ def test_config_at_falls_back_to_current_approximate_when_historical_unavailable
     assert result.max_slippage_bps == 7.5
     assert result.hedge_sizing_mode == "equal_notional"
     assert result.min_cointegration_window == 120
+    assert result.target_gross_pair_notional_usdt is None
 
 
 def test_current_config_snapshot_copies_only_replay_fields() -> None:
@@ -200,6 +202,7 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
             "STATBOT_MAX_HEDGE_RATIO_DRIFT_PCT": "0.18",
             "STATBOT_SEVERE_HEDGE_RATIO_DRIFT_PCT": "0.30",
             "STATBOT_MIN_COINTEGRATION_WINDOW": "90",
+            "STATBOT_TARGET_GROSS_PAIR_NOTIONAL_USDT": "1500",
         },
     )
 
@@ -223,6 +226,7 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
     assert result.max_hedge_ratio_drift_pct == 0.18
     assert result.severe_hedge_ratio_drift_pct == 0.30
     assert result.min_cointegration_window == 90
+    assert result.target_gross_pair_notional_usdt == 1500.0
 
 
 def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
@@ -240,6 +244,7 @@ def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
                 "max_hedge_ratio_drift_pct": 0.16,
                 "severe_hedge_ratio_drift_pct": 0.28,
                 "min_cointegration_window": 80,
+                "target_gross_pair_notional_usdt": 1200,
             }
         ],
     )
@@ -254,3 +259,4 @@ def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
     assert result.max_hedge_ratio_drift_pct == 0.16
     assert result.severe_hedge_ratio_drift_pct == 0.28
     assert result.min_cointegration_window == 80
+    assert result.target_gross_pair_notional_usdt == 1200.0

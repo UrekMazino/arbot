@@ -203,19 +203,8 @@ class AdvancedTradeManager:
                 )
             return trailing_result
         
-        # 4. PARTIAL EXIT
-        partial_result = self._check_partial_exit(current_z)
-        if partial_result['action'] == 'PARTIAL_EXIT':
-            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
-                return self._net_profit_guard_hold(
-                    ExitReason.PARTIAL_PROFIT,
-                    floating_pnl_usdt,
-                    min_profit_usdt,
-                )
-            return partial_result
-        
-        # 5. MEAN-REVERSION TARGET HIT (full exit)
-        if abs(current_z) < self.config['take_profit_z']:
+        # 4. MEAN-REVERSION TARGET HIT (full exit)
+        if abs(current_z) <= self.config['take_profit_z']:
             if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
                 return self._net_profit_guard_hold(
                     ExitReason.TAKE_PROFIT,
@@ -228,6 +217,17 @@ class AdvancedTradeManager:
                 message=f"Mean-reversion target hit: Z={current_z:+.2f} sigma (target: {self.config['take_profit_z']:.2f} sigma)",
                 percentage=1.0
             )
+
+        # 5. PARTIAL EXIT
+        partial_result = self._check_partial_exit(current_z)
+        if partial_result['action'] == 'PARTIAL_EXIT':
+            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+                return self._net_profit_guard_hold(
+                    ExitReason.PARTIAL_PROFIT,
+                    floating_pnl_usdt,
+                    min_profit_usdt,
+                )
+            return partial_result
         
         # 6. STALL DETECTION (dynamic)
         stall_result = self._check_stall_dynamic(current_z)

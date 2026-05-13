@@ -36,6 +36,14 @@ def _historical_record(version: str, activated_at: int, entry_z: float) -> dict[
         "severe_hedge_ratio_drift_pct": 0.35,
         "min_cointegration_window": 120,
         "target_gross_pair_notional_usdt": 1500.0,
+        "replay_ml_gate": {
+            "enabled": True,
+            "min_bayesian_posterior": 0.55,
+            "min_final_rank_score": 0.50,
+            "max_break_risk": 0.65,
+            "max_microstructure_risk": 0.70,
+            "require_hard_validation": True,
+        },
     }
 
 
@@ -105,6 +113,8 @@ def test_config_at_falls_back_to_current_approximate_when_historical_unavailable
     assert result.hedge_sizing_mode == "equal_notional"
     assert result.min_cointegration_window == 120
     assert result.target_gross_pair_notional_usdt is None
+    assert result.ml_gate_config.enabled is True
+    assert result.ml_gate_config.max_break_risk == 0.65
 
 
 def test_current_config_snapshot_copies_only_replay_fields() -> None:
@@ -203,6 +213,13 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
             "STATBOT_SEVERE_HEDGE_RATIO_DRIFT_PCT": "0.30",
             "STATBOT_MIN_COINTEGRATION_WINDOW": "90",
             "STATBOT_TARGET_GROSS_PAIR_NOTIONAL_USDT": "1500",
+            "STATBOT_REPLAY_ML_GATE_ENABLED": "false",
+            "STATBOT_REPLAY_ML_MIN_BAYESIAN_POSTERIOR": "0.60",
+            "STATBOT_REPLAY_ML_MIN_FINAL_RANK_SCORE": "0.55",
+            "STATBOT_REPLAY_ML_MAX_BREAK_RISK": "0.70",
+            "STATBOT_REPLAY_ML_MAX_MICROSTRUCTURE_RISK": "0.75",
+            "STATBOT_REPLAY_ML_MIN_LIQUIDITY_SCORE": "0.25",
+            "STATBOT_REPLAY_ML_REQUIRE_HARD_VALIDATION": "false",
         },
     )
 
@@ -227,6 +244,13 @@ def test_current_fallback_can_use_env_without_silencing_source() -> None:
     assert result.severe_hedge_ratio_drift_pct == 0.30
     assert result.min_cointegration_window == 90
     assert result.target_gross_pair_notional_usdt == 1500.0
+    assert result.ml_gate_config.enabled is False
+    assert result.ml_gate_config.min_bayesian_posterior == 0.60
+    assert result.ml_gate_config.min_final_rank_score == 0.55
+    assert result.ml_gate_config.max_break_risk == 0.70
+    assert result.ml_gate_config.max_microstructure_risk == 0.75
+    assert result.ml_gate_config.min_liquidity_score == 0.25
+    assert result.ml_gate_config.require_hard_validation is False
 
 
 def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
@@ -245,6 +269,15 @@ def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
                 "severe_hedge_ratio_drift_pct": 0.28,
                 "min_cointegration_window": 80,
                 "target_gross_pair_notional_usdt": 1200,
+                "replay_ml_gate": {
+                    "enabled": False,
+                    "min_bayesian_posterior": 0.62,
+                    "min_final_rank_score": 0.58,
+                    "max_break_risk": 0.60,
+                    "max_microstructure_risk": 0.68,
+                    "min_liquidity_score": 0.22,
+                    "require_hard_validation": False,
+                },
             }
         ],
     )
@@ -260,3 +293,10 @@ def test_historical_config_snapshot_reads_v1_4_hedge_fields() -> None:
     assert result.severe_hedge_ratio_drift_pct == 0.28
     assert result.min_cointegration_window == 80
     assert result.target_gross_pair_notional_usdt == 1200.0
+    assert result.ml_gate_config.enabled is False
+    assert result.ml_gate_config.min_bayesian_posterior == 0.62
+    assert result.ml_gate_config.min_final_rank_score == 0.58
+    assert result.ml_gate_config.max_break_risk == 0.60
+    assert result.ml_gate_config.max_microstructure_risk == 0.68
+    assert result.ml_gate_config.min_liquidity_score == 0.22
+    assert result.ml_gate_config.require_hard_validation is False

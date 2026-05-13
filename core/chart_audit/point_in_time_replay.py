@@ -25,6 +25,12 @@ from core.chart_audit.marker_types import (
     ReplayMarkerType,
     build_replay_entry_id,
 )
+from core.chart_audit.ml_replay_scoring_bridge import (
+    ReplayMLScoringBridge,
+    evaluate_replay_ml_gate,
+    ml_score_marker_metadata,
+)
+from core.chart_audit.ml_replay_types import ReplayMLScoreSnapshot
 from core.chart_audit.point_in_time_indicators import (
     BasicHardValidationPointInTimeResult,
     STATUS_BLOCKED_CANDIDATE,
@@ -105,9 +111,10 @@ class _ReplayPosition:
 class PointInTimeReplayEngine:
     """Sequential MVP replay state machine."""
 
-    def __init__(self) -> None:
+    def __init__(self, ml_scoring_bridge: ReplayMLScoringBridge | Any | None = None) -> None:
         self.position_state = ReplayPositionState.NO_POSITION
         self._position: _ReplayPosition | None = None
+        self._ml_scoring_bridge = ml_scoring_bridge or ReplayMLScoringBridge()
 
     def reset(self) -> None:
         self.position_state = ReplayPositionState.NO_POSITION
@@ -126,9 +133,10 @@ class PointInTimeReplayEngine:
         latest_spread = _latest_finite(snapshot.spread_until_t)
         if latest_z is None:
             return []
+        ml_score = self._ml_score(snapshot)
 
         if self._position is not None:
-            exit_marker = self._maybe_exit(snapshot, latest_z, latest_spread)
+            exit_marker = self._maybe_exit(snapshot, latest_z, latest_spread, ml_score)
             if exit_marker is not None:
                 return [exit_marker]
 
@@ -144,6 +152,7 @@ class PointInTimeReplayEngine:
                         status=STATUS_BLOCKED_CANDIDATE,
                         reason="entry threshold reached but replay position is already open",
                         hard_validation=None,
+                        ml_score=ml_score,
                     )
                 ]
             return []
@@ -159,7 +168,29 @@ class PointInTimeReplayEngine:
 
         unique_reasons = _unique_reasons(block_reasons)
         if hard_validation.passed and not unique_reasons:
-            marker = self._entry_marker(snapshot, side=side, z_score=latest_z, spread=latest_spread, hard_validation=hard_validation)
+            ml_gate = evaluate_replay_ml_gate(ml_score, snapshot.config_snapshot.ml_gate_config)
+            if not ml_gate.passed:
+                return [
+                    self._blocked_marker(
+                        snapshot,
+                        side=side,
+                        z_score=latest_z,
+                        spread=latest_spread,
+                        block_reasons=ml_gate.block_reasons,
+                        status=STATUS_BLOCKED_CANDIDATE,
+                        reason="entry threshold reached but blocked by advanced ML replay gate",
+                        hard_validation=hard_validation,
+                        ml_score=ml_score,
+                    )
+                ]
+            marker = self._entry_marker(
+                snapshot,
+                side=side,
+                z_score=latest_z,
+                spread=latest_spread,
+                hard_validation=hard_validation,
+                ml_score=ml_score,
+            )
             self._position = _ReplayPosition(
                 side=side,
                 entry_id=str(marker.entry_id),
@@ -182,8 +213,12 @@ class PointInTimeReplayEngine:
                 status=status,
                 reason=_blocked_reason(status, unique_reasons),
                 hard_validation=hard_validation,
+                ml_score=ml_score,
             )
         ]
+
+    def _ml_score(self, snapshot: ReplaySnapshot) -> ReplayMLScoreSnapshot:
+        return self._ml_scoring_bridge.score(snapshot)
 
     def _entry_marker(
         self,
@@ -193,8 +228,10 @@ class PointInTimeReplayEngine:
         z_score: float,
         spread: float | None,
         hard_validation: BasicHardValidationPointInTimeResult,
+        ml_score: ReplayMLScoreSnapshot | None = None,
     ) -> ReplayEntryCandidateMarker:
         entry_id = build_replay_entry_id(snapshot.pair, snapshot.timestamp, side)
+        ml_score = ml_score or self._ml_score(snapshot)
         return ReplayEntryCandidateMarker(
             timestamp=snapshot.timestamp,
             side=side,
@@ -213,6 +250,7 @@ class PointInTimeReplayEngine:
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
                 **_replay_hedge_metadata(snapshot, side),
+                **ml_score_marker_metadata(ml_score),
                 "hard_validation": hard_validation.to_dict(),
             },
         )
@@ -228,7 +266,9 @@ class PointInTimeReplayEngine:
         status: ReplayMarkerStatus,
         reason: str,
         hard_validation: BasicHardValidationPointInTimeResult | None,
+        ml_score: ReplayMLScoreSnapshot | None = None,
     ) -> ReplayBlockedSignalMarker:
+        ml_score = ml_score or self._ml_score(snapshot)
         return ReplayBlockedSignalMarker(
             timestamp=snapshot.timestamp,
             side=side,
@@ -248,6 +288,7 @@ class PointInTimeReplayEngine:
                 "persistence_candles": int(snapshot.config_snapshot.persistence_candles),
                 "config_version": snapshot.config_snapshot.config_version,
                 **_replay_hedge_metadata(snapshot, side),
+                **ml_score_marker_metadata(ml_score),
                 "hard_validation": hard_validation.to_dict() if hard_validation is not None else None,
             },
         )
@@ -257,10 +298,12 @@ class PointInTimeReplayEngine:
         snapshot: ReplaySnapshot,
         latest_z: float,
         latest_spread: float | None,
+        ml_score: ReplayMLScoreSnapshot | None = None,
     ) -> ReplayExitCandidateMarker | None:
         position = self._position
         if position is None:
             return None
+        ml_score = ml_score or self._ml_score(snapshot)
 
         exit_reasons: list[str] = []
         exit_triggers: list[str] = []
@@ -316,6 +359,7 @@ class PointInTimeReplayEngine:
                 "hedge_ratio_drift_pct": hedge_ratio_drift_pct,
                 "config_version": snapshot.config_snapshot.config_version,
                 **_replay_hedge_metadata(snapshot, position.side),
+                **ml_score_marker_metadata(ml_score),
             },
         )
         self._position = None

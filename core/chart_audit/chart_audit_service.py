@@ -17,6 +17,9 @@ from core.chart_audit.actual_event_overlay import actual_markers_from_records
 from core.chart_audit.config_snapshot_source import config_at
 from core.chart_audit.curator_state_source import curator_state_at
 from core.chart_audit.marker_types import MarkerCategory, StatisticalMarkerType
+from core.chart_audit.ml_replay_scoring_bridge import ReplayMLScoringBridge
+from core.chart_audit.ml_score_lookup import StoredMLScoreLookup
+from core.chart_audit.point_in_time_replay import PointInTimeReplayEngine
 from core.chart_audit.replay_snapshot_factory import ReplaySnapshotFactory
 from core.chart_audit.timestamp_alignment import align_actual_marker_timestamps
 
@@ -114,6 +117,7 @@ def _load_actual_records(
     try:
         records: list[Any] = []
         event_stmt = select(RunEvent)
+        ml_event_stmt = select(RunEvent)
         trade_stmt = select(Trade)
         if start_dt is not None and end_dt is not None:
             event_stmt = event_stmt.where(RunEvent.ts.between(start_dt, end_dt))
@@ -135,7 +139,7 @@ def _load_actual_records(
             )
 
         trade_stmt = trade_stmt.where(Trade.pair_key.in_(_pair_key_variants(pair_key)))
-        event_types = (
+        actual_event_types = (
             "trade_open",
             "trade_close",
             "entry_reject",
@@ -147,14 +151,32 @@ def _load_actual_records(
             "trade_manual_exit",
             "advanced_ml_exit_shadow",
         )
-        event_stmt = event_stmt.where(RunEvent.event_type.in_(event_types))
+        ml_event_types = (
+            "advanced_ml_regime_shadow",
+            "advanced_ml_regime_live",
+            "advanced_ml_exit_shadow",
+            "advanced_ml_exit_live",
+            "advanced_ml_learning_update",
+            "advanced_ml_rollout_guard",
+            "trade_quality_gate",
+        )
+        event_stmt = event_stmt.where(RunEvent.event_type.in_(actual_event_types))
+        ml_event_stmt = ml_event_stmt.where(RunEvent.event_type.in_(ml_event_types))
+        if end_dt is not None:
+            ml_event_stmt = ml_event_stmt.where(RunEvent.ts <= end_dt)
 
         records.extend(db.execute(trade_stmt).scalars().all())
-        records.extend(
+        event_records = [
             record
             for record in db.execute(event_stmt).scalars().all()
             if _record_matches_pair(record, pair_key)
-        )
+        ]
+        ml_event_records = [
+            record
+            for record in db.execute(ml_event_stmt).scalars().all()
+            if _record_matches_pair(record, pair_key)
+        ]
+        records.extend(_dedupe_records((*event_records, *ml_event_records)))
         return records
     except Exception as exc:
         logger.debug("chart audit actual record source unavailable for %s: %s", pair_key, exc)
@@ -234,6 +256,12 @@ def _replay_markers_from_points(
         return []
 
     try:
+        score_lookup = StoredMLScoreLookup(pair_key, actual_records)
+        replay_engine = PointInTimeReplayEngine(
+            ml_scoring_bridge=ReplayMLScoringBridge(
+                score_lookup=score_lookup.get_stored_score_at,
+            )
+        )
         factory = ReplaySnapshotFactory(
             pair=pair_key,
             timeframe=str(timeframe or "").strip() or "",
@@ -242,7 +270,7 @@ def _replay_markers_from_points(
             config_at=config_at,
             actual_events=actual_records,
         )
-        return [marker.to_dict() for marker in factory.replay()]
+        return [marker.to_dict() for marker in factory.replay(engine=replay_engine)]
     except Exception as exc:
         logger.debug("chart audit replay unavailable for %s: %s", pair_key, exc)
         return []
@@ -401,6 +429,29 @@ def _record_pair_key(record: Any) -> str:
         if sym_1 and sym_2:
             return _normalize_pair_key_text((sym_1, sym_2))
     return ""
+
+
+def _dedupe_records(records: tuple[Any, ...]) -> list[Any]:
+    output: list[Any] = []
+    seen: set[str] = set()
+    for record in records:
+        identity = _record_identity(record)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        output.append(record)
+    return output
+
+
+def _record_identity(record: Any) -> str:
+    raw_id = _get_any(record, "id", "event_id", "trade_id")
+    if raw_id is not None:
+        return f"id:{raw_id}"
+    return "record:%s:%s:%s" % (
+        _get_any(record, "event_type", "type") or record.__class__.__name__,
+        _get_any(record, "ts", "timestamp", "entry_ts", "exit_ts") or "",
+        _record_pair_key(record),
+    )
 
 
 def _same_pair(left: str, right: str) -> bool:

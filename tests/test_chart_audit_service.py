@@ -121,7 +121,22 @@ def test_pair_decision_audit_chart_returns_phase_2_replay_markers(monkeypatch) -
             ]
         },
     )
-    monkeypatch.setattr(service, "_load_actual_records", lambda *args: [])
+    monkeypatch.setattr(
+        service,
+        "_load_actual_records",
+        lambda *args: [
+            {
+                "event_type": "advanced_ml_regime_shadow",
+                "timestamp": base_ts - 60,
+                "payload": {
+                    "pair": "AAA-USDT-SWAP/BBB-USDT-SWAP",
+                    "advanced_regime": "mean_reverting",
+                    "confidence": 0.81,
+                    "break_risk": 0.22,
+                },
+            }
+        ],
+    )
     monkeypatch.setattr(
         service,
         "curator_state_at",
@@ -163,3 +178,6 @@ def test_pair_decision_audit_chart_returns_phase_2_replay_markers(monkeypatch) -
     assert marker["timestamp"] == base_ts + 5 * 60
     assert marker["curator_state"] == CuratorState.TRADABLE.value
     assert marker["config_source"] == "historical"
+    assert marker["metadata"]["score_source"] == "stored_live"
+    assert marker["metadata"]["regime_name"] == "mean_reverting"
+    assert marker["metadata"]["break_risk"] == 0.22

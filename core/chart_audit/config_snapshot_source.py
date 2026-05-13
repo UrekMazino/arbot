@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.chart_audit.ml_replay_types import ReplayMLGateConfig
 from core.chart_audit.replay_snapshot import ReplayConfigSnapshot
 
 
@@ -281,6 +282,7 @@ def current_config_snapshot(
             env_names=("STATBOT_TARGET_GROSS_PAIR_NOTIONAL_USDT", "STATBOT_ENTRY_NOTIONAL_USDT"),
             default=None,
         ),
+        ml_gate_config=_current_ml_gate_config(current_config, env_source),
         warning=CURRENT_CONFIG_WARNING,
     )
 
@@ -496,6 +498,7 @@ def _snapshot_from_historical_payload(record: Any, payload: Mapping[str, Any]) -
                 ("entry_notional",),
                 ("strategy", "target_gross_pair_notional_usdt"),
             ),
+            ml_gate_config=_historical_ml_gate_config(payload),
         )
     except (TypeError, ValueError):
         return None
@@ -576,6 +579,167 @@ def _current_max_hold_seconds(current_config: Any, env: Mapping[str, str]) -> fl
     if parsed_hours is not None:
         return parsed_hours * 3600.0
     return 6.0 * 3600.0
+
+
+def _current_ml_gate_config(current_config: Any, env: Mapping[str, str]) -> ReplayMLGateConfig:
+    return ReplayMLGateConfig(
+        enabled=_bool_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("replay_ml_gate_enabled",),
+                ("ml_gate", "enabled"),
+                ("replay_ml_gate", "enabled"),
+                ("advanced_ml", "replay_gate_enabled"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_GATE_ENABLED",),
+            default=True,
+        ),
+        min_bayesian_posterior=_number_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("min_bayesian_posterior",),
+                ("ml_gate", "min_bayesian_posterior"),
+                ("replay_ml_gate", "min_bayesian_posterior"),
+                ("advanced_ml", "replay_min_bayesian_posterior"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_MIN_BAYESIAN_POSTERIOR",),
+            default=0.55,
+        ),
+        min_final_rank_score=_number_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("min_final_rank_score",),
+                ("ml_gate", "min_final_rank_score"),
+                ("replay_ml_gate", "min_final_rank_score"),
+                ("advanced_ml", "replay_min_final_rank_score"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_MIN_FINAL_RANK_SCORE",),
+            default=0.50,
+        ),
+        max_break_risk=_number_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("max_break_risk",),
+                ("ml_gate", "max_break_risk"),
+                ("replay_ml_gate", "max_break_risk"),
+                ("advanced_ml", "replay_max_break_risk"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_MAX_BREAK_RISK",),
+            default=0.65,
+        ),
+        max_microstructure_risk=_number_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("max_microstructure_risk",),
+                ("ml_gate", "max_microstructure_risk"),
+                ("replay_ml_gate", "max_microstructure_risk"),
+                ("advanced_ml", "replay_max_microstructure_risk"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_MAX_MICROSTRUCTURE_RISK",),
+            default=0.70,
+        ),
+        min_liquidity_score=_optional_number_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("replay_ml_min_liquidity_score",),
+                ("ml_gate", "min_liquidity_score"),
+                ("replay_ml_gate", "min_liquidity_score"),
+                ("advanced_ml", "replay_min_liquidity_score"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_MIN_LIQUIDITY_SCORE",),
+            default=None,
+        ),
+        require_hard_validation=_bool_from_config_or_env(
+            current_config,
+            env,
+            aliases=(
+                ("replay_ml_require_hard_validation",),
+                ("ml_gate", "require_hard_validation"),
+                ("replay_ml_gate", "require_hard_validation"),
+                ("advanced_ml", "replay_require_hard_validation"),
+            ),
+            env_names=("STATBOT_REPLAY_ML_REQUIRE_HARD_VALIDATION",),
+            default=True,
+        ),
+    )
+
+
+def _historical_ml_gate_config(payload: Any) -> ReplayMLGateConfig:
+    enabled = _optional_config_bool(
+        payload,
+        ("replay_ml_gate_enabled",),
+        ("ml_gate", "enabled"),
+        ("replay_ml_gate", "enabled"),
+        ("advanced_ml", "replay_gate_enabled"),
+    )
+    require_hard_validation = _optional_config_bool(
+        payload,
+        ("replay_ml_require_hard_validation",),
+        ("ml_gate", "require_hard_validation"),
+        ("replay_ml_gate", "require_hard_validation"),
+        ("advanced_ml", "replay_require_hard_validation"),
+    )
+    return ReplayMLGateConfig(
+        enabled=True if enabled is None else enabled,
+        min_bayesian_posterior=_number_or_default(
+            _optional_config_number(
+                payload,
+                ("min_bayesian_posterior",),
+                ("ml_gate", "min_bayesian_posterior"),
+                ("replay_ml_gate", "min_bayesian_posterior"),
+                ("advanced_ml", "replay_min_bayesian_posterior"),
+            ),
+            0.55,
+        ),
+        min_final_rank_score=_number_or_default(
+            _optional_config_number(
+                payload,
+                ("min_final_rank_score",),
+                ("ml_gate", "min_final_rank_score"),
+                ("replay_ml_gate", "min_final_rank_score"),
+                ("advanced_ml", "replay_min_final_rank_score"),
+            ),
+            0.50,
+        ),
+        max_break_risk=_number_or_default(
+            _optional_config_number(
+                payload,
+                ("max_break_risk",),
+                ("ml_gate", "max_break_risk"),
+                ("replay_ml_gate", "max_break_risk"),
+                ("advanced_ml", "replay_max_break_risk"),
+            ),
+            0.65,
+        ),
+        max_microstructure_risk=_number_or_default(
+            _optional_config_number(
+                payload,
+                ("max_microstructure_risk",),
+                ("ml_gate", "max_microstructure_risk"),
+                ("replay_ml_gate", "max_microstructure_risk"),
+                ("advanced_ml", "replay_max_microstructure_risk"),
+            ),
+            0.70,
+        ),
+        min_liquidity_score=_optional_config_number(
+            payload,
+            ("replay_ml_min_liquidity_score",),
+            ("ml_gate", "min_liquidity_score"),
+            ("replay_ml_gate", "min_liquidity_score"),
+            ("advanced_ml", "replay_min_liquidity_score"),
+        ),
+        require_hard_validation=True if require_hard_validation is None else require_hard_validation,
+    )
+
+
+def _number_or_default(value: float | None, default: float) -> float:
+    return default if value is None else value
 
 
 def _number_from_config_or_env(

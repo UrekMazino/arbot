@@ -648,6 +648,22 @@ export type ChartAuditReplayMarkerType =
   | "replay_exit_candidate"
   | "replay_blocked_signal";
 
+export type ChartAuditReplayMarkerMetadata = Record<string, unknown> & {
+  score_source?: "stored_live" | "recomputed_point_in_time" | "current_approximate" | "unavailable" | string | null;
+  hard_validation_valid?: boolean | null;
+  regime_name?: string | null;
+  regime_confidence?: number | null;
+  break_risk?: number | null;
+  bayesian_posterior?: number | null;
+  bayesian_quality_grade?: string | null;
+  final_rank_score?: number | null;
+  microstructure_risk?: number | null;
+  liquidity_score?: number | null;
+  ev_hold_value_usdt?: number | null;
+  exit_score?: number | null;
+  quality_gate_passed?: boolean | null;
+};
+
 export type ChartAuditReplayMarker = {
   timestamp: number | string;
   marker_category?: "replay" | string;
@@ -663,7 +679,7 @@ export type ChartAuditReplayMarker = {
   passed?: boolean | null;
   block_reasons?: string[];
   reason?: string | null;
-  metadata?: Record<string, unknown>;
+  metadata?: ChartAuditReplayMarkerMetadata;
 };
 
 export type ChartAuditStatisticalMarker = {

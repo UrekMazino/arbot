@@ -8,11 +8,12 @@ immutable tuples.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from core.chart_audit.marker_types import CuratorState
+from core.chart_audit.ml_replay_types import ReplayMLGateConfig, freeze_ml_gate_config
 
 
 @dataclass(frozen=True)
@@ -274,6 +275,7 @@ class ReplayConfigSnapshot:
     severe_hedge_ratio_drift_pct: float = 0.35
     min_cointegration_window: int = 120
     target_gross_pair_notional_usdt: float | None = None
+    ml_gate_config: ReplayMLGateConfig | Mapping[str, Any] = field(default_factory=ReplayMLGateConfig)
 
     warning: str | None = None
 
@@ -296,6 +298,7 @@ class ReplayConfigSnapshot:
         object.__setattr__(self, "severe_hedge_ratio_drift_pct", float(self.severe_hedge_ratio_drift_pct))
         object.__setattr__(self, "min_cointegration_window", max(int(self.min_cointegration_window), 1))
         object.__setattr__(self, "target_gross_pair_notional_usdt", _optional_float(self.target_gross_pair_notional_usdt))
+        object.__setattr__(self, "ml_gate_config", freeze_ml_gate_config(self.ml_gate_config))
 
 
 @dataclass(frozen=True)

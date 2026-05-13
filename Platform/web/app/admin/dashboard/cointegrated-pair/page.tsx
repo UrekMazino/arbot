@@ -110,6 +110,30 @@ function statusBool(status: Record<string, unknown> | undefined, key: string): b
   return status?.[key] === true || status?.[key] === "true";
 }
 
+function metadataNumber(metadata: Record<string, unknown> | undefined, key: string): number | null {
+  const value = metadata?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function metadataText(metadata: Record<string, unknown> | undefined, key: string): string | null {
+  const value = metadata?.[key];
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function metadataBoolText(metadata: Record<string, unknown> | undefined, key: string): string {
+  const value = metadata?.[key];
+  if (value === true || value === "true") return "true";
+  if (value === false || value === "false") return "false";
+  return "n/a";
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -554,7 +578,9 @@ function actualMarkerTooltipRows(marker: ChartAuditActualMarker): Array<[string,
 }
 
 function replayMarkerTooltipRows(marker: ChartAuditReplayMarker): Array<[string, string]> {
-  return [
+  const metadata = marker.metadata;
+  const scoreSource = metadataText(metadata, "score_source") || "unavailable";
+  const rows: Array<[string, string]> = [
     ["side", marker.side || "n/a"],
     ["z_score", fmtNumber(marker.z_score, 3)],
     ["spread", fmtNumber(marker.spread, 5)],
@@ -564,7 +590,27 @@ function replayMarkerTooltipRows(marker: ChartAuditReplayMarker): Array<[string,
     ["passed", marker.passed === true ? "true" : marker.passed === false ? "false" : "n/a"],
     ["block_reasons", marker.block_reasons?.length ? marker.block_reasons.join(", ") : "none"],
     ["reason", marker.reason || "n/a"],
+    ["score_source", scoreSource],
   ];
+  if (scoreSource === "unavailable") {
+    rows.push(["advanced_ml", "Advanced ML scores unavailable for this timestamp."]);
+    return rows;
+  }
+  rows.push(
+    ["hard_validation_valid", metadataBoolText(metadata, "hard_validation_valid")],
+    ["regime_name", metadataText(metadata, "regime_name") || "n/a"],
+    ["regime_confidence", fmtNumber(metadataNumber(metadata, "regime_confidence"), 3)],
+    ["break_risk", fmtNumber(metadataNumber(metadata, "break_risk"), 3)],
+    ["bayesian_posterior", fmtNumber(metadataNumber(metadata, "bayesian_posterior"), 3)],
+    ["bayesian_quality_grade", metadataText(metadata, "bayesian_quality_grade") || "n/a"],
+    ["final_rank_score", fmtNumber(metadataNumber(metadata, "final_rank_score"), 3)],
+    ["microstructure_risk", fmtNumber(metadataNumber(metadata, "microstructure_risk"), 3)],
+    ["liquidity_score", fmtNumber(metadataNumber(metadata, "liquidity_score"), 3)],
+    ["ev_hold_value_usdt", fmtNumber(metadataNumber(metadata, "ev_hold_value_usdt"), 2)],
+    ["exit_score", fmtNumber(metadataNumber(metadata, "exit_score"), 3)],
+    ["quality_gate_passed", metadataBoolText(metadata, "quality_gate_passed")],
+  );
+  return rows;
 }
 
 function markerPointCoordinates(props: MarkerDotProps): { cx: number; cy: number } | null {

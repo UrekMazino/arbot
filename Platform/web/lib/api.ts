@@ -189,6 +189,168 @@ export type PerformanceHistory = {
   recent_trades: PerformanceTradeRow[];
 };
 
+export type DashboardTag =
+  | "elite"
+  | "stable"
+  | "warning"
+  | "hospital"
+  | "graveyard"
+  | "high_drift"
+  | "high_slippage"
+  | "good_reverter"
+  | "bad_executor"
+  | "high_break_risk"
+  | "profitable"
+  | "losing";
+
+export type DashboardCacheMeta = {
+  cache_hit: boolean;
+  generated_at: number | null;
+  ttl_seconds: number | null;
+  refresh_supported: boolean;
+};
+
+export type TradeSummary = {
+  trade_id: string;
+  pair: string;
+  side: string | null;
+  entry_time: number | null;
+  exit_time: number | null;
+  entry_z: number | null;
+  exit_z: number | null;
+  hold_seconds: number | null;
+  pnl_usdt: number | null;
+  fees_usdt: number | null;
+  slippage_usdt: number | null;
+  exit_reason: string | null;
+  entry_hedge_ratio: number | null;
+  exit_hedge_ratio: number | null;
+  hedge_ratio_drift_pct: number | null;
+  regime_at_entry: string | null;
+  final_rank_score_at_entry: number | null;
+  bayesian_posterior_at_entry: number | null;
+};
+
+export type PairSummary = {
+  pair: string;
+  status: string | null;
+  total_trades: number | null;
+  net_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  avg_hold_seconds: number | null;
+  avg_entry_z: number | null;
+  avg_exit_z: number | null;
+  avg_hedge_ratio: number | null;
+  avg_hedge_drift_pct: number | null;
+  hospital_count: number | null;
+  graveyard_count: number | null;
+  block_reason_counts: Record<string, number>;
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  last_traded_at: number | null;
+  tags: DashboardTag[] | string[];
+};
+
+export type PairPerformanceSummary = {
+  pair: string | null;
+  total_trades: number | null;
+  net_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  avg_hold_seconds: number | null;
+  best_trade: TradeSummary | null;
+  worst_trade: TradeSummary | null;
+  tags: DashboardTag[] | string[];
+  metadata: Record<string, unknown>;
+};
+
+export type ReplaySignalSummary = {
+  pair: string | null;
+  total_markers: number | null;
+  entry_candidates: number | null;
+  exit_candidates: number | null;
+  blocked_signals: number | null;
+  valid_candidates: number | null;
+  blocked_candidates: number | null;
+  candidate_to_actual_conversion_rate: number | null;
+  block_reason_counts: Record<string, number>;
+  latest_signal_at: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type CounterfactualSummary = {
+  best_exit_policy: string | null;
+  avg_missed_profit_usdt: number | null;
+  avg_avoided_loss_usdt: number | null;
+  studies_count: number | null;
+  policy_win_counts: Record<string, number>;
+  metadata: Record<string, unknown>;
+};
+
+export type DecisionScoreSummary = {
+  score_source: string | null;
+  avg_regime_confidence: number | null;
+  avg_break_risk: number | null;
+  avg_bayesian_posterior: number | null;
+  avg_final_rank_score: number | null;
+  avg_liquidity_score: number | null;
+  avg_microstructure_risk: number | null;
+  avg_ev_hold_value_usdt: number | null;
+  avg_exit_score: number | null;
+  quality_gate_pass_rate: number | null;
+  unavailable_count: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type HedgeRatioSummary = {
+  avg_hedge_ratio: number | null;
+  avg_hedge_drift_pct: number | null;
+  max_hedge_drift_pct: number | null;
+  high_drift_count: number | null;
+  sizing_pnl_delta_usdt: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type RiskEventSummary = {
+  severity: string | null;
+  type: string | null;
+  message: string | null;
+  pair: string | null;
+  latest_timestamp: number | null;
+  occurrence_count: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type PortfolioSummary = {
+  total_equity_usdt: number | null;
+  session_pnl_usdt: number | null;
+  realized_pnl_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  win_rate: number | null;
+  profit_factor: number | null;
+  max_drawdown_usdt: number | null;
+  open_positions: Array<Record<string, unknown>>;
+  active_pair: string | null;
+  bot_status: string | null;
+  open_exposure_usdt: number | null;
+  cache: DashboardCacheMeta;
+};
+
+export type AnalyticsSummary = {
+  performance: Record<string, unknown>;
+  pnl_timeseries: Array<Record<string, unknown>>;
+  pair_leaderboards: PairPerformanceSummary[];
+  exit_analysis: CounterfactualSummary | Record<string, unknown> | null;
+  ml_analysis: DecisionScoreSummary | Record<string, unknown> | null;
+  hedge_analysis: HedgeRatioSummary | Record<string, unknown> | null;
+  cache: DashboardCacheMeta;
+};
+
 export type DataQualityIssue = {
   event_id: string;
   ts: string;

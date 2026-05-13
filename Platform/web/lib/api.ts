@@ -341,6 +341,59 @@ export type PortfolioSummary = {
   cache: DashboardCacheMeta;
 };
 
+export type PortfolioDashboardSummary = Omit<PortfolioSummary, "cache">;
+
+export type PortfolioDashboardEquityPoint = {
+  timestamp: number;
+  equity_usdt: number;
+  session_pnl_usdt?: number | null;
+  source?: string | null;
+  run_id?: string | null;
+  current_pair?: string | null;
+};
+
+export type PortfolioDashboardDailyPnlPoint = {
+  date: string;
+  pnl_usdt: number;
+  trade_count: number;
+};
+
+export type PortfolioDashboardDrawdownPoint = {
+  timestamp: number;
+  equity_usdt: number;
+  peak_equity_usdt: number;
+  drawdown_usdt: number;
+  drawdown_pct: number | null;
+};
+
+export type PortfolioDashboardOpenExposurePoint = {
+  timestamp: number;
+  pair?: string | null;
+  open_exposure_usdt: number;
+  unrealized_pnl_usdt?: number | null;
+};
+
+export type PortfolioDashboardHighlights = {
+  best_performing_pair: string | null;
+  worst_performing_pair: string | null;
+  most_traded_pair: string | null;
+  highest_drawdown_pair: string | null;
+  current_regime_state: string | null;
+  current_risk_level: string | null;
+};
+
+export type PortfolioDashboardResponse = {
+  summary: PortfolioDashboardSummary;
+  charts: {
+    equity_curve: PortfolioDashboardEquityPoint[];
+    daily_pnl: PortfolioDashboardDailyPnlPoint[];
+    drawdown_curve: PortfolioDashboardDrawdownPoint[];
+    open_exposure: PortfolioDashboardOpenExposurePoint[];
+  };
+  highlights: PortfolioDashboardHighlights;
+  cache: DashboardCacheMeta;
+};
+
 export type AnalyticsSummary = {
   performance: Record<string, unknown>;
   pnl_timeseries: Array<Record<string, unknown>>;
@@ -1207,6 +1260,28 @@ export async function getPortfolioEquityCurve(
 ): Promise<PortfolioEquityCurve> {
   const params = new URLSearchParams({ range, bucket, basis });
   return apiRequest<PortfolioEquityCurve>(`/runs/portfolio/equity-curve?${params.toString()}`, { method: "GET" });
+}
+
+export async function getPortfolioDashboard(params?: {
+  startTs?: number;
+  endTs?: number;
+  refresh?: boolean;
+}): Promise<PortfolioDashboardResponse> {
+  const query = new URLSearchParams();
+  if (params?.startTs !== undefined) {
+    query.set("start_ts", String(params.startTs));
+  }
+  if (params?.endTs !== undefined) {
+    query.set("end_ts", String(params.endTs));
+  }
+  if (params?.refresh !== undefined) {
+    query.set("refresh", params.refresh ? "true" : "false");
+  }
+  const suffix = query.toString();
+  return apiRequest<PortfolioDashboardResponse>(
+    `/admin/dashboard/portfolio${suffix ? `?${suffix}` : ""}`,
+    { method: "GET" },
+  );
 }
 
 export async function getRunScorecard(runId: string): Promise<ScorecardCell[]> {

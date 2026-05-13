@@ -18,6 +18,9 @@ def test_frontend_dashboard_type_exports_exist() -> None:
         "HedgeRatioSummary",
         "RiskEventSummary",
         "PortfolioSummary",
+        "PortfolioDashboardResponse",
         "AnalyticsSummary",
     ):
         assert f"export type {exported_type}" in api_types
+
+    assert "export async function getPortfolioDashboard" in api_types

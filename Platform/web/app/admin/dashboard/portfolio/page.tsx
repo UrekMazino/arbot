@@ -1,20 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
-  PortfolioEquityBasis,
-  PortfolioEquityBucket,
-  PortfolioEquityCurve,
-  PortfolioEquityRange,
+  PortfolioDashboardResponse,
   UserRecord,
   getMe,
-  getPortfolioEquityCurve,
+  getPortfolioDashboard,
   isUnauthorizedError,
 } from "../../../../lib/api";
 import { DashboardShell } from "../../../../components/dashboard-shell";
-import { MetricCard, PanelCard } from "../../../../components/panels";
+import { MetricCard, PanelCard, StatusPill } from "../../../../components/panels";
 import { getStoredAdminEmail } from "../../../../lib/auth";
 import {
   canAccessAdminPath,
@@ -24,58 +30,65 @@ import {
 import { UI_CLASSES } from "../../../../lib/ui-classes";
 import { PortfolioChart } from "../../../../components/portfolio-chart";
 
-const RANGE_OPTIONS: Array<{ value: PortfolioEquityRange; label: string; hint: string }> = [
-  { value: "24h", label: "24H", hint: "Intraday" },
-  { value: "7d", label: "7D", hint: "Last week" },
-  { value: "30d", label: "30D", hint: "Last month" },
-  { value: "90d", label: "90D", hint: "Quarter" },
-  { value: "all", label: "All", hint: "Full history" },
+type PortfolioRange = "24h" | "7d" | "30d" | "90d" | "all";
+
+type SeriesPoint = {
+  label: string;
+  x: number;
+  value: number;
+  detail?: string | null;
+};
+
+const RANGE_OPTIONS: Array<{ value: PortfolioRange; label: string; seconds: number | null }> = [
+  { value: "24h", label: "24H", seconds: 24 * 60 * 60 },
+  { value: "7d", label: "7D", seconds: 7 * 24 * 60 * 60 },
+  { value: "30d", label: "30D", seconds: 30 * 24 * 60 * 60 },
+  { value: "90d", label: "90D", seconds: 90 * 24 * 60 * 60 },
+  { value: "all", label: "All", seconds: null },
 ];
 
-const BUCKET_OPTIONS: Array<{ value: PortfolioEquityBucket; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "raw", label: "Raw" },
-  { value: "hour", label: "Hourly" },
-  { value: "day", label: "Daily" },
-  { value: "week", label: "Weekly" },
-];
-
-const BASIS_OPTIONS: Array<{ value: PortfolioEquityBasis; label: string }> = [
-  { value: "live", label: "Live" },
-  { value: "realized", label: "Realized" },
-];
-
-const AUTO_REFRESH_MS = 15_000;
+function finiteNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 function fmtNumber(value: number | null | undefined, digits = 2): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return value.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const numeric = finiteNumber(value);
+  if (numeric === null) return "n/a";
+  return numeric.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 function fmtSignedNumber(value: number | null | undefined, digits = 2): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return `${value >= 0 ? "+" : ""}${fmtNumber(value, digits)}`;
+  const numeric = finiteNumber(value);
+  if (numeric === null) return "n/a";
+  return `${numeric >= 0 ? "+" : ""}${fmtNumber(numeric, digits)}`;
 }
 
-function fmtPct(value: number | null | undefined, digits = 3): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "n/a";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
+function fmtRatioPct(value: number | null | undefined, digits = 1): string {
+  const numeric = finiteNumber(value);
+  if (numeric === null) return "n/a";
+  return `${(numeric * 100).toFixed(digits)}%`;
 }
 
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return "n/a";
-  const dt = new Date(iso);
+function fmtDateFromSeconds(value: number | null | undefined): string {
+  const numeric = finiteNumber(value);
+  if (numeric === null) return "n/a";
+  const ms = numeric > 10_000_000_000 ? numeric : numeric * 1000;
+  const dt = new Date(ms);
   if (Number.isNaN(dt.getTime())) return "n/a";
   return dt.toLocaleString();
 }
 
-function bucketLabel(bucket: PortfolioEquityBucket | string | undefined): string {
-  const found = BUCKET_OPTIONS.find((option) => option.value === bucket);
-  return found?.label || String(bucket || "Auto");
+function fmtShortDate(value: number): string {
+  const ms = value > 10_000_000_000 ? value : value * 1000;
+  const dt = new Date(ms);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function rangeLabel(range: PortfolioEquityRange): string {
-  return RANGE_OPTIONS.find((option) => option.value === range)?.label || range;
+function rangeStartTs(range: PortfolioRange): number | undefined {
+  const option = RANGE_OPTIONS.find((item) => item.value === range);
+  if (!option?.seconds) return undefined;
+  return Math.floor(Date.now() / 1000) - option.seconds;
 }
 
 function rangeButtonClass(active: boolean): string {
@@ -87,20 +100,111 @@ function rangeButtonClass(active: boolean): string {
   ].join(" ");
 }
 
+function EmptyState({ label = "No data available yet." }: { label?: string }) {
+  return <p className="py-10 text-center text-sm text-gray-500 dark:text-gray-400">{label}</p>;
+}
+
+function MiniSeriesChart({
+  title,
+  subtitle,
+  points,
+  color,
+  valueLabel,
+  valueFormatter = fmtNumber,
+}: {
+  title: string;
+  subtitle: string;
+  points: SeriesPoint[];
+  color: string;
+  valueLabel: string;
+  valueFormatter?: (value: number | null | undefined) => string;
+}) {
+  if (!points.length) {
+    return (
+      <PanelCard title={title} subtitle={subtitle}>
+        <EmptyState />
+      </PanelCard>
+    );
+  }
+
+  return (
+    <PanelCard title={title} subtitle={subtitle}>
+      <ResponsiveContainer width="100%" height={220}>
+        <AreaChart data={points}>
+          <defs>
+            <linearGradient id={`${title.replace(/\W+/g, "-")}-gradient`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+              <stop offset="85%" stopColor={color} stopOpacity={0.04} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis
+            dataKey="x"
+            tickFormatter={fmtShortDate}
+            tickLine={false}
+            axisLine={false}
+            tickMargin={10}
+            fontSize={12}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            tickMargin={10}
+            fontSize={12}
+            tickFormatter={(value) => fmtNumber(Number(value), 0)}
+          />
+          <Tooltip
+            content={({ active, payload }) => {
+              const item = (payload?.[0]?.payload as SeriesPoint | undefined) || null;
+              if (!active || !item) return null;
+              return (
+                <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm shadow-lg dark:border-gray-800 dark:bg-gray-900 dark:text-gray-100">
+                  <p className="font-semibold text-gray-900 dark:text-white">{item.label}</p>
+                  <p className="mt-1">
+                    <span className="font-mono text-brand-600">{valueLabel}:</span> {valueFormatter(item.value)}
+                  </p>
+                  {item.detail ? <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.detail}</p> : null}
+                </div>
+              );
+            }}
+          />
+          <Area
+            type="linear"
+            dataKey="value"
+            stroke={color}
+            strokeWidth={2}
+            fill={`url(#${title.replace(/\W+/g, "-")}-gradient)`}
+            dot={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </PanelCard>
+  );
+}
+
+function highlightLabel(value: string | null | undefined): string {
+  const text = String(value || "").trim();
+  return text || "n/a";
+}
+
+function statusTone(status: string | null | undefined): "success" | "warning" | "neutral" {
+  const normalized = String(status || "").toLowerCase();
+  if (!normalized) return "neutral";
+  if (["running", "ok", "healthy", "active"].includes(normalized)) return "success";
+  if (["stopped", "error", "failed", "warn", "warning"].includes(normalized)) return "warning";
+  return "neutral";
+}
+
 export default function PortfolioPage() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<UserRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [curveLoading, setCurveLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [range, setRange] = useState<PortfolioEquityRange>("7d");
-  const [bucket, setBucket] = useState<PortfolioEquityBucket>("auto");
-  const [basis, setBasis] = useState<PortfolioEquityBasis>("live");
-  const [curve, setCurve] = useState<PortfolioEquityCurve | null>(null);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const hasLoadedCurveRef = useRef(false);
+  const [range, setRange] = useState<PortfolioRange>("7d");
+  const [dashboard, setDashboard] = useState<PortfolioDashboardResponse | null>(null);
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
 
@@ -108,7 +212,7 @@ export default function PortfolioPage() {
     getMe()
       .then((u) => setUser(u))
       .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+      .finally(() => setAuthLoading(false));
   }, []);
 
   const auth = useMemo(
@@ -120,7 +224,7 @@ export default function PortfolioPage() {
   );
 
   useEffect(() => {
-    if (loading || !user) return;
+    if (authLoading || !user) return;
     const currentPath = pathname;
     const hasAccess = canAccessAdminPath(user, currentPath);
     const firstAccessible = getFirstAccessibleAdminPath(user);
@@ -134,107 +238,118 @@ export default function PortfolioPage() {
         router.replace(firstAccessible);
       }
     }
-  }, [loading, user, pathname, router]);
+  }, [authLoading, user, pathname, router]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCurve = async (isPoll = false) => {
-      const showSpinner = !isPoll || !hasLoadedCurveRef.current;
-      if (showSpinner) setCurveLoading(true);
+  const loadDashboard = useCallback(
+    async (forceRefresh = false) => {
+      setDashboardLoading(true);
+      setRefreshing(forceRefresh);
       setError(null);
       try {
-        const data = await getPortfolioEquityCurve(range, bucket, basis);
-        if (!cancelled) {
-          setCurve(data);
-          setLastRefreshedAt(new Date().toISOString());
-          hasLoadedCurveRef.current = true;
-        }
+        const data = await getPortfolioDashboard({
+          startTs: rangeStartTs(range),
+          endTs: Math.floor(Date.now() / 1000),
+          refresh: forceRefresh,
+        });
+        setDashboard(data);
       } catch (err) {
-        if (cancelled) return;
-        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load portfolio equity curve");
-        setCurve(null);
+        setError(isUnauthorizedError(err) ? "Unauthorized" : "Failed to load portfolio dashboard");
+        setDashboard(null);
       } finally {
-        if (!cancelled && showSpinner) setCurveLoading(false);
+        setDashboardLoading(false);
+        setRefreshing(false);
       }
-    };
+    },
+    [range],
+  );
 
-    void loadCurve(false);
-    const intervalId = window.setInterval(() => {
-      void loadCurve(true);
-    }, AUTO_REFRESH_MS);
+  useEffect(() => {
+    void loadDashboard(false);
+  }, [loadDashboard]);
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [range, bucket, basis, refreshNonce]);
-
-  if (loading) {
+  if (authLoading) {
     return <div className="p-8 text-center text-gray-500">Loading...</div>;
   }
 
   const activeHref = "/admin/dashboard/portfolio";
-  const stats = curve?.stats;
-  const chartData = curve?.points || [];
-  const activeBucketLabel = curve ? bucketLabel(curve.bucket) : bucketLabel(bucket);
-  const activeBasis = curve?.basis || basis;
-  const refreshCaption = lastRefreshedAt
-    ? `Updated ${fmtDate(lastRefreshedAt)} | refreshes every ${Math.round(AUTO_REFRESH_MS / 1000)}s`
-    : `Refreshes every ${Math.round(AUTO_REFRESH_MS / 1000)}s`;
-  const caption =
-    activeBasis === "realized"
-      ? `${rangeLabel(range)} range | Closed trades only | ${stats?.closed_trade_count ?? 0} closed trades | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)} | ${refreshCaption}`
-      : `${rangeLabel(range)} range | ${bucket === "auto" ? `Auto -> ${activeBucketLabel}` : activeBucketLabel} | Includes open-position equity movement | ${fmtDate(stats?.start_ts)} to ${fmtDate(stats?.end_ts)} | ${refreshCaption}`;
+  const summary = dashboard?.summary;
+  const charts = dashboard?.charts;
+  const highlights = dashboard?.highlights;
+  const openPositionCount = summary?.open_positions === null || summary?.open_positions === undefined
+    ? null
+    : summary.open_positions.length;
+  const cacheCaption = dashboard?.cache
+    ? `Generated ${fmtDateFromSeconds(dashboard.cache.generated_at)} | TTL ${dashboard.cache.ttl_seconds ?? "n/a"}s | ${dashboard.cache.cache_hit ? "cache hit" : "fresh"}`
+    : "Cache metadata unavailable";
+
+  const equityChartPoints = (charts?.equity_curve || []).map((point, index) => {
+    const drawdown = charts?.drawdown_curve.find((row) => row.timestamp === point.timestamp);
+    const previous = index > 0 ? charts?.equity_curve[index - 1] : null;
+    return {
+      ts: new Date(point.timestamp * 1000).toISOString(),
+      equity: point.equity_usdt,
+      drawdown: drawdown?.drawdown_usdt ?? 0,
+      drawdown_pct: drawdown?.drawdown_pct ?? null,
+      pnl_usdt: previous ? point.equity_usdt - previous.equity_usdt : point.session_pnl_usdt ?? null,
+      pnl_pct: previous && previous.equity_usdt !== 0 ? (point.equity_usdt - previous.equity_usdt) / previous.equity_usdt : null,
+      run_key: point.run_id ?? null,
+      source: point.source ?? null,
+      samples: 1,
+    };
+  });
+
+  const dailyPnlPoints: SeriesPoint[] = (charts?.daily_pnl || []).map((point, index) => ({
+    label: point.date,
+    x: Date.parse(`${point.date}T00:00:00Z`) || index,
+    value: point.pnl_usdt,
+    detail: `${point.trade_count} closed trade${point.trade_count === 1 ? "" : "s"}`,
+  }));
+
+  const drawdownPoints: SeriesPoint[] = (charts?.drawdown_curve || []).map((point) => ({
+    label: fmtDateFromSeconds(point.timestamp),
+    x: point.timestamp,
+    value: point.drawdown_usdt,
+    detail: `Peak ${fmtNumber(point.peak_equity_usdt)} USDT`,
+  }));
+
+  const exposurePoints: SeriesPoint[] = (charts?.open_exposure || []).map((point) => ({
+    label: fmtDateFromSeconds(point.timestamp),
+    x: point.timestamp,
+    value: point.open_exposure_usdt,
+    detail: point.pair || null,
+  }));
+  const highlightRows: Array<{ label: string; value: string | null | undefined }> = [
+    { label: "Best performing pair", value: highlights?.best_performing_pair },
+    { label: "Worst performing pair", value: highlights?.worst_performing_pair },
+    { label: "Most traded pair", value: highlights?.most_traded_pair },
+    { label: "Highest drawdown pair", value: highlights?.highest_drawdown_pair },
+    { label: "Current regime state", value: highlights?.current_regime_state },
+    { label: "Current risk level", value: highlights?.current_risk_level },
+  ];
 
   return (
     <DashboardShell
       title="Portfolio"
-      subtitle="Portfolio equity curve across all bot runs"
-      status={error ? "WARN" : "OK"}
+      subtitle="Read-only portfolio performance and current exposure"
+      status={error ? "WARN" : summary?.bot_status ? summary.bot_status.toUpperCase() : "OK"}
       activeHref={activeHref}
       navItems={navItems}
       auth={auth}
     >
       <div className="space-y-6">
         <PanelCard
-          title="Portfolio Equity Curve"
-          subtitle={basis === "realized" ? "Closed-trade PnL only, matching analytics and reports." : "Live account equity from heartbeat snapshots, including open-position movement."}
+          title="Portfolio Overview"
+          subtitle={cacheCaption}
           titleRight={
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <select
-                className={UI_CLASSES.inputSmall}
-                value={basis}
-                onChange={(event) => {
-                  const newBasis = event.target.value as PortfolioEquityBasis;
-                  setBasis(newBasis);
-                  if (newBasis === "live") {
-                    setBucket("auto");
-                  }
-                }}
-              >
-                {BASIS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-              <select
-                className={UI_CLASSES.inputSmall}
-                value={bucket}
-                onChange={(event) => setBucket(event.target.value as PortfolioEquityBucket)}
-                disabled={basis === "realized"}
-              >
-                {BUCKET_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+              {summary?.bot_status ? <StatusPill label={summary.bot_status} tone={statusTone(summary.bot_status)} /> : null}
               <button
                 type="button"
-                className={rangeButtonClass(false)}
-                onClick={() => setRefreshNonce((value) => value + 1)}
-                disabled={curveLoading}
-                title="Refresh portfolio equity curve"
+                className={UI_CLASSES.secondaryButton}
+                onClick={() => void loadDashboard(true)}
+                disabled={dashboardLoading || refreshing}
               >
-                Refresh
+                {refreshing ? "Refreshing..." : "Refresh"}
               </button>
             </div>
           }
@@ -246,67 +361,89 @@ export default function PortfolioPage() {
                 type="button"
                 className={rangeButtonClass(range === option.value)}
                 onClick={() => setRange(option.value)}
-                title={option.hint}
               >
                 {option.label}
               </button>
             ))}
           </div>
 
-          {curveLoading ? (
-            <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">Loading portfolio curve...</p>
+          {dashboardLoading && !dashboard ? (
+            <EmptyState label="Loading portfolio dashboard..." />
           ) : error ? (
-            <p className="py-12 text-center text-sm text-error-600 dark:text-error-400">{error}</p>
-          ) : chartData.length ? (
+            <p className="py-10 text-center text-sm text-error-600 dark:text-error-400">{error}</p>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Total Equity" value={fmtNumber(summary?.total_equity_usdt)} unit="USDT" tone="sky" />
+            <MetricCard label="Session PnL" value={fmtSignedNumber(summary?.session_pnl_usdt)} unit="USDT" tone={(summary?.session_pnl_usdt ?? 0) >= 0 ? "teal" : "rose"} />
+            <MetricCard label="Realized PnL" value={fmtSignedNumber(summary?.realized_pnl_usdt)} unit="USDT" tone={(summary?.realized_pnl_usdt ?? 0) >= 0 ? "teal" : "rose"} />
+            <MetricCard label="Unrealized PnL" value={fmtSignedNumber(summary?.unrealized_pnl_usdt)} unit="USDT" tone={(summary?.unrealized_pnl_usdt ?? 0) >= 0 ? "teal" : "rose"} />
+            <MetricCard label="Win Rate" value={fmtRatioPct(summary?.win_rate)} hint="Closed trades" tone="violet" />
+            <MetricCard label="Profit Factor" value={fmtNumber(summary?.profit_factor)} hint="Gross profit / gross loss" tone="violet" />
+            <MetricCard label="Max Drawdown" value={fmtSignedNumber(summary?.max_drawdown_usdt)} unit="USDT" tone="amber" />
+            <MetricCard label="Open Positions" value={openPositionCount === null ? "n/a" : String(openPositionCount)} hint="Stored position snapshots" tone="sky" />
+            <MetricCard label="Active Pair" value={summary?.active_pair || "n/a"} tone="sky" />
+            <MetricCard label="Bot Status" value={summary?.bot_status || "n/a"} tone={statusTone(summary?.bot_status) === "success" ? "teal" : "amber"} />
+            <MetricCard label="Open Exposure" value={fmtNumber(summary?.open_exposure_usdt)} unit="USDT" tone="amber" />
+          </div>
+        </PanelCard>
+
+        <PanelCard title="Equity Curve" subtitle="Stored account equity samples from the selected range.">
+          {equityChartPoints.length ? (
             <PortfolioChart
-              data={chartData}
-              height={390}
-              caption={caption}
-              title={activeBasis === "realized" ? "Realized Equity" : "Account Equity"}
-              subtitle={activeBasis === "realized" ? "Starting equity plus closed-trade PnL" : "Absolute live account equity for the selected range"}
+              data={equityChartPoints}
+              height={340}
+              caption={cacheCaption}
+              title="Total Equity"
+              subtitle="No synthetic equity values are filled in for missing samples."
             />
           ) : (
-            <p className="py-12 text-center text-sm text-gray-500 dark:text-gray-400">
-              {basis === "realized"
-                ? "No closed trades found yet. Realized equity updates only after a position closes."
-                : "No equity samples found yet. Start a run and the dashboard will plot heartbeat equity here."}
-            </p>
+            <EmptyState />
           )}
         </PanelCard>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label={activeBasis === "realized" ? "Realized Equity" : "Current Equity"}
-            value={fmtNumber(stats?.end_equity)}
-            unit="USDT"
-            hint={`Started ${fmtNumber(stats?.start_equity)} USDT`}
-            tone="sky"
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <MiniSeriesChart
+            title="Daily PnL"
+            subtitle="Closed-trade PnL grouped by UTC day."
+            points={dailyPnlPoints}
+            color="#16a34a"
+            valueLabel="PnL"
+            valueFormatter={(value) => `${fmtSignedNumber(value)} USDT`}
           />
-          <MetricCard
-            label="Range Change"
-            value={fmtSignedNumber(stats?.change_usdt)}
-            unit="USDT"
-            hint={fmtPct(stats?.change_pct)}
-            tone={(stats?.change_usdt ?? 0) >= 0 ? "teal" : "rose"}
+          <MiniSeriesChart
+            title="Drawdown"
+            subtitle="Derived from stored equity samples."
+            points={drawdownPoints}
+            color="#f59e0b"
+            valueLabel="Drawdown"
+            valueFormatter={(value) => `${fmtSignedNumber(value)} USDT`}
           />
-          <MetricCard
-            label="Max Drawdown"
-            value={fmtNumber(stats?.max_drawdown)}
-            unit="USDT"
-            hint={fmtPct(stats?.max_drawdown_pct)}
-            tone="amber"
-          />
-          <MetricCard
-            label="Coverage"
-            value={activeBasis === "realized" ? `${stats?.closed_trade_count ?? 0} trades` : `${stats?.run_count ?? 0} runs`}
-            hint={
-              activeBasis === "realized"
-                ? `${stats?.point_count ?? 0} plotted including baseline`
-                : `${stats?.point_count ?? 0} plotted / ${stats?.raw_point_count ?? 0} raw samples`
-            }
-            tone="violet"
+          <MiniSeriesChart
+            title="Open Exposure"
+            subtitle="Stored position exposure snapshots."
+            points={exposurePoints}
+            color="#465fff"
+            valueLabel="Exposure"
+            valueFormatter={(value) => `${fmtNumber(value)} USDT`}
           />
         </div>
+
+        <PanelCard title="Highlights" subtitle="Null metrics are rendered as n/a until a read-only source is available.">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {highlightRows.map(({ label, value }) => (
+              <div
+                key={label}
+                className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950/40"
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500 dark:text-gray-400">{label}</p>
+                <p className="mt-2 truncate font-mono text-sm font-semibold text-gray-900 dark:text-white/90">
+                  {highlightLabel(value)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </PanelCard>
       </div>
     </DashboardShell>
   );

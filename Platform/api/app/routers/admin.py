@@ -66,6 +66,15 @@ def _get_counterfactual_exit_study_service():
     return get_counterfactual_exit_study
 
 
+def _get_portfolio_dashboard_service():
+    workspace_root = Path(__file__).resolve().parents[4]
+    if str(workspace_root) not in sys.path:
+        sys.path.insert(0, str(workspace_root))
+    from core.dashboard.portfolio_service import get_portfolio_dashboard
+
+    return get_portfolio_dashboard
+
+
 def _filter_env_settings(values: dict[str, str], user_permissions: set[str]) -> dict[str, str]:
     filtered: dict[str, str] = {}
     for key, value in values.items():
@@ -115,6 +124,22 @@ def admin_run_runtime(
     db: Session = Depends(get_db_session),
 ):
     return get_run_runtime_snapshot(db, run_key=run_key, include_pair_history=True)
+
+
+@router.get("/dashboard/portfolio")
+def admin_portfolio_dashboard(
+    start_ts: float | None = Query(default=None),
+    end_ts: float | None = Query(default=None),
+    refresh: bool = Query(default=False),
+    _: User = Depends(require_permissions("view_portfolio", "view_dashboard")),
+):
+    try:
+        service = _get_portfolio_dashboard_service()
+        return service(start_ts=start_ts, end_ts=end_ts, refresh=refresh)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.get("/bot/logs/stream")

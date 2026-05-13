@@ -30,9 +30,15 @@ from core.dashboard.pair_detail_service import (
     clear_pair_detail_cache,
     get_pair_detail_summary,
 )
+from core.dashboard.analytics_service import (
+    AnalyticsDataBundle,
+    clear_analytics_cache,
+    get_analytics_dashboard,
+)
 
 __all__ = [
     "AnalyticsSummary",
+    "AnalyticsDataBundle",
     "CounterfactualSummary",
     "DashboardCacheMeta",
     "DashboardTag",
@@ -51,7 +57,9 @@ __all__ = [
     "clear_portfolio_dashboard_cache",
     "clear_pair_history_cache",
     "clear_pair_detail_cache",
+    "clear_analytics_cache",
     "get_pair_history_summary",
     "get_pair_detail_summary",
+    "get_analytics_dashboard",
     "get_portfolio_dashboard",
 ]

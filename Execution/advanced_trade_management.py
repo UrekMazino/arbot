@@ -15,6 +15,7 @@ class ExitReason(Enum):
     TAKE_PROFIT = "take_profit"
     PARTIAL_PROFIT = "partial_profit"
     TRAILING_STOP = "trailing_stop"
+    MEAN_REVERSION_ESCAPE = "mean_reversion_escape"
     STALL = "stall"
     REGIME_BREAK = "regime_break"
     MAX_HOLD_TIME = "max_hold_time"
@@ -104,6 +105,13 @@ class AdvancedTradeManager:
             'take_profit_z': 0.5,  # Exit at |Z| < 0.5
             'net_profit_guard_enabled': True,
             'net_profit_guard_require_pnl': True,
+            'full_tp_guard_multiplier': 1.0,
+            'partial_tp_guard_multiplier': 1.0,
+            'trailing_stop_guard_multiplier': 1.0,
+            'mean_reversion_escape_enabled': False,
+            'mean_reversion_escape_z': 0.25,
+            'mean_reversion_escape_min_pnl_usdt': 0.0,
+            'mean_reversion_escape_requires_risk_rising': True,
             
             # Stall detection
             'stall_z_threshold': 1.5,  # Exit if Z > 1.5 and stalled
@@ -195,21 +203,38 @@ class AdvancedTradeManager:
         # 3. TRAILING STOP
         trailing_result = self._check_trailing_stop(current_z)
         if trailing_result['action'] == 'EXIT':
-            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+            trailing_min_profit, trailing_multiplier, trailing_base = self._guard_threshold(
+                ExitReason.TRAILING_STOP,
+                min_profit_usdt,
+            )
+            if not self._profit_exit_allowed(floating_pnl_usdt, trailing_min_profit):
                 return self._net_profit_guard_hold(
                     ExitReason.TRAILING_STOP,
                     floating_pnl_usdt,
-                    min_profit_usdt,
+                    trailing_base,
+                    trailing_min_profit,
+                    trailing_multiplier,
+                    current_z=current_z,
                 )
             return trailing_result
         
         # 4. MEAN-REVERSION TARGET HIT (full exit)
         if abs(current_z) <= self.config['take_profit_z']:
-            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+            take_profit_min_profit, take_profit_multiplier, take_profit_base = self._guard_threshold(
+                ExitReason.TAKE_PROFIT,
+                min_profit_usdt,
+            )
+            if not self._profit_exit_allowed(floating_pnl_usdt, take_profit_min_profit):
+                escape_result = self._check_mean_reversion_escape(current_z, floating_pnl_usdt)
+                if escape_result['action'] == 'EXIT':
+                    return escape_result
                 return self._net_profit_guard_hold(
                     ExitReason.TAKE_PROFIT,
                     floating_pnl_usdt,
-                    min_profit_usdt,
+                    take_profit_base,
+                    take_profit_min_profit,
+                    take_profit_multiplier,
+                    current_z=current_z,
                 )
             return self._create_exit_result(
                 action='EXIT',
@@ -221,11 +246,18 @@ class AdvancedTradeManager:
         # 5. PARTIAL EXIT
         partial_result = self._check_partial_exit(current_z)
         if partial_result['action'] == 'PARTIAL_EXIT':
-            if not self._profit_exit_allowed(floating_pnl_usdt, min_profit_usdt):
+            partial_min_profit, partial_multiplier, partial_base = self._guard_threshold(
+                ExitReason.PARTIAL_PROFIT,
+                min_profit_usdt,
+            )
+            if not self._profit_exit_allowed(floating_pnl_usdt, partial_min_profit):
                 return self._net_profit_guard_hold(
                     ExitReason.PARTIAL_PROFIT,
                     floating_pnl_usdt,
-                    min_profit_usdt,
+                    partial_base,
+                    partial_min_profit,
+                    partial_multiplier,
+                    current_z=current_z,
                 )
             return partial_result
         
@@ -252,6 +284,28 @@ class AdvancedTradeManager:
         }
     
 
+    def _guard_threshold(self, reason: ExitReason, min_profit_usdt: float) -> Tuple[float, float, float]:
+        try:
+            base_required = max(float(min_profit_usdt or 0.0), 0.0)
+        except (TypeError, ValueError):
+            base_required = 0.0
+
+        key_by_reason = {
+            ExitReason.TAKE_PROFIT: 'full_tp_guard_multiplier',
+            ExitReason.PARTIAL_PROFIT: 'partial_tp_guard_multiplier',
+            ExitReason.TRAILING_STOP: 'trailing_stop_guard_multiplier',
+        }
+        key = key_by_reason.get(reason)
+        try:
+            multiplier = float(self.config.get(key, 1.0)) if key else 1.0
+        except (TypeError, ValueError):
+            multiplier = 1.0
+        if multiplier < 0:
+            multiplier = 1.0
+
+        return base_required * multiplier, multiplier, base_required
+
+
     def _profit_exit_allowed(self, floating_pnl_usdt: Optional[float], min_profit_usdt: float) -> bool:
         if not self.config.get('net_profit_guard_enabled', True):
             return True
@@ -272,12 +326,22 @@ class AdvancedTradeManager:
         self,
         reason: ExitReason,
         floating_pnl_usdt: Optional[float],
-        min_profit_usdt: float,
+        base_min_profit_usdt: float,
+        effective_min_profit_usdt: Optional[float] = None,
+        guard_multiplier: float = 1.0,
+        current_z: Optional[float] = None,
     ) -> Dict:
         try:
-            required = max(float(min_profit_usdt or 0.0), 0.0)
+            base_required = max(float(base_min_profit_usdt or 0.0), 0.0)
         except (TypeError, ValueError):
-            required = 0.0
+            base_required = 0.0
+        if effective_min_profit_usdt is None:
+            effective_required = base_required
+        else:
+            try:
+                effective_required = max(float(effective_min_profit_usdt or 0.0), 0.0)
+            except (TypeError, ValueError):
+                effective_required = base_required
         if floating_pnl_usdt is None:
             pnl_text = "unknown"
         else:
@@ -289,12 +353,67 @@ class AdvancedTradeManager:
             'action': 'HOLD',
             'reason': (
                 f"Net profit guard blocked {reason.value}: "
-                f"floating_pnl={pnl_text} < required={required:.4f} USDT"
+                f"floating_pnl={pnl_text} < required={effective_required:.4f} USDT "
+                f"(base={base_required:.4f}, multiplier={guard_multiplier:.3f})"
             ),
             'blocked_exit_reason': reason.value,
             'floating_pnl_usdt': floating_pnl_usdt,
-            'min_profit_usdt': required,
+            'min_profit_usdt': effective_required,
+            'base_min_profit_usdt': base_required,
+            'effective_min_profit_usdt': effective_required,
+            'guard_multiplier': guard_multiplier,
+            **({'current_z': current_z} if current_z is not None else {}),
+            **({'take_profit_z': self.config.get('take_profit_z')} if reason == ExitReason.TAKE_PROFIT else {}),
         }
+
+
+    def _check_mean_reversion_escape(
+        self,
+        current_z: float,
+        floating_pnl_usdt: Optional[float],
+    ) -> Dict:
+        if not self.config.get('mean_reversion_escape_enabled', False):
+            return {'action': 'HOLD', 'reason': 'Mean-reversion escape disabled'}
+
+        try:
+            escape_z = max(float(self.config.get('mean_reversion_escape_z', 0.25) or 0.0), 0.0)
+        except (TypeError, ValueError):
+            escape_z = 0.25
+        if abs(current_z) > escape_z:
+            return {'action': 'HOLD', 'reason': 'Outside mean-reversion escape zone'}
+
+        try:
+            min_pnl = float(self.config.get('mean_reversion_escape_min_pnl_usdt', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            min_pnl = 0.0
+        try:
+            pnl = float(floating_pnl_usdt)
+        except (TypeError, ValueError):
+            return {'action': 'HOLD', 'reason': 'Mean-reversion escape PnL unavailable'}
+        if pnl < min_pnl:
+            return {'action': 'HOLD', 'reason': 'Mean-reversion escape PnL below floor'}
+
+        if self.config.get('mean_reversion_escape_requires_risk_rising', True):
+            if not self._mean_reversion_escape_risk_rising(current_z):
+                return {'action': 'HOLD', 'reason': 'Mean-reversion escape risk condition not met'}
+
+        return self._create_exit_result(
+            action='EXIT',
+            reason=ExitReason.MEAN_REVERSION_ESCAPE,
+            message=(
+                f"Mean-reversion escape: Z={current_z:+.2f} sigma within "
+                f"{escape_z:.2f} sigma and pnl={pnl:.4f} USDT"
+            ),
+            percentage=1.0,
+        )
+
+
+    def _mean_reversion_escape_risk_rising(self, current_z: float) -> bool:
+        if not self.trade_state:
+            return False
+        if self.trade_state.trailing_stop_active:
+            return True
+        return abs(current_z) > abs(self.trade_state.best_z)
 
     
     def _check_max_hold_time(self) -> Dict:

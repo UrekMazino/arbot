@@ -205,7 +205,7 @@ def _decimal_from_info(instrument_info, key):
     raw = instrument_info.get(key)
     try:
         value = Decimal(str(raw)) if raw not in (None, "") else Decimal("0")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, InvalidOperation):
         return Decimal("0")
     return value if value > 0 else Decimal("0")
 
@@ -215,6 +215,86 @@ def _format_qty(value):
         return f"{float(value):.8f}".rstrip("0").rstrip(".")
     except (TypeError, ValueError):
         return str(value)
+
+
+def _format_decimal(value):
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _decimal_from_value(value):
+    try:
+        parsed = Decimal(str(value))
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+    if not parsed.is_finite():
+        return None
+    return parsed
+
+
+def validate_stop_trigger_price(
+    inst_id,
+    side,
+    reference_price,
+    computed_trigger_price,
+    instrument_info=None,
+):
+    """
+    Validate and round an OKX stop-loss trigger before order submission.
+
+    `side` is the stop order side: a sell stop closes a long and must trigger
+    below the reference price; a buy stop closes a short and must trigger above
+    it. OKX requires slTriggerPx to respect tickSz, which matters for tiny-price
+    swaps such as SHIB-USDT-SWAP.
+    """
+    side_norm = _normalize_value(side)
+    tick_size = _decimal_from_info(instrument_info, "tickSz")
+    ref_dec = _decimal_from_value(reference_price)
+    raw_dec = _decimal_from_value(computed_trigger_price)
+    metadata = {
+        "inst_id": inst_id,
+        "side": side_norm,
+        "reference_price": reference_price,
+        "raw_trigger_px": computed_trigger_price,
+        "tick_size": _format_decimal(tick_size) if tick_size > 0 else None,
+    }
+
+    if side_norm not in ("buy", "sell"):
+        return {"valid": False, "rounded_trigger_px": None, "reason": "invalid_stop_side", "metadata": metadata}
+    if ref_dec is None or ref_dec <= 0:
+        return {"valid": False, "rounded_trigger_px": None, "reason": "invalid_reference_price", "metadata": metadata}
+    if raw_dec is None or raw_dec <= 0:
+        return {"valid": False, "rounded_trigger_px": None, "reason": "invalid_trigger_price", "metadata": metadata}
+
+    rounded = raw_dec
+    if tick_size > 0:
+        rounding_mode = ROUND_DOWN if side_norm == "sell" else ROUND_UP
+        steps = (raw_dec / tick_size).to_integral_value(rounding=rounding_mode)
+        rounded = steps * tick_size
+
+    rounded_text = _format_decimal(rounded)
+    metadata["rounded_trigger_px"] = rounded_text
+
+    if rounded <= 0:
+        return {"valid": False, "rounded_trigger_px": rounded_text, "reason": "rounded_trigger_not_positive", "metadata": metadata}
+    if side_norm == "sell" and rounded >= ref_dec:
+        return {
+            "valid": False,
+            "rounded_trigger_px": rounded_text,
+            "reason": "sell_stop_trigger_not_below_reference",
+            "metadata": metadata,
+        }
+    if side_norm == "buy" and rounded <= ref_dec:
+        return {
+            "valid": False,
+            "rounded_trigger_px": rounded_text,
+            "reason": "buy_stop_trigger_not_above_reference",
+            "metadata": metadata,
+        }
+
+    return {"valid": True, "rounded_trigger_px": rounded_text, "reason": None, "metadata": metadata}
 
 
 def _get_max_order_qty(instrument_info, order_type):
@@ -381,6 +461,21 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
     if ok and not size_limits.get("ok", True):
         ok = False
         error = size_limits.get("error", "")
+    stop_validation = None
+    if ok and place_stop:
+        stop_side = "sell" if entry_side == "buy" else "buy"
+        stop_validation = validate_stop_trigger_price(
+            inst_id,
+            stop_side,
+            entry_price,
+            stop_price,
+            instrument_info=info,
+        )
+        if not stop_validation.get("valid"):
+            ok = False
+            error = f"stop_loss_preflight_failed: {stop_validation.get('reason')}"
+        else:
+            stop_price = stop_validation.get("rounded_trigger_px")
 
     return {
         "ok": ok,
@@ -400,6 +495,7 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         "max_stop_size": size_limits.get("max_stop_size"),
         "max_order_notional_usdt": size_limits.get("max_order_notional_usdt"),
         "max_stop_notional_usdt": size_limits.get("max_stop_notional_usdt"),
+        "stop_trigger_validation": stop_validation,
         "orderbook_payload": orderbook_payload,
         "instrument_info": info,
         "error": error,
@@ -407,7 +503,8 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
 
 
 def place_stop_loss_order(inst_id, side, size, trigger_price, td_mode_override=None, pos_side="",
-                          session=None, dry_run_override=None):
+                          session=None, dry_run_override=None, reference_price=None,
+                          instrument_info=None, validate_trigger=True):
     """
     Place a stop-loss order using OKX algo orders.
     """
@@ -415,10 +512,32 @@ def place_stop_loss_order(inst_id, side, size, trigger_price, td_mode_override=N
     td_mode_value = _normalize_value(td_mode_override or td_mode)
     side = _normalize_value(side)
     pos_side = _resolve_pos_side(side, True, _normalize_value(pos_side))
+    trigger_price_to_send = trigger_price
+
+    if validate_trigger and reference_price is not None:
+        validation = validate_stop_trigger_price(
+            inst_id,
+            side,
+            reference_price,
+            trigger_price,
+            instrument_info=instrument_info,
+        )
+        if not validation.get("valid"):
+            print(
+                "ERROR: stop_loss_validation_failed "
+                f"{inst_id} side={side} trigger={trigger_price} reason={validation.get('reason')}"
+            )
+            return {
+                "code": "STOP_TRIGGER_INVALID",
+                "msg": validation.get("reason") or "invalid stop trigger",
+                "data": [],
+                "validation": validation,
+            }
+        trigger_price_to_send = validation.get("rounded_trigger_px")
 
     if _should_dry_run(dry_run_override):
         pos_info = f", posSide={pos_side}" if pos_side else ""
-        print(f"DRY RUN: stop loss {side} {inst_id}, size={size}, trigger={trigger_price}{pos_info}")
+        print(f"DRY RUN: stop loss {side} {inst_id}, size={size}, trigger={trigger_price_to_send}{pos_info}")
         return {"code": "0", "msg": "", "data": [{"algoId": "DRYRUN"}], "dry_run": True}
 
     try:
@@ -430,7 +549,7 @@ def place_stop_loss_order(inst_id, side, size, trigger_price, td_mode_override=N
             sz=str(size),
             posSide=pos_side,
             reduceOnly=_bool_str(True),
-            slTriggerPx=str(trigger_price),
+            slTriggerPx=str(trigger_price_to_send),
             slOrdPx="-1",
         )
     except Exception as exc:
@@ -442,7 +561,7 @@ def place_stop_loss_order(inst_id, side, size, trigger_price, td_mode_override=N
 
     algo_id = response.get("data", [{}])[0].get("algoId", "")
     pos_info = f", posSide={pos_side}" if pos_side else ""
-    print(f"OK: Stop loss placed ({side} {inst_id}, size={size}, trigger={trigger_price}{pos_info}) id={algo_id}")
+    print(f"OK: Stop loss placed ({side} {inst_id}, size={size}, trigger={trigger_price_to_send}{pos_info}) id={algo_id}")
     return response
 
 
@@ -516,6 +635,31 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         print(f"ERROR: {error}")
         return {"entry": None, "stop": None, "details": details, "ok": False, "error": error}
 
+    stop_side = "sell" if entry_side == "buy" else "buy"
+    stop_validation = None
+    if place_stop:
+        stop_validation = validate_stop_trigger_price(
+            inst_id,
+            stop_side,
+            entry_price,
+            stop_price,
+            instrument_info=info,
+        )
+        details["stop_trigger_validation"] = stop_validation
+        if not stop_validation.get("valid"):
+            error = f"stop_loss_preflight_failed: {stop_validation.get('reason')}"
+            print(f"ERROR: {error} details={stop_validation.get('metadata')}")
+            return {
+                "entry": None,
+                "stop": None,
+                "details": details,
+                "ok": False,
+                "error": error,
+                "error_type": "stop_loss_preflight_failed",
+            }
+        stop_price = stop_validation.get("rounded_trigger_px")
+        details["stop_price"] = stop_price
+
     if limit_offset and limit_offset != 0:
         offset = abs(float(limit_offset))
         if entry_side == "buy":
@@ -547,7 +691,25 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
     if not place_stop:
         return result
 
-    stop_side = "sell" if entry_side == "buy" else "buy"
+    post_entry_reference_price = _extract_order_response_price(entry_res)
+    post_entry_reference_source = "entry_response_fill_price" if post_entry_reference_price else "planned_entry_price"
+    post_fill_validation = validate_stop_trigger_price(
+        inst_id,
+        stop_side,
+        post_entry_reference_price or entry_price,
+        stop_price,
+        instrument_info=info,
+    )
+    details["post_fill_stop_trigger_validation"] = post_fill_validation
+    details["post_fill_reference_price_source"] = post_entry_reference_source
+    if not post_fill_validation.get("valid"):
+        error = f"stop_loss_post_fill_validation_failed: {post_fill_validation.get('reason')}"
+        print(f"ERROR: {error} details={post_fill_validation.get('metadata')}")
+        result["ok"] = False
+        result["error"] = error
+        result["error_type"] = "stop_loss_post_fill_validation_failed"
+        return result
+
     stop_res = place_stop_loss_order(
         inst_id,
         side=stop_side,
@@ -555,6 +717,8 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         trigger_price=stop_price,
         td_mode_override=td_mode_override,
         dry_run_override=dry_run_override,
+        reference_price=post_entry_reference_price or entry_price,
+        instrument_info=info,
     )
     result["stop"] = stop_res
     result["ok"] = result["ok"] and _is_ok_response(stop_res)
@@ -727,6 +891,18 @@ def _extract_algo_id(response):
     data_list = response.get("data", [])
     order_data = data_list[0] if data_list else {}
     return order_data.get("algoId", "")
+
+
+def _extract_order_response_price(response):
+    if not isinstance(response, dict):
+        return None
+    data_list = response.get("data", [])
+    order_data = data_list[0] if data_list else {}
+    for key in ("avgPx", "fillPx", "px"):
+        parsed = _decimal_from_value(order_data.get(key))
+        if parsed is not None and parsed > 0:
+            return float(parsed)
+    return None
 
 
 def get_order_history(inst_id="", limit=50, session=None):

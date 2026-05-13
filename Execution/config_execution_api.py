@@ -249,6 +249,10 @@ dry_run = _env_flag("STATBOT_DRY_RUN", False)  # When True, execution calls will
 use_fresh_orderbook = _env_flag("STATBOT_USE_FRESH_ORDERBOOK", False)  # Reserved for fresh snapshot enforcement.
 max_snapshot_age_seconds = _env_int("STATBOT_MAX_SNAPSHOT_AGE_SECONDS", 15, minimum=0)
 stop_loss_fail_safe = _env_float("STATBOT_STOP_LOSS_FAIL_SAFE", 0.03, minimum=0.0)
+emergency_flatten_verify_enabled = _env_flag("STATBOT_EMERGENCY_FLATTEN_VERIFY_ENABLED", True)
+emergency_flatten_max_retries = _env_int("STATBOT_EMERGENCY_FLATTEN_MAX_RETRIES", 3, minimum=0)
+emergency_flatten_poll_seconds = _env_float("STATBOT_EMERGENCY_FLATTEN_POLL_SECONDS", 1.0, minimum=0.0)
+emergency_flatten_dust_contracts = _env_float("STATBOT_EMERGENCY_FLATTEN_DUST_CONTRACTS", 0.0, minimum=0.0)
 default_leverage = _env_int("STATBOT_DEFAULT_LEVERAGE", 1, minimum=1)
 max_cycles = _env_int("STATBOT_MAX_CYCLES", 0, minimum=0)
 # Default roundings (will be updated if possible)

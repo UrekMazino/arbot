@@ -3,7 +3,18 @@ import math
 import os
 import time
 
-from config_execution_api import account_session, trade_session, inst_type, ticker_1, ticker_2, td_mode
+from config_execution_api import (
+    account_session,
+    trade_session,
+    inst_type,
+    ticker_1,
+    ticker_2,
+    td_mode,
+    emergency_flatten_verify_enabled,
+    emergency_flatten_max_retries,
+    emergency_flatten_poll_seconds,
+    emergency_flatten_dust_contracts,
+)
 from func_fill_logging import log_order_fills
 from func_position_calls import get_account_state
 
@@ -86,7 +97,10 @@ def place_market_close_order(ticker, size, side):
 
         if code == "0" and ord_id:
             logger.info(f"Successfully placed market close order for {ticker}: {size} {order_side}. Order ID: {ord_id}")
-            log_order_fills(ord_id, ticker)
+            fill_summary = log_order_fills(ord_id, ticker)
+            if fill_summary:
+                response["fill_summary"] = fill_summary
+                response["requested_qty"] = size
             return response
 
         s_code = order_data.get("sCode")
@@ -196,7 +210,7 @@ def _active_tickers(tickers=None):
     return result
 
 
-def _flat_blockers_from_state(state, tickers, *, all_tickers=False):
+def _flat_blockers_from_state(state, tickers, *, all_tickers=False, dust_contracts=0.0):
     if not isinstance(state, dict) or not bool(state.get("ok", True)):
         errors = state.get("errors", []) if isinstance(state, dict) else []
         detail = "; ".join(str(item) for item in errors if str(item).strip())
@@ -212,7 +226,7 @@ def _flat_blockers_from_state(state, tickers, *, all_tickers=False):
         if not check_all and inst_id not in active_set:
             continue
         pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
-        if pos_val is not None and abs(pos_val) > 0:
+        if pos_val is not None and abs(pos_val) > max(float(dust_contracts or 0.0), 0.0):
             blockers.append(f"open position remains for {inst_id}: {abs(pos_val):.8f}")
 
     for order in state.get("orders", []):
@@ -251,10 +265,10 @@ def exposure_tickers_from_state(state):
     return tickers
 
 
-def account_tickers_are_flat(tickers=None, state=None):
+def account_tickers_are_flat(tickers=None, state=None, dust_contracts=0.0):
     active = _active_tickers(tickers)
     check_state = state if state is not None else get_account_state()
-    blockers = _flat_blockers_from_state(check_state, active)
+    blockers = _flat_blockers_from_state(check_state, active, dust_contracts=dust_contracts)
     return not blockers, blockers
 
 
@@ -262,6 +276,32 @@ def account_is_flat(state=None):
     check_state = state if state is not None else get_account_state()
     blockers = _flat_blockers_from_state(check_state, [], all_tickers=True)
     return not blockers, blockers
+
+
+def _remaining_positions_from_state(state, tickers, dust_contracts=0.0):
+    remaining = []
+    active_set = set(tickers or [])
+    dust = max(float(dust_contracts or 0.0), 0.0)
+    if not isinstance(state, dict) or not bool(state.get("ok", True)):
+        return remaining
+    for pos in state.get("positions", []):
+        if not isinstance(pos, dict):
+            continue
+        inst_id = pos.get("instId")
+        if inst_id not in active_set:
+            continue
+        pos_val = _safe_float(pos.get("pos") or pos.get("position") or pos.get("size"))
+        if pos_val is None or abs(pos_val) <= dust:
+            continue
+        remaining.append(
+            {
+                "inst_id": inst_id,
+                "size": abs(pos_val),
+                "side": _position_side(pos.get("posSide"), pos_val),
+                "raw_position": pos,
+            }
+        )
+    return remaining
 
 
 def close_all_positions(kill_switch, tickers=None, return_result=False):
@@ -314,6 +354,17 @@ def close_all_positions(kill_switch, tickers=None, return_result=False):
         if size > 0:
             logger.info(f"Closing position for {ticker}: {size} {side}")
             close_response = place_market_close_order(ticker, size, side)
+            attempt = {
+                "ticker": ticker,
+                "requested_qty": size,
+                "side": side,
+                "response": close_response,
+            }
+            if isinstance(close_response, dict):
+                fill_summary = close_response.get("fill_summary") or {}
+                if fill_summary:
+                    attempt["filled_qty"] = fill_summary.get("qty")
+            result.setdefault("close_attempts", []).append(attempt)
             if isinstance(close_response, dict) and close_response.get("code") == "0":
                 result["close_orders"] += 1
             else:
@@ -332,43 +383,76 @@ def close_all_positions(kill_switch, tickers=None, return_result=False):
 
 def close_all_positions_and_confirm(kill_switch=0, tickers=None, timeout_seconds=None, poll_seconds=None):
     active = _active_tickers(tickers)
-    timeout = timeout_seconds if timeout_seconds is not None else _env_int(
-        "STATBOT_CLOSE_CONFIRM_TIMEOUT_SECONDS",
-        30,
-        minimum=5,
-    )
-    poll = poll_seconds if poll_seconds is not None else _env_int(
-        "STATBOT_CLOSE_CONFIRM_POLL_SECONDS",
-        2,
-        minimum=1,
-    )
+    poll = poll_seconds if poll_seconds is not None else float(emergency_flatten_poll_seconds or 0.0)
+    if poll < 0:
+        poll = 0.0
+    max_retries = int(emergency_flatten_max_retries or 0)
+    dust_contracts = float(emergency_flatten_dust_contracts or 0.0)
     result = close_all_positions(kill_switch, tickers=active, return_result=True)
-    deadline = time.time() + timeout
     last_blockers = []
 
-    while True:
-        flat, blockers = account_tickers_are_flat(active)
+    if not emergency_flatten_verify_enabled:
+        result["confirmed_flat"] = None
+        result["flatten_verification_enabled"] = False
+        return result
+
+    result["flatten_verification_enabled"] = True
+    result["flatten_max_retries"] = max_retries
+    result["flatten_dust_contracts"] = dust_contracts
+
+    for retry_idx in range(max_retries + 1):
+        state = get_account_state()
+        flat, blockers = account_tickers_are_flat(active, state=state, dust_contracts=dust_contracts)
         if flat:
             result["ok"] = True
             result["confirmed_flat"] = True
             result["blockers"] = []
             result["kill_switch"] = 0
+            result["final_flatten_status"] = "flat"
             return result
 
         last_blockers = blockers
-        if time.time() >= deadline:
+        remaining_positions = _remaining_positions_from_state(state, active, dust_contracts=dust_contracts)
+        result["remaining_position_qty"] = {
+            item["inst_id"]: item["size"] for item in remaining_positions
+        }
+        if retry_idx >= max_retries:
             break
-        time.sleep(poll)
+        if poll:
+            time.sleep(poll)
+        for item in remaining_positions:
+            logger.critical(
+                "Emergency flatten retry %d/%d for %s: remaining %.8f %s",
+                retry_idx + 1,
+                max_retries,
+                item["inst_id"],
+                item["size"],
+                item["side"],
+            )
+            close_response = place_market_close_order(item["inst_id"], item["size"], item["side"])
+            attempt = {
+                "ticker": item["inst_id"],
+                "requested_qty": item["size"],
+                "side": item["side"],
+                "retry": retry_idx + 1,
+                "response": close_response,
+            }
+            if isinstance(close_response, dict):
+                fill_summary = close_response.get("fill_summary") or {}
+                if fill_summary:
+                    attempt["filled_qty"] = fill_summary.get("qty")
+            result.setdefault("close_attempts", []).append(attempt)
 
     result["ok"] = False
     result["confirmed_flat"] = False
     result["blockers"] = last_blockers
     result["errors"] = list(dict.fromkeys([*result.get("errors", []), *last_blockers]))
     result["kill_switch"] = kill_switch
-    logger.error(
-        "Close confirmation failed for %s within %ss: %s",
+    result["final_flatten_status"] = "not_flat"
+    logger.critical(
+        "Emergency flatten confirmation failed for %s after %s retries: %s",
         "/".join(active),
-        timeout,
+        max_retries,
         "; ".join(last_blockers),
     )
     return result

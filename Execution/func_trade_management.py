@@ -3259,6 +3259,20 @@ def manage_new_trades(
                     order_long_id = ""
                     order_status_long = "failed"
                     logger.error("Long entry failed; skipping pair entry. Response: %s", result_long)
+                    if isinstance(result_long, dict) and result_long.get("error_type") == "stop_loss_preflight_failed":
+                        details = result_long.get("details") or {}
+                        validation = details.get("stop_trigger_validation") or {}
+                        _emit_entry_reject(
+                            "stop_loss_preflight_failed",
+                            result_long.get("error") or "stop_loss_preflight_failed",
+                            severity="error",
+                            pair=_active_pair_key(),
+                            strategy=strategy_name,
+                            regime=regime_name,
+                            ticker=long_ticker,
+                            side="long",
+                            stop_validation=validation,
+                        )
                     handled_partial_entry, partial_close_ks = _close_placed_entry_after_setup_failure(
                         "Long",
                         long_ticker,
@@ -3334,6 +3348,20 @@ def manage_new_trades(
                     order_short_id = ""
                     order_status_short = "failed"
                     logger.error("Short entry failed; closing any opened leg. Response: %s", result_short)
+                    if isinstance(result_short, dict) and result_short.get("error_type") == "stop_loss_preflight_failed":
+                        details = result_short.get("details") or {}
+                        validation = details.get("stop_trigger_validation") or {}
+                        _emit_entry_reject(
+                            "stop_loss_preflight_failed",
+                            result_short.get("error") or "stop_loss_preflight_failed",
+                            severity="error",
+                            pair=_active_pair_key(),
+                            strategy=strategy_name,
+                            regime=regime_name,
+                            ticker=short_ticker,
+                            side="short",
+                            stop_validation=validation,
+                        )
                     _emit_entry_reject(
                         "entry_execution",
                         "short_entry_failed",

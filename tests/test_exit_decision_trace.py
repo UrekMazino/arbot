@@ -46,6 +46,8 @@ def _config(**overrides):
         "trailing_stop_guard_multiplier": 1.0,
         "partial_exit_enabled": True,
         "partial_exit_z_threshold": 1.0,
+        "pnl_profit_lock_enabled": False,
+        "pnl_profit_lock_giveback_pct": 0.50,
     }
     base.update(overrides)
     return base
@@ -86,8 +88,11 @@ def test_trace_records_guard_block_and_effective_floor():
     assert payload["effective_min_profit_usdt"] == pytest.approx(0.15)
     assert payload["full_tp_guard_multiplier"] == 0.75
     assert payload["full_tp_guard_passed"] is False
+    assert payload["trade_manager_guard_passed"] is False
+    assert payload["full_tp_candidate_created"] is False
+    assert payload["full_tp_candidate_blocked"] is False
     assert payload["full_tp_blocked_reason"] == "net_profit_guard"
-    assert payload["why_full_tp_not_selected"] == "net_profit_guard_blocked"
+    assert payload["why_full_tp_not_selected"] == "trade_manager_net_profit_guard_blocked"
 
 
 def test_trace_records_guard_pass_and_selected_exit_reason():
@@ -112,7 +117,40 @@ def test_trace_records_guard_pass_and_selected_exit_reason():
     assert payload["selected_exit_reason"] == "Mean-reversion target hit"
     assert payload["selected_exit_action"] == "full_exit"
     assert payload["selected_candidate_name"] == "trade_manager_take_profit"
-    assert payload["why_full_tp_not_selected"] == "selected"
+    assert payload["trade_manager_guard_passed"] is True
+    assert payload["full_tp_candidate_created"] is True
+    assert payload["full_tp_candidate_blocked"] is False
+    assert payload["why_full_tp_not_selected"] == ""
+
+
+def test_trace_records_pnl_profit_lock_diagnostics():
+    selected = SimpleNamespace(name="trade_manager_pnl_profit_lock")
+    payload = build_exit_decision_trace_payload(
+        timestamp=1.0,
+        pair="BTC/XLM",
+        current_z=0.90,
+        floating_pnl_usdt=0.49,
+        base_min_profit_usdt=0.20,
+        trade_manager_config=_config(pnl_profit_lock_enabled=True),
+        trade_state=_state(
+            max_favorable_pnl_usdt=1.00,
+            pnl_profit_lock_active=True,
+            pnl_profit_lock_floor=0.50,
+        ),
+        trade_manager_result={"action": "EXIT", "reason": "pnl_profit_lock"},
+        exit_decision=_decision(
+            action=SimpleNamespace(value="full_exit"),
+            reason="PnL profit lock",
+            selected_candidate=selected,
+        ),
+    )
+
+    assert payload["pnl_profit_lock_enabled"] is True
+    assert payload["pnl_profit_lock_active"] is True
+    assert payload["max_favorable_pnl_usdt"] == pytest.approx(1.00)
+    assert payload["pnl_profit_lock_floor"] == pytest.approx(0.50)
+    assert payload["pnl_profit_lock_giveback_pct"] == pytest.approx(0.50)
+    assert payload["pnl_profit_lock_selected"] is True
 
 
 def test_trace_explains_preemption_after_full_tp_guard_passes():
@@ -134,7 +172,8 @@ def test_trace_explains_preemption_after_full_tp_guard_passes():
     )
 
     assert payload["full_tp_guard_passed"] is True
-    assert payload["why_full_tp_not_selected"] == "preempted_by_cointegration_lost_losing"
+    assert payload["full_tp_candidate_created"] is True
+    assert payload["why_full_tp_not_selected"] == "higher_priority_exit_selected:cointegration_lost_losing"
 
 
 def test_trace_explains_orchestrator_guard_block_after_manager_guard_passes():
@@ -166,7 +205,53 @@ def test_trace_explains_orchestrator_guard_block_after_manager_guard_passes():
     assert payload["orchestrator_guard_multiplier"] == pytest.approx(0.75)
     assert payload["orchestrator_guard_passed"] is False
     assert payload["blocked_candidate_names"] == "trade_manager_take_profit"
+    assert payload["full_tp_candidate_created"] is True
+    assert payload["full_tp_candidate_blocked"] is True
     assert payload["why_full_tp_not_selected"] == "orchestrator_net_profit_guard_blocked"
+
+
+def test_trace_detects_selected_full_tp_outside_zone_inconsistency():
+    payload = build_exit_decision_trace_payload(
+        timestamp=1.0,
+        pair="BTC/XLM",
+        current_z=0.90,
+        floating_pnl_usdt=0.20,
+        base_min_profit_usdt=0.20,
+        trade_manager_config=_config(),
+        trade_state=_state(),
+        trade_manager_result={"action": "EXIT", "reason": "take_profit"},
+        exit_decision=_decision(
+            action=SimpleNamespace(value="full_exit"),
+            reason="Mean-reversion target hit",
+            selected_candidate=SimpleNamespace(name="trade_manager_take_profit"),
+        ),
+    )
+
+    assert payload["full_tp_selected"] is True
+    assert payload["full_tp_zone_hit"] is False
+    assert payload["why_full_tp_not_selected"] == "trace_inconsistent:selected_but_outside_full_tp_zone"
+
+
+def test_trace_detects_selected_full_tp_guard_failed_inconsistency():
+    payload = build_exit_decision_trace_payload(
+        timestamp=1.0,
+        pair="BTC/XLM",
+        current_z=0.20,
+        floating_pnl_usdt=0.10,
+        base_min_profit_usdt=0.20,
+        trade_manager_config=_config(),
+        trade_state=_state(),
+        trade_manager_result={"action": "EXIT", "reason": "take_profit"},
+        exit_decision=_decision(
+            action=SimpleNamespace(value="full_exit"),
+            reason="Mean-reversion target hit",
+            selected_candidate=SimpleNamespace(name="trade_manager_take_profit"),
+        ),
+    )
+
+    assert payload["full_tp_zone_hit"] is True
+    assert payload["trade_manager_guard_passed"] is False
+    assert payload["why_full_tp_not_selected"] == "trace_inconsistent:selected_but_trade_manager_guard_failed"
 
 
 def test_trace_does_not_mutate_trade_state():

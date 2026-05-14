@@ -259,6 +259,21 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
                 "STATBOT_MEAN_REVERSION_ESCAPE_REQUIRES_RISK_RISING",
                 True,
             ),
+            "pnl_profit_lock_enabled": _env_flag("STATBOT_PNL_PROFIT_LOCK_ENABLED", False),
+            "pnl_profit_lock_activation_buffer_usdt": _env_float(
+                "STATBOT_PNL_PROFIT_LOCK_ACTIVATION_BUFFER_USDT",
+                0.05,
+                minimum=0.0,
+            ),
+            "pnl_profit_lock_giveback_pct": _env_float(
+                "STATBOT_PNL_PROFIT_LOCK_GIVEBACK_PCT",
+                0.50,
+                minimum=0.0,
+            ),
+            "pnl_profit_lock_min_lock_usdt": _env_float(
+                "STATBOT_PNL_PROFIT_LOCK_MIN_LOCK_USDT",
+                0.0,
+            ),
         },
         "advanced_ml": advanced_ml_config_snapshot(),
         "strategy": {

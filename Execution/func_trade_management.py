@@ -144,6 +144,21 @@ def _env_nonnegative_float(name, default):
     return value
 
 
+def _env_fraction(name, default):
+    value = _env_float(name, default)
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+    if value < 0:
+        return default
+    if value > 1:
+        return 1.0
+    return value
+
+
 def _get_liquidity_ratio_cap():
     cap = _env_float("STATBOT_LIQUIDITY_RATIO_CAP", DEFAULT_LIQUIDITY_RATIO_CAP)
     if cap is None:
@@ -758,6 +773,22 @@ def _strategy_atm_profiles():
         "STATBOT_MEAN_REVERSION_ESCAPE_REQUIRES_RISK_RISING",
         bool(_TM_BASE_CONFIG.get("mean_reversion_escape_requires_risk_rising", True)),
     )
+    pnl_profit_lock_enabled = _env_flag(
+        "STATBOT_PNL_PROFIT_LOCK_ENABLED",
+        bool(_TM_BASE_CONFIG.get("pnl_profit_lock_enabled", False)),
+    )
+    pnl_profit_lock_activation_buffer_usdt = _env_nonnegative_float(
+        "STATBOT_PNL_PROFIT_LOCK_ACTIVATION_BUFFER_USDT",
+        _TM_BASE_CONFIG.get("pnl_profit_lock_activation_buffer_usdt", 0.05),
+    )
+    pnl_profit_lock_giveback_pct = _env_fraction(
+        "STATBOT_PNL_PROFIT_LOCK_GIVEBACK_PCT",
+        _TM_BASE_CONFIG.get("pnl_profit_lock_giveback_pct", 0.50),
+    )
+    pnl_profit_lock_min_lock_usdt = _env_float(
+        "STATBOT_PNL_PROFIT_LOCK_MIN_LOCK_USDT",
+        _TM_BASE_CONFIG.get("pnl_profit_lock_min_lock_usdt", 0.0),
+    )
     base_max_hold = _env_float("STATBOT_ATM_MR_MAX_HOLD_HOURS", _TM_BASE_CONFIG.get("max_hold_hours", 6))
     if base_max_hold is None or base_max_hold <= 0:
         base_max_hold = 6.0
@@ -810,6 +841,10 @@ def _strategy_atm_profiles():
         "mean_reversion_escape_z": mean_reversion_escape_z,
         "mean_reversion_escape_min_pnl_usdt": mean_reversion_escape_min_pnl_usdt,
         "mean_reversion_escape_requires_risk_rising": mean_reversion_escape_requires_risk_rising,
+        "pnl_profit_lock_enabled": pnl_profit_lock_enabled,
+        "pnl_profit_lock_activation_buffer_usdt": pnl_profit_lock_activation_buffer_usdt,
+        "pnl_profit_lock_giveback_pct": pnl_profit_lock_giveback_pct,
+        "pnl_profit_lock_min_lock_usdt": pnl_profit_lock_min_lock_usdt,
     }
 
     trend_max_hold = _env_float("STATBOT_ATM_TREND_MAX_HOLD_HOURS", 2.0)
@@ -845,6 +880,10 @@ def _strategy_atm_profiles():
         "mean_reversion_escape_z": mean_reversion_escape_z,
         "mean_reversion_escape_min_pnl_usdt": mean_reversion_escape_min_pnl_usdt,
         "mean_reversion_escape_requires_risk_rising": mean_reversion_escape_requires_risk_rising,
+        "pnl_profit_lock_enabled": pnl_profit_lock_enabled,
+        "pnl_profit_lock_activation_buffer_usdt": pnl_profit_lock_activation_buffer_usdt,
+        "pnl_profit_lock_giveback_pct": pnl_profit_lock_giveback_pct,
+        "pnl_profit_lock_min_lock_usdt": pnl_profit_lock_min_lock_usdt,
     }
     return {"mr": mr_profile, "trend": trend_profile}
 
@@ -1442,6 +1481,7 @@ def _tm_exit_candidate(tm_result):
         "regime_break": 90,
         "diverging": 82,
         "take_profit": 76,
+        "pnl_profit_lock": 74,
         "trailing_stop": 70,
         "partial_profit": 64,
         "stall": 58,
@@ -1465,6 +1505,10 @@ def _tm_exit_candidate(tm_result):
         "current_z",
         "take_profit_z",
         "exit_type",
+        "max_favorable_pnl_usdt",
+        "pnl_profit_lock_floor",
+        "pnl_profit_lock_giveback_pct",
+        "pnl_profit_lock_active",
     ):
         if key in tm_result:
             metadata[key] = tm_result.get(key)

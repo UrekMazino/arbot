@@ -16,6 +16,7 @@ class ExitReason(Enum):
     PARTIAL_PROFIT = "partial_profit"
     TRAILING_STOP = "trailing_stop"
     MEAN_REVERSION_ESCAPE = "mean_reversion_escape"
+    PNL_PROFIT_LOCK = "pnl_profit_lock"
     STALL = "stall"
     REGIME_BREAK = "regime_break"
     MAX_HOLD_TIME = "max_hold_time"
@@ -47,6 +48,9 @@ class TradeState:
     # Trailing stop
     trailing_stop_active: bool = False
     trailing_stop_level: float = None
+    max_favorable_pnl_usdt: Optional[float] = None
+    pnl_profit_lock_active: bool = False
+    pnl_profit_lock_floor: Optional[float] = None
 
 
 class AdvancedTradeManager:
@@ -112,6 +116,10 @@ class AdvancedTradeManager:
             'mean_reversion_escape_z': 0.25,
             'mean_reversion_escape_min_pnl_usdt': 0.0,
             'mean_reversion_escape_requires_risk_rising': True,
+            'pnl_profit_lock_enabled': False,
+            'pnl_profit_lock_activation_buffer_usdt': 0.05,
+            'pnl_profit_lock_giveback_pct': 0.50,
+            'pnl_profit_lock_min_lock_usdt': 0.0,
             
             # Stall detection
             'stall_z_threshold': 1.5,  # Exit if Z > 1.5 and stalled
@@ -178,6 +186,14 @@ class AdvancedTradeManager:
             self.trade_state.best_z = current_z
         if abs_current > abs_worst:
             self.trade_state.worst_z = current_z
+
+        pnl_value = self._finite_float(floating_pnl_usdt)
+        if pnl_value is not None:
+            if (
+                self.trade_state.max_favorable_pnl_usdt is None
+                or pnl_value > self.trade_state.max_favorable_pnl_usdt
+            ):
+                self.trade_state.max_favorable_pnl_usdt = pnl_value
         
         # Trim history (keep last 2 hours)
         cutoff_time = current_time - 7200
@@ -200,34 +216,7 @@ class AdvancedTradeManager:
         if regime_result['action'] == 'EXIT':
             return regime_result
         
-        # 3. TRAILING STOP
-        trailing_result = self._check_trailing_stop(current_z)
-        if trailing_result['action'] == 'EXIT':
-            trailing_min_profit, trailing_multiplier, trailing_base = self._guard_threshold(
-                ExitReason.TRAILING_STOP,
-                min_profit_usdt,
-            )
-            if not self._profit_exit_allowed(floating_pnl_usdt, trailing_min_profit):
-                return self._net_profit_guard_hold(
-                    ExitReason.TRAILING_STOP,
-                    floating_pnl_usdt,
-                    trailing_base,
-                    trailing_min_profit,
-                    trailing_multiplier,
-                    current_z=current_z,
-                )
-            trailing_result.update(
-                {
-                    'base_min_profit_usdt': trailing_base,
-                    'effective_min_profit_usdt': trailing_min_profit,
-                    'guard_multiplier': trailing_multiplier,
-                    'current_z': current_z,
-                    'exit_type': ExitReason.TRAILING_STOP.value,
-                }
-            )
-            return trailing_result
-        
-        # 4. MEAN-REVERSION TARGET HIT (full exit)
+        # 3. MEAN-REVERSION TARGET HIT (full exit)
         if abs(current_z) <= self.config['take_profit_z']:
             take_profit_min_profit, take_profit_multiplier, take_profit_base = self._guard_threshold(
                 ExitReason.TAKE_PROFIT,
@@ -258,7 +247,39 @@ class AdvancedTradeManager:
                 },
             )
 
-        # 5. PARTIAL EXIT
+        # 4. PNL PROFIT LOCK (optional giveback protection)
+        pnl_lock_result = self._check_pnl_profit_lock(current_z, floating_pnl_usdt, min_profit_usdt)
+        if pnl_lock_result['action'] == 'EXIT':
+            return pnl_lock_result
+
+        # 5. TRAILING STOP
+        trailing_result = self._check_trailing_stop(current_z)
+        if trailing_result['action'] == 'EXIT':
+            trailing_min_profit, trailing_multiplier, trailing_base = self._guard_threshold(
+                ExitReason.TRAILING_STOP,
+                min_profit_usdt,
+            )
+            if not self._profit_exit_allowed(floating_pnl_usdt, trailing_min_profit):
+                return self._net_profit_guard_hold(
+                    ExitReason.TRAILING_STOP,
+                    floating_pnl_usdt,
+                    trailing_base,
+                    trailing_min_profit,
+                    trailing_multiplier,
+                    current_z=current_z,
+                )
+            trailing_result.update(
+                {
+                    'base_min_profit_usdt': trailing_base,
+                    'effective_min_profit_usdt': trailing_min_profit,
+                    'guard_multiplier': trailing_multiplier,
+                    'current_z': current_z,
+                    'exit_type': ExitReason.TRAILING_STOP.value,
+                }
+            )
+            return trailing_result
+
+        # 6. PARTIAL EXIT
         partial_result = self._check_partial_exit(current_z)
         if partial_result['action'] == 'PARTIAL_EXIT':
             partial_min_profit, partial_multiplier, partial_base = self._guard_threshold(
@@ -285,14 +306,14 @@ class AdvancedTradeManager:
             )
             return partial_result
         
-        # 6. STALL DETECTION (dynamic)
+        # 7. STALL DETECTION (dynamic)
         stall_result = self._check_stall_dynamic(current_z)
         if stall_result['action'] == 'EXIT':
             return stall_result
         elif stall_result['action'] == 'WARNING':
             logger.warning("Stall warning: %s", stall_result["reason"])
         
-        # 7. NO EXIT - HOLD POSITION
+        # 8. NO EXIT - HOLD POSITION
         time_in_trade = current_time - self.trade_state.entry_time
         return {
             'action': 'HOLD',
@@ -344,6 +365,119 @@ class AdvancedTradeManager:
         except (TypeError, ValueError):
             return not bool(self.config.get('net_profit_guard_require_pnl', True))
         return pnl >= required
+
+
+    def _finite_float(self, value, default=None):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not np.isfinite(parsed):
+            return default
+        return parsed
+
+
+    def _config_float(self, key: str, default: float, minimum: Optional[float] = None, maximum: Optional[float] = None):
+        value = self._finite_float(self.config.get(key), default)
+        if value is None:
+            value = default
+        if minimum is not None and value < minimum:
+            value = minimum
+        if maximum is not None and value > maximum:
+            value = maximum
+        return value
+
+
+    def _check_pnl_profit_lock(
+        self,
+        current_z: float,
+        floating_pnl_usdt: Optional[float],
+        min_profit_usdt: float,
+    ) -> Dict:
+        if not self.config.get('pnl_profit_lock_enabled', False):
+            if self.trade_state:
+                self.trade_state.pnl_profit_lock_active = False
+                self.trade_state.pnl_profit_lock_floor = None
+            return {'action': 'HOLD', 'reason': 'PnL profit lock disabled'}
+        if not self.trade_state:
+            return {'action': 'HOLD', 'reason': 'No trade state for PnL profit lock'}
+
+        pnl = self._finite_float(floating_pnl_usdt)
+        max_favorable = self._finite_float(self.trade_state.max_favorable_pnl_usdt)
+        if pnl is None or max_favorable is None:
+            self.trade_state.pnl_profit_lock_active = False
+            self.trade_state.pnl_profit_lock_floor = None
+            return {'action': 'HOLD', 'reason': 'PnL profit lock PnL unavailable'}
+
+        effective_min_profit, guard_multiplier, base_min_profit = self._guard_threshold(
+            ExitReason.TAKE_PROFIT,
+            min_profit_usdt,
+        )
+        activation_buffer = self._config_float(
+            'pnl_profit_lock_activation_buffer_usdt',
+            0.05,
+            minimum=0.0,
+        )
+        giveback_pct = self._config_float(
+            'pnl_profit_lock_giveback_pct',
+            0.50,
+            minimum=0.0,
+            maximum=1.0,
+        )
+        min_lock_usdt = self._config_float(
+            'pnl_profit_lock_min_lock_usdt',
+            0.0,
+        )
+        activation_floor = effective_min_profit + activation_buffer
+        if max_favorable < activation_floor:
+            self.trade_state.pnl_profit_lock_active = False
+            self.trade_state.pnl_profit_lock_floor = None
+            return {
+                'action': 'HOLD',
+                'reason': 'PnL profit lock not active',
+                'pnl_profit_lock_active': False,
+                'max_favorable_pnl_usdt': max_favorable,
+                'effective_min_profit_usdt': effective_min_profit,
+                'pnl_profit_lock_activation_floor': activation_floor,
+            }
+
+        giveback_floor = max(
+            effective_min_profit,
+            min_lock_usdt,
+            max_favorable * (1.0 - giveback_pct),
+        )
+        self.trade_state.pnl_profit_lock_active = True
+        self.trade_state.pnl_profit_lock_floor = giveback_floor
+        if pnl <= giveback_floor:
+            return self._create_exit_result(
+                action='EXIT',
+                reason=ExitReason.PNL_PROFIT_LOCK,
+                message=(
+                    f"PnL profit lock: pnl={pnl:.4f} <= floor={giveback_floor:.4f} USDT "
+                    f"(MFE={max_favorable:.4f}, giveback={giveback_pct:.2f})"
+                ),
+                percentage=1.0,
+                guard_diagnostics={
+                    'base_min_profit_usdt': base_min_profit,
+                    'effective_min_profit_usdt': effective_min_profit,
+                    'guard_multiplier': guard_multiplier,
+                    'current_z': current_z,
+                    'max_favorable_pnl_usdt': max_favorable,
+                    'pnl_profit_lock_floor': giveback_floor,
+                    'pnl_profit_lock_giveback_pct': giveback_pct,
+                    'pnl_profit_lock_active': True,
+                },
+            )
+        return {
+            'action': 'HOLD',
+            'reason': 'PnL profit lock active but not hit',
+            'pnl_profit_lock_active': True,
+            'max_favorable_pnl_usdt': max_favorable,
+            'pnl_profit_lock_floor': giveback_floor,
+            'pnl_profit_lock_giveback_pct': giveback_pct,
+            'effective_min_profit_usdt': effective_min_profit,
+            'guard_multiplier': guard_multiplier,
+        }
 
 
     def _net_profit_guard_hold(
@@ -807,19 +941,20 @@ class AdvancedTradeManager:
                     'base_min_profit_usdt': guard_diagnostics.get('base_min_profit_usdt'),
                     'effective_min_profit_usdt': guard_diagnostics.get('effective_min_profit_usdt'),
                     'guard_multiplier': guard_diagnostics.get('guard_multiplier'),
-                    **(
-                        {'current_z': guard_diagnostics.get('current_z')}
-                        if guard_diagnostics.get('current_z') is not None
-                        else {}
-                    ),
-                    **(
-                        {'take_profit_z': self.config.get('take_profit_z')}
-                        if reason == ExitReason.TAKE_PROFIT
-                        else {}
-                    ),
                     'exit_type': reason.value,
                 }
             )
+            for key in (
+                'current_z',
+                'max_favorable_pnl_usdt',
+                'pnl_profit_lock_floor',
+                'pnl_profit_lock_giveback_pct',
+                'pnl_profit_lock_active',
+            ):
+                if guard_diagnostics.get(key) is not None:
+                    result[key] = guard_diagnostics.get(key)
+            if reason == ExitReason.TAKE_PROFIT:
+                result['take_profit_z'] = self.config.get('take_profit_z')
         return result
     
     

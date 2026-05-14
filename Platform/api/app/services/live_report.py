@@ -527,12 +527,22 @@ EXIT_DECISION_TRACE_FIELDS = [
     "full_tp_guard_multiplier",
     "take_profit_z",
     "full_tp_zone_hit",
+    "trade_manager_guard_passed",
     "full_tp_guard_passed",
+    "full_tp_candidate_created",
+    "full_tp_candidate_blocked",
+    "full_tp_selected",
     "full_tp_blocked_reason",
     "orchestrator_base_min_profit_usdt",
     "orchestrator_effective_min_profit_usdt",
     "orchestrator_guard_multiplier",
     "orchestrator_guard_passed",
+    "pnl_profit_lock_enabled",
+    "pnl_profit_lock_active",
+    "max_favorable_pnl_usdt",
+    "pnl_profit_lock_floor",
+    "pnl_profit_lock_giveback_pct",
+    "pnl_profit_lock_selected",
     "partial_tp_eligible",
     "trailing_stop_eligible",
     "regime_break_eligible",
@@ -578,8 +588,12 @@ def _build_exit_decision_trace_rows(rows: list[RunEvent]) -> list[dict]:
                 "effective_min_profit_usdt": _coerce_float(payload.get("effective_min_profit_usdt")),
                 "full_tp_guard_multiplier": _coerce_float(payload.get("full_tp_guard_multiplier")),
                 "take_profit_z": _coerce_float(payload.get("take_profit_z")),
-                "full_tp_zone_hit": bool(payload.get("full_tp_zone_hit")),
-                "full_tp_guard_passed": bool(payload.get("full_tp_guard_passed")),
+                "full_tp_zone_hit": _coerce_bool(payload.get("full_tp_zone_hit")),
+                "trade_manager_guard_passed": _coerce_bool(payload.get("trade_manager_guard_passed")),
+                "full_tp_guard_passed": _coerce_bool(payload.get("full_tp_guard_passed")),
+                "full_tp_candidate_created": _coerce_bool(payload.get("full_tp_candidate_created")),
+                "full_tp_candidate_blocked": _coerce_bool(payload.get("full_tp_candidate_blocked")),
+                "full_tp_selected": _coerce_bool(payload.get("full_tp_selected")),
                 "full_tp_blocked_reason": str(payload.get("full_tp_blocked_reason") or "").strip(),
                 "orchestrator_base_min_profit_usdt": _coerce_float(
                     payload.get("orchestrator_base_min_profit_usdt")
@@ -589,10 +603,16 @@ def _build_exit_decision_trace_rows(rows: list[RunEvent]) -> list[dict]:
                 ),
                 "orchestrator_guard_multiplier": _coerce_float(payload.get("orchestrator_guard_multiplier")),
                 "orchestrator_guard_passed": _coerce_bool(payload.get("orchestrator_guard_passed")),
-                "partial_tp_eligible": bool(payload.get("partial_tp_eligible")),
-                "trailing_stop_eligible": bool(payload.get("trailing_stop_eligible")),
-                "regime_break_eligible": bool(payload.get("regime_break_eligible")),
-                "stall_exit_eligible": bool(payload.get("stall_exit_eligible")),
+                "pnl_profit_lock_enabled": _coerce_bool(payload.get("pnl_profit_lock_enabled")),
+                "pnl_profit_lock_active": _coerce_bool(payload.get("pnl_profit_lock_active")),
+                "max_favorable_pnl_usdt": _coerce_float(payload.get("max_favorable_pnl_usdt")),
+                "pnl_profit_lock_floor": _coerce_float(payload.get("pnl_profit_lock_floor")),
+                "pnl_profit_lock_giveback_pct": _coerce_float(payload.get("pnl_profit_lock_giveback_pct")),
+                "pnl_profit_lock_selected": _coerce_bool(payload.get("pnl_profit_lock_selected")),
+                "partial_tp_eligible": _coerce_bool(payload.get("partial_tp_eligible")),
+                "trailing_stop_eligible": _coerce_bool(payload.get("trailing_stop_eligible")),
+                "regime_break_eligible": _coerce_bool(payload.get("regime_break_eligible")),
+                "stall_exit_eligible": _coerce_bool(payload.get("stall_exit_eligible")),
                 "selected_exit_reason": str(payload.get("selected_exit_reason") or "").strip(),
                 "selected_exit_action": str(payload.get("selected_exit_action") or "").strip(),
                 "selected_candidate_name": str(payload.get("selected_candidate_name") or "").strip(),
@@ -622,7 +642,11 @@ def _build_exit_decision_summary_rows(rows: list[dict]) -> list[dict]:
             if (
                 str(row.get("full_tp_blocked_reason") or "").strip()
                 or str(row.get("why_full_tp_not_selected") or "").strip()
-                in {"net_profit_guard_blocked", "orchestrator_net_profit_guard_blocked"}
+                in {
+                    "net_profit_guard_blocked",
+                    "trade_manager_net_profit_guard_blocked",
+                    "orchestrator_net_profit_guard_blocked",
+                }
             )
         ]
         selected_rows = [

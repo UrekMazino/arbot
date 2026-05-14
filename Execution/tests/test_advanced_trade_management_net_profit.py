@@ -243,6 +243,98 @@ class TestAdvancedTradeManagementNetProfitGuard(unittest.TestCase):
         self.assertEqual(result["action"], "EXIT")
         self.assertEqual(result["reason"], "max_hold_time")
 
+    def test_pnl_profit_lock_disabled_by_default_preserves_hold_behavior(self):
+        manager = self._manager(partial_exit_enabled=False, trailing_stop_enabled=False)
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 1.00
+
+        result = manager.update(0.90, floating_pnl_usdt=0.10, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "HOLD")
+        self.assertNotEqual(result.get("reason"), "pnl_profit_lock")
+
+    def test_pnl_profit_lock_does_not_activate_before_mfe_clears_floor_plus_buffer(self):
+        manager = self._manager(
+            partial_exit_enabled=False,
+            trailing_stop_enabled=False,
+            pnl_profit_lock_enabled=True,
+            pnl_profit_lock_activation_buffer_usdt=0.05,
+        )
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 0.22
+
+        result = manager.update(0.90, floating_pnl_usdt=0.10, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "HOLD")
+        self.assertFalse(manager.trade_state.pnl_profit_lock_active)
+
+    def test_pnl_profit_lock_exits_when_current_pnl_falls_below_lock_floor(self):
+        manager = self._manager(
+            partial_exit_enabled=False,
+            trailing_stop_enabled=False,
+            pnl_profit_lock_enabled=True,
+            pnl_profit_lock_giveback_pct=0.50,
+        )
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 1.00
+
+        result = manager.update(0.90, floating_pnl_usdt=0.49, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "EXIT")
+        self.assertEqual(result["reason"], "pnl_profit_lock")
+        self.assertAlmostEqual(result["pnl_profit_lock_floor"], 0.50)
+        self.assertAlmostEqual(result["max_favorable_pnl_usdt"], 1.00)
+
+    def test_pnl_profit_lock_uses_effective_guard_floor_for_activation(self):
+        manager = self._manager(
+            partial_exit_enabled=False,
+            trailing_stop_enabled=False,
+            full_tp_guard_multiplier=0.5,
+            pnl_profit_lock_enabled=True,
+            pnl_profit_lock_activation_buffer_usdt=0.05,
+            pnl_profit_lock_giveback_pct=0.50,
+        )
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 0.16
+
+        result = manager.update(0.90, floating_pnl_usdt=0.09, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "EXIT")
+        self.assertEqual(result["reason"], "pnl_profit_lock")
+        self.assertAlmostEqual(result["effective_min_profit_usdt"], 0.10)
+        self.assertAlmostEqual(result["guard_multiplier"], 0.5)
+
+    def test_full_take_profit_still_outranks_pnl_profit_lock(self):
+        manager = self._manager(
+            partial_exit_enabled=True,
+            trailing_stop_enabled=False,
+            pnl_profit_lock_enabled=True,
+            pnl_profit_lock_giveback_pct=0.50,
+        )
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 1.00
+
+        result = manager.update(0.20, floating_pnl_usdt=0.49, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "EXIT")
+        self.assertEqual(result["reason"], "take_profit")
+
+    def test_partial_profit_does_not_outrank_active_pnl_profit_lock(self):
+        manager = self._manager(
+            partial_exit_enabled=True,
+            trailing_stop_enabled=False,
+            pnl_profit_lock_enabled=True,
+            pnl_profit_lock_giveback_pct=0.50,
+        )
+        manager.open_position(entry_z=2.2, position_size=1000, entry_time=time.time() - 300)
+        manager.trade_state.max_favorable_pnl_usdt = 1.00
+
+        result = manager.update(0.90, floating_pnl_usdt=0.49, min_profit_usdt=0.20)
+
+        self.assertEqual(result["action"], "EXIT")
+        self.assertEqual(result["reason"], "pnl_profit_lock")
+        self.assertNotEqual(result["action"], "PARTIAL_EXIT")
+
 
 if __name__ == "__main__":
     unittest.main()

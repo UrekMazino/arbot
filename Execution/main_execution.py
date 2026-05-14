@@ -86,6 +86,11 @@ from strategy_router import (
     StrategyRouter,
     should_block_new_entries as should_block_strategy_entries,
 )
+from session_risk_circuit_breaker import (
+    RiskCircuitBreakerConfig,
+    RiskCircuitBreakerState,
+    evaluate_risk_circuit_breaker,
+)
 from advanced_ml_runtime import (
     advanced_ml_config_snapshot,
     advanced_ml_runtime_mode,
@@ -137,6 +142,7 @@ from func_pair_state import (
     get_entry_strategy,
     get_entry_regime,
     get_trade_mae_mfe_snapshot,
+    get_consecutive_losses,
     is_restricted_ticker,
     get_restricted_ticker_reason,
     reset_health_failure,
@@ -234,6 +240,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "strategy_eval_seconds": _env_text("STATBOT_STRATEGY_EVAL_SECONDS", "30"),
             "event_heartbeat_seconds": _env_text("STATBOT_EVENT_HEARTBEAT_SECONDS", "60"),
         },
+        "risk_circuit_breaker": RiskCircuitBreakerConfig.from_env().to_dict(),
         "advanced_ml": advanced_ml_config_snapshot(),
         "strategy": {
             "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
@@ -3325,6 +3332,9 @@ if __name__ == "__main__":
     last_strategy_eval_ts = 0.0
     last_strategy_decision = None
     last_strategy_gate_log_ts = 0.0
+    risk_circuit_config = RiskCircuitBreakerConfig.from_env()
+    last_risk_circuit_log_ts = 0.0
+    last_risk_circuit_reasons = ()
     _COINT_GATE_THRESHOLD = _get_coint_gate_threshold()
     _COINT_WATCH_GATE_THRESHOLD = _get_coint_watch_gate_threshold(_COINT_GATE_THRESHOLD)
     coint_health_settings = get_cointegration_health_settings(P_VALUE_CRITICAL)
@@ -3368,6 +3378,18 @@ if __name__ == "__main__":
         )
     else:
         logger.warning("Strategy router ACTIVE mode enabled: strategy gate + policy enforcement is on.")
+
+    if risk_circuit_config.any_limit_enabled():
+        logger.warning(
+            "Entry risk circuit breaker configured: session_max_loss_usdt=%s "
+            "max_consecutive_losses=%s max_drawdown_usdt=%s disable_entries_after_risk_stop=%s",
+            risk_circuit_config.session_max_loss_usdt,
+            risk_circuit_config.max_consecutive_losses,
+            risk_circuit_config.max_drawdown_usdt,
+            risk_circuit_config.disable_entries_after_risk_stop,
+        )
+    else:
+        logger.info("Entry risk circuit breaker disabled; no STATBOT_* risk-stop limits configured.")
 
     advanced_ml_startup_snapshot = log_advanced_ml_startup_status(logger)
 
@@ -3666,6 +3688,57 @@ if __name__ == "__main__":
 
             if equity_trusted:
                 _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
+            session_realized_pnl_for_gate = (
+                session_pnl if equity_trusted and is_manage_new_trades else None
+            )
+            risk_circuit_decision = evaluate_risk_circuit_breaker(
+                RiskCircuitBreakerState(
+                    session_realized_pnl_usdt=session_realized_pnl_for_gate,
+                    consecutive_losses=get_consecutive_losses(),
+                    current_drawdown_usdt=session_pnl if equity_trusted else None,
+                    equity_trusted=bool(equity_trusted),
+                ),
+                risk_circuit_config,
+            )
+            if risk_circuit_decision.active:
+                risk_reasons = risk_circuit_decision.reasons
+                if (
+                    risk_reasons != last_risk_circuit_reasons
+                    or (current_time - last_risk_circuit_log_ts) >= 60
+                ):
+                    logger.warning(
+                        "risk_circuit_breaker_active: reasons=%s action=%s",
+                        ",".join(risk_reasons),
+                        "block_new_entries" if risk_circuit_decision.block_new_entries else "observe_only",
+                    )
+                    emit_event(
+                        "risk_alert",
+                        payload={
+                            "alert_type": "risk_circuit_breaker_active",
+                            "message": "Entry risk circuit breaker is active.",
+                            "pair": f"{ticker_1}/{ticker_2}",
+                            "reasons": list(risk_reasons),
+                            "entry_block_reasons": list(risk_circuit_decision.entry_block_reasons),
+                            "block_new_entries": risk_circuit_decision.block_new_entries,
+                            "session_realized_pnl_usdt": session_realized_pnl_for_gate,
+                            "current_drawdown_usdt": session_pnl if equity_trusted else None,
+                            "consecutive_losses": get_consecutive_losses(),
+                        },
+                        severity="critical" if risk_circuit_decision.block_new_entries else "warn",
+                        logger=logger,
+                    )
+                    for raw_payload in risk_circuit_decision.risk_event_payloads(pair=f"{ticker_1}/{ticker_2}"):
+                        payload = dict(raw_payload)
+                        severity = str(payload.pop("severity", "critical") or "critical")
+                        logger.warning("%s: %s", payload.get("entry_block_reason"), payload.get("message"))
+                        emit_event(
+                            "risk_alert",
+                            payload=payload,
+                            severity=severity,
+                            logger=logger,
+                        )
+                    last_risk_circuit_log_ts = current_time
+                    last_risk_circuit_reasons = risk_reasons
             if (current_time - last_event_heartbeat_ts) >= event_heartbeat_seconds:
                 entry_time_ts = get_entry_time()
                 hold_minutes_live = None
@@ -4405,7 +4478,8 @@ if __name__ == "__main__":
             if is_manage_new_trades and kill_switch == 0:
                 blocked_by_regime = should_block_regime_entries(regime_mode, last_regime_decision)
                 blocked_by_strategy = should_block_strategy_entries(strategy_mode, last_strategy_decision)
-                if blocked_by_regime or blocked_by_strategy:
+                blocked_by_risk = risk_circuit_decision.block_new_entries
+                if blocked_by_regime or blocked_by_strategy or blocked_by_risk:
                     gate_reason = "n/a"
                     gate_regime = "unknown"
                     gate_strategy = "unknown"
@@ -4421,8 +4495,17 @@ if __name__ == "__main__":
                         gate_strategy = str(
                             getattr(last_strategy_decision, "active_strategy", "unknown") or "unknown"
                         )
-                    status_dict["message"] = "Entry gate active; skipping new entries."
+                    status_dict["message"] = (
+                        "Risk circuit breaker active; skipping new entries."
+                        if blocked_by_risk
+                        else "Entry gate active; skipping new entries."
+                    )
                     save_status(status_dict)
+                    if blocked_by_risk:
+                        logger.warning(
+                            "Entry blocked by risk circuit breaker: %s",
+                            ",".join(risk_circuit_decision.entry_block_reasons),
+                        )
                     if blocked_by_regime and (current_time - last_regime_gate_log_ts) >= 60:
                         logger.warning(
                             "REGIME_GATE_ENFORCED: mode=active regime=%s reason=%s action=skip_new_entries",

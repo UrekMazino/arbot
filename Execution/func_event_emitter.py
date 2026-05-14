@@ -30,6 +30,7 @@ _KNOWN_EVENT_TYPES = {
     "risk_alert",
     "report_status",
     "entry_reject",
+    "exit_decision_trace",
     "liquidity_check",
     "trade_quality_gate",
     "fill_summary",

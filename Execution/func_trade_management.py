@@ -131,6 +131,19 @@ def _env_float(name, default=None):
         return default
 
 
+def _env_nonnegative_float(name, default):
+    value = _env_float(name, default)
+    if value is None:
+        return default
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return default
+    if value < 0:
+        return default
+    return value
+
+
 def _get_liquidity_ratio_cap():
     cap = _env_float("STATBOT_LIQUIDITY_RATIO_CAP", DEFAULT_LIQUIDITY_RATIO_CAP)
     if cap is None:
@@ -359,6 +372,7 @@ kill_switch = 2: Final stop, close everything
 All transitions are logged with timestamps and context.
 """
 from advanced_trade_management import AdvancedTradeManager
+from exit_decision_trace import build_exit_decision_trace_payload
 from func_price_calls import get_ticker_trade_liquidity, get_ticker_liquidity_analysis
 from func_calculation import get_contract_value_quote
 from func_get_zscore import get_latest_zscore
@@ -716,6 +730,34 @@ def _resolve_regime_name(regime_decision):
 
 def _strategy_atm_profiles():
     net_profit_guard_enabled = _env_flag("STATBOT_ATM_NET_PROFIT_GUARD", True)
+    full_tp_guard_multiplier = _env_nonnegative_float(
+        "STATBOT_FULL_TP_GUARD_MULTIPLIER",
+        _TM_BASE_CONFIG.get("full_tp_guard_multiplier", 1.0),
+    )
+    partial_tp_guard_multiplier = _env_nonnegative_float(
+        "STATBOT_PARTIAL_TP_GUARD_MULTIPLIER",
+        _TM_BASE_CONFIG.get("partial_tp_guard_multiplier", 1.0),
+    )
+    trailing_stop_guard_multiplier = _env_nonnegative_float(
+        "STATBOT_TRAILING_STOP_GUARD_MULTIPLIER",
+        _TM_BASE_CONFIG.get("trailing_stop_guard_multiplier", 1.0),
+    )
+    mean_reversion_escape_enabled = _env_flag(
+        "STATBOT_MEAN_REVERSION_ESCAPE_ENABLED",
+        bool(_TM_BASE_CONFIG.get("mean_reversion_escape_enabled", False)),
+    )
+    mean_reversion_escape_z = _env_nonnegative_float(
+        "STATBOT_MEAN_REVERSION_ESCAPE_Z",
+        _TM_BASE_CONFIG.get("mean_reversion_escape_z", 0.25),
+    )
+    mean_reversion_escape_min_pnl_usdt = _env_float(
+        "STATBOT_MEAN_REVERSION_ESCAPE_MIN_PNL_USDT",
+        _TM_BASE_CONFIG.get("mean_reversion_escape_min_pnl_usdt", 0.0),
+    )
+    mean_reversion_escape_requires_risk_rising = _env_flag(
+        "STATBOT_MEAN_REVERSION_ESCAPE_REQUIRES_RISK_RISING",
+        bool(_TM_BASE_CONFIG.get("mean_reversion_escape_requires_risk_rising", True)),
+    )
     base_max_hold = _env_float("STATBOT_ATM_MR_MAX_HOLD_HOURS", _TM_BASE_CONFIG.get("max_hold_hours", 6))
     if base_max_hold is None or base_max_hold <= 0:
         base_max_hold = 6.0
@@ -761,6 +803,13 @@ def _strategy_atm_profiles():
         ),
         "take_profit_z": float(_env_float("STATBOT_ATM_MR_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
         "net_profit_guard_enabled": net_profit_guard_enabled,
+        "full_tp_guard_multiplier": full_tp_guard_multiplier,
+        "partial_tp_guard_multiplier": partial_tp_guard_multiplier,
+        "trailing_stop_guard_multiplier": trailing_stop_guard_multiplier,
+        "mean_reversion_escape_enabled": mean_reversion_escape_enabled,
+        "mean_reversion_escape_z": mean_reversion_escape_z,
+        "mean_reversion_escape_min_pnl_usdt": mean_reversion_escape_min_pnl_usdt,
+        "mean_reversion_escape_requires_risk_rising": mean_reversion_escape_requires_risk_rising,
     }
 
     trend_max_hold = _env_float("STATBOT_ATM_TREND_MAX_HOLD_HOURS", 2.0)
@@ -789,6 +838,13 @@ def _strategy_atm_profiles():
         ),
         "take_profit_z": float(_env_float("STATBOT_ATM_TREND_TAKE_PROFIT_Z", EXIT_Z) or EXIT_Z),
         "net_profit_guard_enabled": net_profit_guard_enabled,
+        "full_tp_guard_multiplier": full_tp_guard_multiplier,
+        "partial_tp_guard_multiplier": partial_tp_guard_multiplier,
+        "trailing_stop_guard_multiplier": trailing_stop_guard_multiplier,
+        "mean_reversion_escape_enabled": mean_reversion_escape_enabled,
+        "mean_reversion_escape_z": mean_reversion_escape_z,
+        "mean_reversion_escape_min_pnl_usdt": mean_reversion_escape_min_pnl_usdt,
+        "mean_reversion_escape_requires_risk_rising": mean_reversion_escape_requires_risk_rising,
     }
     return {"mr": mr_profile, "trend": trend_profile}
 
@@ -1396,6 +1452,23 @@ def _tm_exit_candidate(tm_result):
         else ExitCandidateCategory.PROFIT_RISK
     )
     action = ExitAction.PARTIAL_EXIT if action_text == "PARTIAL_EXIT" else ExitAction.FULL_EXIT
+    metadata = {
+        "source": "trade_manager",
+        "reason_code": reason_code,
+        "switch_reason": "" if action == ExitAction.FULL_EXIT else None,
+    }
+    for key in (
+        "base_min_profit_usdt",
+        "effective_min_profit_usdt",
+        "guard_multiplier",
+        "blocked_exit_reason",
+        "current_z",
+        "take_profit_z",
+        "exit_type",
+    ):
+        if key in tm_result:
+            metadata[key] = tm_result.get(key)
+
     return ExitCandidate(
         name=f"trade_manager_{reason_code}",
         category=category,
@@ -1405,11 +1478,7 @@ def _tm_exit_candidate(tm_result):
         exit_percentage=percentage,
         severity=1.0 if category == ExitCandidateCategory.HARD else 0.5,
         net_profit_guard_applies=reason_code in guarded_profit_reasons,
-        metadata={
-            "source": "trade_manager",
-            "reason_code": reason_code,
-            "switch_reason": "" if action == ExitAction.FULL_EXIT else None,
-        },
+        metadata=metadata,
     )
 
 
@@ -3813,6 +3882,10 @@ def monitor_exit(
         current_pnl_usdt=floating_pnl_usdt,
         min_profit_usdt=min_profit_exit_usdt,
         block_when_pnl_unknown=True,
+        full_tp_guard_multiplier=_finite_float(trade_manager.config.get("full_tp_guard_multiplier"), 1.0) or 1.0,
+        partial_tp_guard_multiplier=_finite_float(trade_manager.config.get("partial_tp_guard_multiplier"), 1.0) or 1.0,
+        trailing_stop_guard_multiplier=_finite_float(trade_manager.config.get("trailing_stop_guard_multiplier"), 1.0)
+        or 1.0,
     )
     exit_candidates = []
     if pair_health_exit_candidate is not None:
@@ -4047,6 +4120,7 @@ def monitor_exit(
                 )
             )
 
+    tm_result = None
     if entry_z is not None:
         _apply_trade_manager_profile(entry_strategy)
         _ensure_trade_manager_state(entry_z, entry_time)
@@ -4079,6 +4153,7 @@ def monitor_exit(
             logger.debug(tm_result.get("reason", "Net profit guard blocked exit"))
     else:
         _close_trade_manager()
+        tm_result = {"action": "NO_POSITION", "reason": "no_entry_context"}
         logger.warning("No entry Z-score tracked (restart scenario). Current Z=%.2f", latest_zscore)
         if abs(latest_zscore) > 8.0:
             exit_candidates.append(
@@ -4139,6 +4214,27 @@ def monitor_exit(
         exit_candidates.append(advanced_candidate)
 
     exit_decision = orchestrator.decide(exit_candidates, net_profit_guard=net_profit_guard)
+    if isinstance(tm_result, dict):
+        trace_ts = time.time()
+        try:
+            emit_event(
+                "exit_decision_trace",
+                payload=build_exit_decision_trace_payload(
+                    timestamp=trace_ts,
+                    pair=_active_pair_key(),
+                    current_z=latest_zscore,
+                    floating_pnl_usdt=floating_pnl_usdt,
+                    base_min_profit_usdt=min_profit_exit_usdt,
+                    trade_manager_config=trade_manager.config,
+                    trade_state=trade_manager.trade_state,
+                    trade_manager_result=tm_result,
+                    exit_decision=exit_decision,
+                ),
+                severity="info",
+                logger=logger,
+            )
+        except Exception as exc:
+            logger.debug("Failed to emit exit decision trace: %s", exc)
     selected_candidate = exit_decision.selected_candidate
     if (
         selected_candidate is not None

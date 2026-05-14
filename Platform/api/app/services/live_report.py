@@ -515,6 +515,167 @@ def _build_alert_rows(rows: list[RunEvent]) -> list[dict]:
     return output
 
 
+EXIT_DECISION_TRACE_FIELDS = [
+    "timestamp",
+    "pair",
+    "entry_ts",
+    "entry_z",
+    "current_z",
+    "floating_pnl_usdt",
+    "base_min_profit_usdt",
+    "effective_min_profit_usdt",
+    "full_tp_guard_multiplier",
+    "take_profit_z",
+    "full_tp_zone_hit",
+    "full_tp_guard_passed",
+    "full_tp_blocked_reason",
+    "orchestrator_base_min_profit_usdt",
+    "orchestrator_effective_min_profit_usdt",
+    "orchestrator_guard_multiplier",
+    "orchestrator_guard_passed",
+    "partial_tp_eligible",
+    "trailing_stop_eligible",
+    "regime_break_eligible",
+    "stall_exit_eligible",
+    "selected_exit_reason",
+    "selected_exit_action",
+    "selected_candidate_name",
+    "blocked_candidate_names",
+    "trade_manager_action",
+    "trade_manager_reason",
+    "why_full_tp_not_selected",
+]
+
+
+EXIT_DECISION_SUMMARY_FIELDS = [
+    "pair",
+    "entry_ts",
+    "full_tp_zone_eval_count",
+    "full_tp_guard_pass_count",
+    "full_tp_guard_block_count",
+    "full_tp_selected_count",
+    "selected_exit_reason",
+    "first_full_tp_zone_time",
+    "first_full_tp_guard_pass_time",
+    "max_pnl_during_full_tp_zone",
+    "z_at_max_pnl_during_full_tp_zone",
+]
+
+
+def _build_exit_decision_trace_rows(rows: list[RunEvent]) -> list[dict]:
+    output: list[dict] = []
+    for row in rows:
+        payload = _event_payload(row)
+        output.append(
+            {
+                "timestamp": _coerce_timestamp(row.ts),
+                "pair": str(payload.get("pair") or "").strip(),
+                "entry_ts": str(payload.get("entry_ts") or "").strip(),
+                "entry_z": _coerce_float(payload.get("entry_z")),
+                "current_z": _coerce_float(payload.get("current_z")),
+                "floating_pnl_usdt": _coerce_float(payload.get("floating_pnl_usdt")),
+                "base_min_profit_usdt": _coerce_float(payload.get("base_min_profit_usdt")),
+                "effective_min_profit_usdt": _coerce_float(payload.get("effective_min_profit_usdt")),
+                "full_tp_guard_multiplier": _coerce_float(payload.get("full_tp_guard_multiplier")),
+                "take_profit_z": _coerce_float(payload.get("take_profit_z")),
+                "full_tp_zone_hit": bool(payload.get("full_tp_zone_hit")),
+                "full_tp_guard_passed": bool(payload.get("full_tp_guard_passed")),
+                "full_tp_blocked_reason": str(payload.get("full_tp_blocked_reason") or "").strip(),
+                "orchestrator_base_min_profit_usdt": _coerce_float(
+                    payload.get("orchestrator_base_min_profit_usdt")
+                ),
+                "orchestrator_effective_min_profit_usdt": _coerce_float(
+                    payload.get("orchestrator_effective_min_profit_usdt")
+                ),
+                "orchestrator_guard_multiplier": _coerce_float(payload.get("orchestrator_guard_multiplier")),
+                "orchestrator_guard_passed": _coerce_bool(payload.get("orchestrator_guard_passed")),
+                "partial_tp_eligible": bool(payload.get("partial_tp_eligible")),
+                "trailing_stop_eligible": bool(payload.get("trailing_stop_eligible")),
+                "regime_break_eligible": bool(payload.get("regime_break_eligible")),
+                "stall_exit_eligible": bool(payload.get("stall_exit_eligible")),
+                "selected_exit_reason": str(payload.get("selected_exit_reason") or "").strip(),
+                "selected_exit_action": str(payload.get("selected_exit_action") or "").strip(),
+                "selected_candidate_name": str(payload.get("selected_candidate_name") or "").strip(),
+                "blocked_candidate_names": str(payload.get("blocked_candidate_names") or "").strip(),
+                "trade_manager_action": str(payload.get("trade_manager_action") or "").strip(),
+                "trade_manager_reason": str(payload.get("trade_manager_reason") or "").strip(),
+                "why_full_tp_not_selected": str(payload.get("why_full_tp_not_selected") or "").strip(),
+            }
+        )
+    return output
+
+
+def _build_exit_decision_summary_rows(rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        pair = str(row.get("pair") or "").strip()
+        entry_ts = str(row.get("entry_ts") or "").strip()
+        grouped[(pair, entry_ts)].append(row)
+
+    output: list[dict] = []
+    for (pair, entry_ts), trade_rows in grouped.items():
+        zone_rows = [row for row in trade_rows if bool(row.get("full_tp_zone_hit"))]
+        guard_pass_rows = [row for row in zone_rows if bool(row.get("full_tp_guard_passed"))]
+        guard_block_rows = [
+            row
+            for row in zone_rows
+            if (
+                str(row.get("full_tp_blocked_reason") or "").strip()
+                or str(row.get("why_full_tp_not_selected") or "").strip()
+                in {"net_profit_guard_blocked", "orchestrator_net_profit_guard_blocked"}
+            )
+        ]
+        selected_rows = [
+            row
+            for row in trade_rows
+            if str(row.get("selected_candidate_name") or "").strip() == "trade_manager_take_profit"
+        ]
+        final_exit_rows = [
+            row
+            for row in trade_rows
+            if str(row.get("selected_exit_action") or "").strip().lower() in {"full_exit", "partial_exit"}
+            or str(row.get("selected_candidate_name") or "").strip()
+        ]
+        selected_exit_reason = ""
+        if final_exit_rows:
+            last = final_exit_rows[-1]
+            selected_exit_reason = (
+                str(last.get("selected_candidate_name") or "").strip()
+                or str(last.get("selected_exit_reason") or "").strip()
+            )
+
+        max_zone_row = None
+        for row in zone_rows:
+            pnl = _coerce_float(row.get("floating_pnl_usdt"))
+            if pnl is None:
+                continue
+            if max_zone_row is None or pnl > (_coerce_float(max_zone_row.get("floating_pnl_usdt")) or float("-inf")):
+                max_zone_row = row
+
+        output.append(
+            {
+                "pair": pair,
+                "entry_ts": entry_ts,
+                "full_tp_zone_eval_count": len(zone_rows),
+                "full_tp_guard_pass_count": len(guard_pass_rows),
+                "full_tp_guard_block_count": len(guard_block_rows),
+                "full_tp_selected_count": len(selected_rows),
+                "selected_exit_reason": selected_exit_reason,
+                "first_full_tp_zone_time": str(zone_rows[0].get("timestamp") or "").strip() if zone_rows else "",
+                "first_full_tp_guard_pass_time": (
+                    str(guard_pass_rows[0].get("timestamp") or "").strip() if guard_pass_rows else ""
+                ),
+                "max_pnl_during_full_tp_zone": (
+                    _coerce_float(max_zone_row.get("floating_pnl_usdt")) if max_zone_row else None
+                ),
+                "z_at_max_pnl_during_full_tp_zone": (
+                    _coerce_float(max_zone_row.get("current_z")) if max_zone_row else None
+                ),
+            }
+        )
+    return output
+
+
 def materialize_live_run_report(db: Session, run: Run) -> dict:
     run_key = str(run.run_key or "").strip()
     if not run_key:
@@ -677,6 +838,14 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     ).scalars().all()
     alert_rows = _build_alert_rows(alert_events)
 
+    exit_decision_trace_events = db.execute(
+        select(RunEvent)
+        .where(RunEvent.run_id == run.id, RunEvent.event_type == "exit_decision_trace")
+        .order_by(RunEvent.ts.asc(), RunEvent.created_at.asc(), RunEvent.id.asc())
+    ).scalars().all()
+    exit_decision_trace_rows = _build_exit_decision_trace_rows(exit_decision_trace_events)
+    exit_decision_summary_rows = _build_exit_decision_summary_rows(exit_decision_trace_rows)
+
     wins = 0
     losses = 0
     for row in trade_rows:
@@ -812,6 +981,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "reconciliation_checks": "reconciliation_check_events" if reconciliation_rows else "none",
         "entry_rejections": "entry_reject_events" if entry_rejection_rows else "none",
         "alerts": "risk_and_warning_events" if alert_rows else "none",
+        "exit_decision_trace": "exit_decision_trace_events" if exit_decision_trace_rows else "none",
     }
     summary = {
         "report_version": "v2-live",
@@ -850,6 +1020,8 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         "reconciliation_rows": len(reconciliation_rows),
         "entry_rejection_rows": len(entry_rejection_rows),
         "alert_rows": len(alert_rows),
+        "exit_decision_trace_rows": len(exit_decision_trace_rows),
+        "exit_decision_summary_rows": len(exit_decision_summary_rows),
         "event_counts": event_counts,
         "severity_counts": severity_counts,
         "data_sources": data_sources,
@@ -871,6 +1043,8 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     reconciliation_checks_path = report_dir / "reconciliation_checks.csv"
     entry_rejections_path = report_dir / "entry_rejections.csv"
     risk_alerts_path = report_dir / "risk_alerts.csv"
+    exit_decision_trace_path = report_dir / "exit_decision_trace.csv"
+    exit_decision_summary_path = report_dir / "exit_decision_summary.csv"
     manifest_path = report_dir / "report_manifest.json"
 
     _write_csv(
@@ -1152,6 +1326,18 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         artifact_entries.append(_artifact(risk_alerts_path, "csv", len(alert_rows)))
     else:
         _remove_if_exists(risk_alerts_path)
+
+    if exit_decision_trace_rows:
+        _write_csv(exit_decision_trace_path, exit_decision_trace_rows, EXIT_DECISION_TRACE_FIELDS)
+        artifact_entries.append(_artifact(exit_decision_trace_path, "csv", len(exit_decision_trace_rows)))
+    else:
+        _remove_if_exists(exit_decision_trace_path)
+
+    if exit_decision_summary_rows:
+        _write_csv(exit_decision_summary_path, exit_decision_summary_rows, EXIT_DECISION_SUMMARY_FIELDS)
+        artifact_entries.append(_artifact(exit_decision_summary_path, "csv", len(exit_decision_summary_rows)))
+    else:
+        _remove_if_exists(exit_decision_summary_path)
 
     manifest_path.write_text(
         json.dumps(

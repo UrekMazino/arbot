@@ -241,6 +241,25 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "event_heartbeat_seconds": _env_text("STATBOT_EVENT_HEARTBEAT_SECONDS", "60"),
         },
         "risk_circuit_breaker": RiskCircuitBreakerConfig.from_env().to_dict(),
+        "exit_guards": {
+            "full_tp_guard_multiplier": _env_float("STATBOT_FULL_TP_GUARD_MULTIPLIER", 1.0, minimum=0.0),
+            "partial_tp_guard_multiplier": _env_float("STATBOT_PARTIAL_TP_GUARD_MULTIPLIER", 1.0, minimum=0.0),
+            "trailing_stop_guard_multiplier": _env_float(
+                "STATBOT_TRAILING_STOP_GUARD_MULTIPLIER",
+                1.0,
+                minimum=0.0,
+            ),
+            "mean_reversion_escape_enabled": _env_flag("STATBOT_MEAN_REVERSION_ESCAPE_ENABLED", False),
+            "mean_reversion_escape_z": _env_float("STATBOT_MEAN_REVERSION_ESCAPE_Z", 0.25, minimum=0.0),
+            "mean_reversion_escape_min_pnl_usdt": _env_float(
+                "STATBOT_MEAN_REVERSION_ESCAPE_MIN_PNL_USDT",
+                0.0,
+            ),
+            "mean_reversion_escape_requires_risk_rising": _env_flag(
+                "STATBOT_MEAN_REVERSION_ESCAPE_REQUIRES_RISK_RISING",
+                True,
+            ),
+        },
         "advanced_ml": advanced_ml_config_snapshot(),
         "strategy": {
             "strategy_timeframe": _env_text("STATBOT_STRATEGY_TIMEFRAME", "1m"),
@@ -518,14 +537,18 @@ def _get_switch_close_poll_seconds():
     return _env_int("STATBOT_SWITCH_CLOSE_POLL_SECONDS", 2, minimum=1)
 
 
-def _env_float(name, default):
+def _env_float(name, default, minimum=None):
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
-        return float(default)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return float(default)
+        value = float(default)
+    else:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = float(default)
+    if minimum is not None and value < minimum:
+        value = minimum
+    return value
 
 
 def _get_recon_fee_fill_limit():

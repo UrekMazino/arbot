@@ -216,6 +216,15 @@ class AdvancedTradeManager:
                     trailing_multiplier,
                     current_z=current_z,
                 )
+            trailing_result.update(
+                {
+                    'base_min_profit_usdt': trailing_base,
+                    'effective_min_profit_usdt': trailing_min_profit,
+                    'guard_multiplier': trailing_multiplier,
+                    'current_z': current_z,
+                    'exit_type': ExitReason.TRAILING_STOP.value,
+                }
+            )
             return trailing_result
         
         # 4. MEAN-REVERSION TARGET HIT (full exit)
@@ -240,7 +249,13 @@ class AdvancedTradeManager:
                 action='EXIT',
                 reason=ExitReason.TAKE_PROFIT,
                 message=f"Mean-reversion target hit: Z={current_z:+.2f} sigma (target: {self.config['take_profit_z']:.2f} sigma)",
-                percentage=1.0
+                percentage=1.0,
+                guard_diagnostics={
+                    'base_min_profit_usdt': take_profit_base,
+                    'effective_min_profit_usdt': take_profit_min_profit,
+                    'guard_multiplier': take_profit_multiplier,
+                    'current_z': current_z,
+                },
             )
 
         # 5. PARTIAL EXIT
@@ -259,6 +274,15 @@ class AdvancedTradeManager:
                     partial_multiplier,
                     current_z=current_z,
                 )
+            partial_result.update(
+                {
+                    'base_min_profit_usdt': partial_base,
+                    'effective_min_profit_usdt': partial_min_profit,
+                    'guard_multiplier': partial_multiplier,
+                    'current_z': current_z,
+                    'exit_type': ExitReason.PARTIAL_PROFIT.value,
+                }
+            )
             return partial_result
         
         # 6. STALL DETECTION (dynamic)
@@ -750,13 +774,19 @@ class AdvancedTradeManager:
         return epsilon
     
     
-    def _create_exit_result(self, action: str, reason: ExitReason, 
-                           message: str, percentage: float) -> Dict:
+    def _create_exit_result(
+        self,
+        action: str,
+        reason: ExitReason,
+        message: str,
+        percentage: float,
+        guard_diagnostics: Optional[Dict] = None,
+    ) -> Dict:
         """Create standardized exit result"""
         
         time_in_trade = time.time() - self.trade_state.entry_time
         
-        return {
+        result = {
             'action': action,
             'reason': reason.value,
             'message': message,
@@ -771,6 +801,26 @@ class AdvancedTradeManager:
                 'initial_position_size': self.trade_state.initial_position_size
             }
         }
+        if guard_diagnostics:
+            result.update(
+                {
+                    'base_min_profit_usdt': guard_diagnostics.get('base_min_profit_usdt'),
+                    'effective_min_profit_usdt': guard_diagnostics.get('effective_min_profit_usdt'),
+                    'guard_multiplier': guard_diagnostics.get('guard_multiplier'),
+                    **(
+                        {'current_z': guard_diagnostics.get('current_z')}
+                        if guard_diagnostics.get('current_z') is not None
+                        else {}
+                    ),
+                    **(
+                        {'take_profit_z': self.config.get('take_profit_z')}
+                        if reason == ExitReason.TAKE_PROFIT
+                        else {}
+                    ),
+                    'exit_type': reason.value,
+                }
+            )
+        return result
     
     
     def execute_partial_exit(self, pnl: float):

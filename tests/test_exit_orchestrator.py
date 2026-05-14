@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from core.ev.hold_exit_ev import ExitAction
 from core.trade_management.exit_orchestrator import (
     ExitCandidate,
@@ -16,6 +18,7 @@ def _candidate(
     action: ExitAction = ExitAction.FULL_EXIT,
     priority: int = 0,
     guard: bool = False,
+    metadata: dict | None = None,
 ) -> ExitCandidate:
     return ExitCandidate(
         name=name,
@@ -24,6 +27,7 @@ def _candidate(
         priority=priority,
         reason=name,
         net_profit_guard_applies=guard,
+        metadata=metadata or {},
     )
 
 
@@ -130,3 +134,139 @@ def test_all_blocked_soft_candidates_hold() -> None:
     assert decision.selected_candidate is None
     assert decision.blocked_by_net_profit_guard is True
     assert decision.reason == "net profit guard blocked all soft exit candidates"
+
+
+def test_full_take_profit_multiplier_allows_orchestrator_at_effective_floor() -> None:
+    decision = ExitOrchestrator().decide(
+        [
+            _candidate(
+                "trade_manager_take_profit",
+                ExitCandidateCategory.PROFIT_RISK,
+                priority=100,
+                guard=True,
+                metadata={
+                    "reason_code": "take_profit",
+                    "base_min_profit_usdt": 1.0,
+                    "effective_min_profit_usdt": 0.75,
+                    "guard_multiplier": 0.75,
+                },
+            )
+        ],
+        net_profit_guard=NetProfitGuardContext(
+            enabled=True,
+            current_pnl_usdt=0.75,
+            min_profit_usdt=1.0,
+        ),
+    )
+
+    assert decision.selected_candidate is not None
+    assert decision.selected_candidate.name == "trade_manager_take_profit"
+    assert decision.blocked_candidates == ()
+
+
+def test_full_take_profit_multiplier_blocks_below_effective_floor() -> None:
+    decision = ExitOrchestrator().decide(
+        [
+            _candidate(
+                "trade_manager_take_profit",
+                ExitCandidateCategory.PROFIT_RISK,
+                priority=100,
+                guard=True,
+                metadata={
+                    "reason_code": "take_profit",
+                    "base_min_profit_usdt": 1.0,
+                    "effective_min_profit_usdt": 0.75,
+                    "guard_multiplier": 0.75,
+                },
+            )
+        ],
+        net_profit_guard=NetProfitGuardContext(
+            enabled=True,
+            current_pnl_usdt=0.74,
+            min_profit_usdt=1.0,
+        ),
+    )
+
+    assert decision.action == ExitAction.HOLD
+    assert decision.blocked_by_net_profit_guard is True
+    blocked = decision.blocked_candidates[0]
+    assert blocked.candidate.name == "trade_manager_take_profit"
+    assert blocked.base_min_profit_usdt == pytest.approx(1.0)
+    assert blocked.effective_min_profit_usdt == pytest.approx(0.75)
+    assert blocked.guard_multiplier == pytest.approx(0.75)
+
+
+def test_full_take_profit_default_multiplier_preserves_existing_orchestrator_floor() -> None:
+    decision = ExitOrchestrator().decide(
+        [
+            _candidate(
+                "trade_manager_take_profit",
+                ExitCandidateCategory.PROFIT_RISK,
+                priority=100,
+                guard=True,
+                metadata={"reason_code": "take_profit"},
+            )
+        ],
+        net_profit_guard=NetProfitGuardContext(
+            enabled=True,
+            current_pnl_usdt=0.99,
+            min_profit_usdt=1.0,
+        ),
+    )
+
+    assert decision.action == ExitAction.HOLD
+    blocked = decision.blocked_candidates[0]
+    assert blocked.effective_min_profit_usdt == pytest.approx(1.0)
+    assert blocked.guard_multiplier == pytest.approx(1.0)
+
+
+def test_partial_profit_uses_partial_multiplier_not_full_multiplier() -> None:
+    decision = ExitOrchestrator().decide(
+        [
+            _candidate(
+                "trade_manager_partial_profit",
+                ExitCandidateCategory.PROFIT_RISK,
+                action=ExitAction.PARTIAL_EXIT,
+                guard=True,
+                metadata={"reason_code": "partial_profit"},
+            )
+        ],
+        net_profit_guard=NetProfitGuardContext(
+            enabled=True,
+            current_pnl_usdt=0.60,
+            min_profit_usdt=1.0,
+            full_tp_guard_multiplier=0.50,
+            partial_tp_guard_multiplier=0.75,
+        ),
+    )
+
+    assert decision.action == ExitAction.HOLD
+    blocked = decision.blocked_candidates[0]
+    assert blocked.effective_min_profit_usdt == pytest.approx(0.75)
+    assert blocked.guard_multiplier == pytest.approx(0.75)
+
+
+def test_trailing_stop_uses_trailing_multiplier() -> None:
+    decision = ExitOrchestrator().decide(
+        [
+            _candidate(
+                "trade_manager_trailing_stop",
+                ExitCandidateCategory.PROFIT_RISK,
+                guard=True,
+                metadata={"reason_code": "trailing_stop"},
+            )
+        ],
+        net_profit_guard=NetProfitGuardContext(
+            enabled=True,
+            current_pnl_usdt=0.60,
+            min_profit_usdt=1.0,
+            full_tp_guard_multiplier=0.50,
+            partial_tp_guard_multiplier=0.75,
+            trailing_stop_guard_multiplier=0.90,
+        ),
+    )
+
+    assert decision.action == ExitAction.HOLD
+    blocked = decision.blocked_candidates[0]
+    assert blocked.effective_min_profit_usdt == pytest.approx(0.90)
+    assert blocked.guard_multiplier == pytest.approx(0.90)

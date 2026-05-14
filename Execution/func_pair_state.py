@@ -27,6 +27,18 @@ MIN_CAPITAL_SHORTAGE_MEDIUM = 0.20
 MIN_CAPITAL_SHORTAGE_HIGH = 0.50
 Z_HISTORY_MAX_AGE_SECONDS = 14400
 Z_HISTORY_MAX_LEN = 5000
+TRADE_MAE_MFE_DEFAULT = {
+    "max_favorable_pnl_usdt": None,
+    "max_adverse_pnl_usdt": None,
+    "z_at_max_favorable_pnl": None,
+    "z_at_max_adverse_pnl": None,
+    "timestamp_at_max_favorable_pnl": None,
+    "timestamp_at_max_adverse_pnl": None,
+    "guard_floor_at_max_favorable_pnl": None,
+    "full_tp_touched": False,
+    "guard_blocked_full_tp_count": 0,
+    "partial_exit_before_full_tp": False,
+}
 SWITCH_RATE_WINDOW_SECONDS = 3600
 DEFAULT_MAX_SWITCHES = 5
 DEFAULT_SWITCH_COOLDOWN_SECONDS = 600
@@ -281,6 +293,7 @@ def load_pair_state():
             "entry_strategy": None,
             "entry_regime": None,
             "entry_policy_snapshot": {},
+            "trade_mae_mfe": dict(TRADE_MAE_MFE_DEFAULT),
             "entry_ts": None,
             "last_switch_reason": "",
             "min_capital_cooldowns": {},
@@ -352,6 +365,15 @@ def load_pair_state():
             if "entry_policy_snapshot" not in state or not isinstance(state.get("entry_policy_snapshot"), dict):
                 state["entry_policy_snapshot"] = {}
                 dirty = True
+            if "trade_mae_mfe" not in state or not isinstance(state.get("trade_mae_mfe"), dict):
+                state["trade_mae_mfe"] = dict(TRADE_MAE_MFE_DEFAULT)
+                dirty = True
+            else:
+                diagnostics = state["trade_mae_mfe"]
+                for key, value in TRADE_MAE_MFE_DEFAULT.items():
+                    if key not in diagnostics:
+                        diagnostics[key] = value
+                        dirty = True
             if "entry_ts" not in state:
                 state["entry_ts"] = None
                 dirty = True
@@ -395,7 +417,7 @@ def load_pair_state():
                 save_pair_state(state)
             return state
     except Exception:
-        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "entry_policy_snapshot": {}, "entry_ts": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
+        return {"last_switch_time": 0, "switch_events": [], "switch_rate_limit_until_ts": 0.0, "graveyard": {}, "hospital": {}, "pair_history": {}, "restricted_tickers": {}, "consecutive_losses": 0, "last_health_score": None, "price_fetch_failures": 0, "entry_z_score": None, "entry_time": None, "coint_lost_since_ts": None, "coint_lost_confirm_count": 0, "entry_equity": None, "entry_notional": None, "entry_strategy": None, "entry_regime": None, "entry_policy_snapshot": {}, "trade_mae_mfe": dict(TRADE_MAE_MFE_DEFAULT), "entry_ts": None, "last_switch_reason": "", "min_capital_cooldowns": {}, "stall_warning_marks": [], "health_failures": {}}
 
 def save_pair_state(state):
     try:
@@ -1081,6 +1103,7 @@ def set_entry_z_score(z_score):
     state["entry_ts"] = state["entry_time"]
     state["coint_lost_since_ts"] = None
     state["coint_lost_confirm_count"] = 0
+    state["trade_mae_mfe"] = dict(TRADE_MAE_MFE_DEFAULT)
     save_pair_state(state)
 
     # Verify write was successful
@@ -1222,6 +1245,92 @@ def get_entry_policy_snapshot():
         return dict(snapshot)
     return {}
 
+def reset_trade_mae_mfe_tracking():
+    """Reset read-only trade MAE/MFE diagnostics for a new entry."""
+    state = load_pair_state()
+    state["trade_mae_mfe"] = dict(TRADE_MAE_MFE_DEFAULT)
+    save_pair_state(state)
+
+def update_trade_mae_mfe_tracking(
+    floating_pnl_usdt,
+    current_z,
+    guard_floor_usdt=None,
+    *,
+    full_tp_touched=False,
+    guard_blocked_full_tp=False,
+    partial_exit_fired=False,
+    timestamp=None,
+):
+    """Update open-trade MAE/MFE diagnostics without affecting exit behavior."""
+    try:
+        pnl_value = float(floating_pnl_usdt)
+    except (TypeError, ValueError):
+        return get_trade_mae_mfe_snapshot()
+    try:
+        z_value = float(current_z)
+    except (TypeError, ValueError):
+        z_value = None
+    try:
+        guard_value = float(guard_floor_usdt) if guard_floor_usdt is not None else None
+    except (TypeError, ValueError):
+        guard_value = None
+    try:
+        ts_value = float(timestamp) if timestamp is not None else time.time()
+    except (TypeError, ValueError):
+        ts_value = time.time()
+
+    state = load_pair_state()
+    diagnostics = state.get("trade_mae_mfe")
+    if not isinstance(diagnostics, dict):
+        diagnostics = dict(TRADE_MAE_MFE_DEFAULT)
+    else:
+        diagnostics = {**TRADE_MAE_MFE_DEFAULT, **diagnostics}
+
+    previous_full_tp_touched = bool(diagnostics.get("full_tp_touched"))
+    current_mfe = diagnostics.get("max_favorable_pnl_usdt")
+    try:
+        current_mfe_float = float(current_mfe)
+    except (TypeError, ValueError):
+        current_mfe_float = None
+    if current_mfe_float is None or pnl_value > current_mfe_float:
+        diagnostics["max_favorable_pnl_usdt"] = pnl_value
+        diagnostics["z_at_max_favorable_pnl"] = z_value
+        diagnostics["timestamp_at_max_favorable_pnl"] = ts_value
+        diagnostics["guard_floor_at_max_favorable_pnl"] = guard_value
+
+    current_mae = diagnostics.get("max_adverse_pnl_usdt")
+    try:
+        current_mae_float = float(current_mae)
+    except (TypeError, ValueError):
+        current_mae_float = None
+    if current_mae_float is None or pnl_value < current_mae_float:
+        diagnostics["max_adverse_pnl_usdt"] = pnl_value
+        diagnostics["z_at_max_adverse_pnl"] = z_value
+        diagnostics["timestamp_at_max_adverse_pnl"] = ts_value
+
+    if bool(full_tp_touched):
+        diagnostics["full_tp_touched"] = True
+    if bool(guard_blocked_full_tp):
+        try:
+            blocked_count = int(diagnostics.get("guard_blocked_full_tp_count", 0) or 0)
+        except (TypeError, ValueError):
+            blocked_count = 0
+        diagnostics["guard_blocked_full_tp_count"] = blocked_count + 1
+    if bool(partial_exit_fired) and not previous_full_tp_touched:
+        diagnostics["partial_exit_before_full_tp"] = True
+
+    state["trade_mae_mfe"] = diagnostics
+    save_pair_state(state)
+    return dict(diagnostics)
+
+def get_trade_mae_mfe_snapshot():
+    """Return current read-only trade MAE/MFE diagnostics."""
+    state = load_pair_state()
+    diagnostics = state.get("trade_mae_mfe")
+    if not isinstance(diagnostics, dict):
+        return dict(TRADE_MAE_MFE_DEFAULT)
+    return {**TRADE_MAE_MFE_DEFAULT, **dict(diagnostics)}
+
 def get_entry_ts():
     """Get persisted entry timestamp used for strategy attribution."""
     state = load_pair_state()
@@ -1245,6 +1354,7 @@ def clear_entry_tracking():
     state["entry_strategy"] = None
     state["entry_regime"] = None
     state["entry_policy_snapshot"] = {}
+    state["trade_mae_mfe"] = dict(TRADE_MAE_MFE_DEFAULT)
     state["entry_ts"] = None
     state["last_exit_time"] = time.time()  # Track when we exited
     state["z_history"] = []  # Clear stall detection history

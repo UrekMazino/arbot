@@ -38,6 +38,7 @@ from func_pair_state import (
     is_restricted_ticker,
     get_last_switch_time,
     record_health_failure,
+    update_trade_mae_mfe_tracking,
 )
 
 
@@ -4054,6 +4055,21 @@ def monitor_exit(
             floating_pnl_usdt=floating_pnl_usdt,
             min_profit_usdt=min_profit_exit_usdt,
         )
+        take_profit_z = _finite_float(trade_manager.config.get("take_profit_z"), EXIT_Z)
+        full_tp_touched = (
+            take_profit_z is not None
+            and latest_zscore is not None
+            and abs(float(latest_zscore)) <= float(take_profit_z)
+        )
+        guard_blocked_full_tp = str(tm_result.get("blocked_exit_reason") or "").strip().lower() == "take_profit"
+        update_trade_mae_mfe_tracking(
+            floating_pnl_usdt,
+            latest_zscore,
+            min_profit_exit_usdt,
+            full_tp_touched=full_tp_touched,
+            guard_blocked_full_tp=guard_blocked_full_tp,
+            timestamp=time.time(),
+        )
         tm_candidate = _tm_exit_candidate(tm_result)
         if tm_candidate is not None:
             exit_candidates.append(tm_candidate)
@@ -4123,6 +4139,19 @@ def monitor_exit(
         exit_candidates.append(advanced_candidate)
 
     exit_decision = orchestrator.decide(exit_candidates, net_profit_guard=net_profit_guard)
+    selected_candidate = exit_decision.selected_candidate
+    if (
+        selected_candidate is not None
+        and selected_candidate.action == ExitAction.PARTIAL_EXIT
+        and str(selected_candidate.name or "").strip().lower() == "trade_manager_partial_profit"
+    ):
+        update_trade_mae_mfe_tracking(
+            floating_pnl_usdt,
+            latest_zscore,
+            min_profit_exit_usdt,
+            partial_exit_fired=True,
+            timestamp=time.time(),
+        )
     _log_exit_orchestrator_decision(exit_decision)
     applied_kill_switch = _apply_exit_orchestrator_decision(exit_decision, kill_switch)
     if applied_kill_switch is not None:

@@ -37,6 +37,28 @@ def _coerce_float(value) -> float | None:
         return None
 
 
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_bool(value) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
 def _coerce_timestamp(value: datetime | None) -> str:
     if value is None:
         return ""
@@ -109,6 +131,16 @@ def _build_trade_rows_from_events(rows: list[RunEvent]) -> list[dict]:
                 "ending_equity_usdt": _coerce_float(payload.get("ending_equity_usdt")),
                 "session_pnl_usdt": _coerce_float(payload.get("session_pnl_usdt")),
                 "session_pnl_pct": _coerce_float(payload.get("session_pnl_pct")),
+                "max_favorable_pnl_usdt": _coerce_float(payload.get("max_favorable_pnl_usdt")),
+                "max_adverse_pnl_usdt": _coerce_float(payload.get("max_adverse_pnl_usdt")),
+                "z_at_max_favorable_pnl": _coerce_float(payload.get("z_at_max_favorable_pnl")),
+                "z_at_max_adverse_pnl": _coerce_float(payload.get("z_at_max_adverse_pnl")),
+                "timestamp_at_max_favorable_pnl": _coerce_float(payload.get("timestamp_at_max_favorable_pnl")),
+                "timestamp_at_max_adverse_pnl": _coerce_float(payload.get("timestamp_at_max_adverse_pnl")),
+                "guard_floor_at_max_favorable_pnl": _coerce_float(payload.get("guard_floor_at_max_favorable_pnl")),
+                "full_tp_touched": _coerce_bool(payload.get("full_tp_touched")),
+                "guard_blocked_full_tp_count": _coerce_int(payload.get("guard_blocked_full_tp_count")),
+                "partial_exit_before_full_tp": _coerce_bool(payload.get("partial_exit_before_full_tp")),
             }
         )
     return trade_rows
@@ -146,6 +178,16 @@ def _build_trade_rows_from_models(trades: list[Trade], event_lookup: dict[tuple[
                 "ending_equity_usdt": _coerce_float(payload.get("ending_equity_usdt")),
                 "session_pnl_usdt": _coerce_float(payload.get("session_pnl_usdt")),
                 "session_pnl_pct": _coerce_float(payload.get("session_pnl_pct")),
+                "max_favorable_pnl_usdt": _coerce_float(payload.get("max_favorable_pnl_usdt")),
+                "max_adverse_pnl_usdt": _coerce_float(payload.get("max_adverse_pnl_usdt")),
+                "z_at_max_favorable_pnl": _coerce_float(payload.get("z_at_max_favorable_pnl")),
+                "z_at_max_adverse_pnl": _coerce_float(payload.get("z_at_max_adverse_pnl")),
+                "timestamp_at_max_favorable_pnl": _coerce_float(payload.get("timestamp_at_max_favorable_pnl")),
+                "timestamp_at_max_adverse_pnl": _coerce_float(payload.get("timestamp_at_max_adverse_pnl")),
+                "guard_floor_at_max_favorable_pnl": _coerce_float(payload.get("guard_floor_at_max_favorable_pnl")),
+                "full_tp_touched": _coerce_bool(payload.get("full_tp_touched")),
+                "guard_blocked_full_tp_count": _coerce_int(payload.get("guard_blocked_full_tp_count")),
+                "partial_exit_before_full_tp": _coerce_bool(payload.get("partial_exit_before_full_tp")),
             }
         )
     return trade_rows
@@ -881,6 +923,16 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
             "ending_equity_usdt",
             "session_pnl_usdt",
             "session_pnl_pct",
+            "max_favorable_pnl_usdt",
+            "max_adverse_pnl_usdt",
+            "z_at_max_favorable_pnl",
+            "z_at_max_adverse_pnl",
+            "timestamp_at_max_favorable_pnl",
+            "timestamp_at_max_adverse_pnl",
+            "guard_floor_at_max_favorable_pnl",
+            "full_tp_touched",
+            "guard_blocked_full_tp_count",
+            "partial_exit_before_full_tp",
         ],
     )
     _write_csv(

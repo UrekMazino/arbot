@@ -136,6 +136,7 @@ from func_pair_state import (
     get_entry_policy_snapshot,
     get_entry_strategy,
     get_entry_regime,
+    get_trade_mae_mfe_snapshot,
     is_restricted_ticker,
     get_restricted_ticker_reason,
     reset_health_failure,
@@ -4592,6 +4593,7 @@ if __name__ == "__main__":
                 entry_strategy = str(get_entry_strategy() or "").strip().upper()
                 entry_regime = str(get_entry_regime() or "").strip().upper()
                 entry_policy_snapshot = get_entry_policy_snapshot() or {}
+                trade_mae_mfe_snapshot = get_trade_mae_mfe_snapshot()
                 if not entry_strategy and last_strategy_decision is not None:
                     entry_strategy = str(
                         getattr(last_strategy_decision, "active_strategy", "") or ""
@@ -5157,6 +5159,20 @@ if __name__ == "__main__":
                         "entry_z_threshold_used": entry_policy_snapshot.get("entry_z"),
                         "size_multiplier_used": entry_policy_snapshot.get("size_multiplier"),
                         "entry_notional_usdt": entry_notional,
+                        "max_favorable_pnl_usdt": trade_mae_mfe_snapshot.get("max_favorable_pnl_usdt"),
+                        "max_adverse_pnl_usdt": trade_mae_mfe_snapshot.get("max_adverse_pnl_usdt"),
+                        "z_at_max_favorable_pnl": trade_mae_mfe_snapshot.get("z_at_max_favorable_pnl"),
+                        "z_at_max_adverse_pnl": trade_mae_mfe_snapshot.get("z_at_max_adverse_pnl"),
+                        "timestamp_at_max_favorable_pnl": trade_mae_mfe_snapshot.get("timestamp_at_max_favorable_pnl"),
+                        "timestamp_at_max_adverse_pnl": trade_mae_mfe_snapshot.get("timestamp_at_max_adverse_pnl"),
+                        "guard_floor_at_max_favorable_pnl": trade_mae_mfe_snapshot.get("guard_floor_at_max_favorable_pnl"),
+                        "full_tp_touched": bool(trade_mae_mfe_snapshot.get("full_tp_touched")),
+                        "guard_blocked_full_tp_count": int(
+                            trade_mae_mfe_snapshot.get("guard_blocked_full_tp_count", 0) or 0
+                        ),
+                        "partial_exit_before_full_tp": bool(
+                            trade_mae_mfe_snapshot.get("partial_exit_before_full_tp")
+                        ),
                         "entry_ts": entry_time_ts,
                         "ending_equity_usdt": alert_equity,
                         "session_pnl_usdt": alert_session_pnl,

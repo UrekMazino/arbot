@@ -33,5 +33,12 @@
         "msg": "Pair history shows repeated XPL failures across SKY/XPL and CRV/XPL with materially negative realized PnL; exclude until manual review",
         "ttl_days": null,
         "source": "seed"
+    },
+    "TEST1234-USDT-SWAP": {
+        "reason": "invalid_test_instrument",
+        "code": "",
+        "msg": "OKX test/sandbox instrument; not suitable for live trading",
+        "ttl_days": null,
+        "source": "runtime"
     }
 }

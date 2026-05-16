@@ -1636,6 +1636,11 @@ def _apply_exit_orchestrator_decision(decision, kill_switch):
         print(msg)
         if switch_reason is not None:
             set_last_switch_reason(str(switch_reason))
+        elif candidate.name:
+            # Record the exit reason for reporting even when no pair switch is triggered.
+            # candidate.name (e.g. "trade_manager_trailing_stop") is not in
+            # FORCED_SWITCH_EXIT_REASONS so this will not cause an unintended pair switch.
+            set_last_switch_reason(str(candidate.name))
         if bool(candidate.metadata.get("health_zero")):
             set_last_health_score(0)
         _close_trade_manager()

@@ -5062,7 +5062,7 @@ if __name__ == "__main__":
                     logger.info(
                         "Equity reconciliation (post-close): trade_pnl=%.2f equity_change=%.2f diff=%.2f "
                         "fees=%.2f slippage=%.2f funding=%.2f unexplained=%.2f "
-                        "basis=%s delta_th=%.2f unexplained_th=%.2f",
+                        "basis=%s exit_reason=%s delta_th=%.2f unexplained_th=%.2f",
                         reconciliation["trade_pnl"],
                         reconciliation["equity_change"],
                         reconciliation["difference"],
@@ -5071,6 +5071,7 @@ if __name__ == "__main__":
                         reconciliation["funding"],
                         reconciliation["unexplained"],
                         recon_basis,
+                        switch_reason_after_close or "normal",
                         recon_delta_warn_threshold,
                         recon_unexplained_warn_threshold,
                     )

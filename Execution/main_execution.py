@@ -151,7 +151,8 @@ from func_pair_state import (
     is_restricted_ticker,
     get_restricted_ticker_reason,
     reset_health_failure,
-    cleanup_expired_graveyard
+    cleanup_expired_graveyard,
+    check_startup_pair_block,
 )
 
 # Setup logging
@@ -366,6 +367,7 @@ _PNL_FALLBACK_ACTIVE = False
 _PNL_FALLBACK_BASIS = ""
 _REPORT_UPTIME_TRIGGERED = False
 _RUN_END_LOGGED = False
+_STARTUP_HOSPITAL_ENTRY_BLOCK = False  # Set when startup pair is hospital-blocked
 _COINT_GATE_STREAK = 0  # Track consecutive cointegration gate occurrences
 _COINT_GATE_THRESHOLD = 2  # Trigger switch after N consecutive coint_gate decisions
 _COINT_WATCH_STREAK = 0  # Track softer watch-band cointegration misses separately
@@ -1111,23 +1113,7 @@ def _validate_ticker_configuration():
 
 def _get_startup_pair_block():
     """Return a startup block reason/message if the persisted active pair is invalid."""
-    if is_restricted_ticker(ticker_1):
-        detail = get_restricted_ticker_reason(ticker_1) or "restricted ticker"
-        return "restricted_ticker", (
-            f"Active pair blocked at startup: {ticker_1}/{ticker_2} includes restricted "
-            f"ticker {ticker_1} ({detail})."
-        )
-    if is_restricted_ticker(ticker_2):
-        detail = get_restricted_ticker_reason(ticker_2) or "restricted ticker"
-        return "restricted_ticker", (
-            f"Active pair blocked at startup: {ticker_1}/{ticker_2} includes restricted "
-            f"ticker {ticker_2} ({detail})."
-        )
-    if is_in_graveyard(ticker_1, ticker_2):
-        return "startup_invalid_pair", (
-            f"Active pair blocked at startup: {ticker_1}/{ticker_2} is in graveyard."
-        )
-    return None, None
+    return check_startup_pair_block(ticker_1, ticker_2)
 
 
 def _is_hedged_mode(mode_value):
@@ -2471,6 +2457,7 @@ def _switch_to_next_pair(health_score=None, switch_reason="health"):
             "restricted_ticker",
             "compliance_restricted",
             "startup_invalid_pair",
+            "startup_pair_in_hospital",
             "pair_supply_available",
             "pair_universe_pruned",
         }
@@ -3264,7 +3251,44 @@ if __name__ == "__main__":
         logger.warning("Failed to cleanup graveyard entries: %s", exc)
 
     startup_block_reason, startup_block_message = _get_startup_pair_block()
-    if startup_block_reason:
+    if startup_block_reason == "startup_pair_in_hospital":
+        # Hospital: soft block. Try to switch if flat; otherwise suppress entries and keep running.
+        logger.warning(startup_block_message)
+        print(startup_block_message)
+        set_last_switch_reason("startup_pair_in_hospital")
+        if lock_on_pair:
+            logger.warning(
+                "lock_on_pair enabled; cannot auto-switch hospital pair %s/%s. "
+                "Entries suppressed until cooldown expires.",
+                ticker_1,
+                ticker_2,
+            )
+            _STARTUP_HOSPITAL_ENTRY_BLOCK = True
+        else:
+            switch_result = _switch_to_next_pair(
+                health_score=0, switch_reason="startup_pair_in_hospital"
+            )
+            if switch_result == SWITCH_RESULT_SWITCHED:
+                logger.info("Restarting process via Subprocess Manager (exit code 3)...")
+                print("Restarting to apply new pair...")
+                sys.exit(3)
+            if switch_result == SWITCH_RESULT_BLOCKED:
+                logger.warning(
+                    "startup_pair_blocked_but_position_open: %s/%s is hospital-blocked "
+                    "with active position/orders. Entries suppressed until account is flat.",
+                    ticker_1,
+                    ticker_2,
+                )
+            else:
+                logger.warning(
+                    "startup_no_valid_pair_available: No replacement pair found for "
+                    "hospital-blocked %s/%s. Entries suppressed.",
+                    ticker_1,
+                    ticker_2,
+                )
+            _STARTUP_HOSPITAL_ENTRY_BLOCK = True
+    elif startup_block_reason:
+        # Restricted ticker or graveyard: hard stop if switch fails.
         logger.error(startup_block_message)
         print(startup_block_message)
         set_last_switch_reason(startup_block_reason)
@@ -4562,7 +4586,33 @@ if __name__ == "__main__":
                 blocked_by_regime = should_block_regime_entries(regime_mode, last_regime_decision)
                 blocked_by_strategy = should_block_strategy_entries(strategy_mode, last_strategy_decision)
                 blocked_by_risk = risk_circuit_decision.block_new_entries
-                if blocked_by_regime or blocked_by_strategy or blocked_by_risk:
+                blocked_by_startup_hospital = False
+                if _STARTUP_HOSPITAL_ENTRY_BLOCK:
+                    _hospital_remaining = get_hospital_remaining(ticker_1, ticker_2)
+                    if _hospital_remaining > 0:
+                        blocked_by_startup_hospital = True
+                        set_last_switch_reason("startup_pair_in_hospital")
+                        kill_switch = 3
+                    else:
+                        logger.info(
+                            "Startup hospital block for %s/%s cleared (cooldown expired). "
+                            "Resuming normal entry evaluation.",
+                            ticker_1,
+                            ticker_2,
+                        )
+                        _STARTUP_HOSPITAL_ENTRY_BLOCK = False
+                if blocked_by_startup_hospital:
+                    _log_state_change_or_interval(
+                        "startup_hospital_block",
+                        (ticker_1, ticker_2),
+                        60,
+                        logger.warning,
+                        "startup_pair_blocked_switching: %s/%s is hospital-blocked; "
+                        "suppressing new entries and requesting pair switch.",
+                        ticker_1,
+                        ticker_2,
+                    )
+                elif blocked_by_regime or blocked_by_strategy or blocked_by_risk:
                     gate_reason = "n/a"
                     gate_regime = "unknown"
                     gate_strategy = "unknown"

@@ -864,6 +864,39 @@ def get_restricted_ticker_reason(ticker):
     return None
 
 
+def check_startup_pair_block(t1: str, t2: str):
+    """
+    Check whether the startup active pair is blocked by ticker restriction,
+    graveyard, or hospital. Returns (reason, message) or (None, None).
+
+    Checks are ordered from hardest block (restriction) to softest (hospital)
+    so the caller can choose how to handle each case.
+    """
+    if is_restricted_ticker(t1):
+        detail = get_restricted_ticker_reason(t1) or "restricted ticker"
+        return "restricted_ticker", (
+            f"Active pair blocked at startup: {t1}/{t2} includes restricted "
+            f"ticker {t1} ({detail})."
+        )
+    if is_restricted_ticker(t2):
+        detail = get_restricted_ticker_reason(t2) or "restricted ticker"
+        return "restricted_ticker", (
+            f"Active pair blocked at startup: {t1}/{t2} includes restricted "
+            f"ticker {t2} ({detail})."
+        )
+    if is_in_graveyard(t1, t2):
+        return "startup_invalid_pair", (
+            f"Active pair blocked at startup: {t1}/{t2} is in graveyard."
+        )
+    remaining = get_hospital_remaining(t1, t2)
+    if remaining > 0:
+        return "startup_pair_in_hospital", (
+            f"Active pair blocked at startup: {t1}/{t2} is in hospital "
+            f"(cooldown={remaining:.0f}s remaining)."
+        )
+    return None, None
+
+
 def is_restricted_ticker(ticker, lookback_days=365):
     _ = lookback_days
     return get_restricted_ticker_entry(ticker) is not None

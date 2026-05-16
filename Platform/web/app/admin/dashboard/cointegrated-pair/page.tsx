@@ -976,7 +976,7 @@ function PairUniverseCharts({
           <LineChart data={chartData}>
             <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#263244" />
             <XAxis dataKey="ts" tickFormatter={fmtTick} tickLine={false} axisLine={false} fontSize={11} />
-            <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
+            <YAxis yAxisId="z" tickLine={false} axisLine={false} fontSize={11} domain={[-4, 4]} />
             <YAxis yAxisId="spread" orientation="right" tickLine={false} axisLine={false} fontSize={11} domain={["auto", "auto"]} />
             <Tooltip content={<PairChartTooltip markerLayers={markerLayers} />} />
             <Legend />

@@ -388,6 +388,10 @@ All transitions are logged with timestamps and context.
 """
 from advanced_trade_management import AdvancedTradeManager
 from exit_decision_trace import build_exit_decision_trace_payload
+from entry_safety_gate import (
+    evaluate_entry_safety_gate,
+    record_entry_safety_pair_event,
+)
 from func_price_calls import get_ticker_trade_liquidity, get_ticker_liquidity_analysis
 from func_calculation import get_contract_value_quote
 from func_get_zscore import get_latest_zscore
@@ -1158,6 +1162,26 @@ def _emit_trade_quality_gate(
     )
     severity = "info" if decision.passed or decision.mode == "shadow" else "warn"
     emit_event("trade_quality_gate", payload=payload, severity=severity, logger=logger)
+
+
+def _emit_entry_safety_gate(decision, *, pair=None, strategy=None, regime=None, signal=None):
+    payload = decision.to_payload()
+    payload.update(
+        {
+            "pair": pair or _active_pair_key(),
+            "strategy": strategy,
+            "regime": regime,
+            "signal": signal,
+            "status": "pass" if decision.passed else "blocked",
+            "reason": decision.reason,
+        }
+    )
+    emit_event(
+        "entry_safety_gate",
+        payload=payload,
+        severity="info" if decision.passed else "warn",
+        logger=logger,
+    )
 
 
 def _log_entry_fills(
@@ -2231,6 +2255,7 @@ def manage_new_trades(
     regime_decision=None,
     strategy_mode="off",
     strategy_decision=None,
+    advanced_regime_result=None,
 ):
     """
     Manage trade entry, monitoring, and exit.
@@ -2390,8 +2415,11 @@ def manage_new_trades(
                 return kill_switch, False, False
             if coint_flag == 0 and coint_health_state != "watch":
                 set_last_switch_reason("cointegration_lost")
+                record_entry_safety_pair_event(_active_pair_key(), "cointegration_lost")
             else:
                 set_last_switch_reason("health")
+                if coint_health_state == "watch":
+                    record_entry_safety_pair_event(_active_pair_key(), "cointegration_watch")
             return 3, False, False
     
     # 3. Signal Generation
@@ -3187,6 +3215,56 @@ def manage_new_trades(
                 reasons=quality_decision.reasons,
                 components=quality_decision.components,
                 diagnostics=quality_decision.diagnostics,
+            )
+            return kill_switch, signal_detected, trade_placed
+
+        entry_gate_decision = evaluate_entry_safety_gate(
+            pair=_active_pair_key(),
+            metrics=metrics,
+            quality_decision=quality_decision,
+            ratio_long=ratio_long,
+            ratio_short=ratio_short,
+            min_liquidity_ratio=min_liquidity_ratio,
+            regime_decision=regime_decision,
+            strategy_decision=strategy_decision,
+            advanced_regime_result=advanced_regime_result,
+        )
+        _emit_entry_safety_gate(
+            entry_gate_decision,
+            pair=_active_pair_key(),
+            strategy=strategy_name,
+            regime=regime_name,
+            signal=signal,
+        )
+        if not entry_gate_decision.passed:
+            gate_payload = entry_gate_decision.to_payload()
+            logger.warning(
+                "ENTRY_SAFETY_GATE_BLOCKED: pair=%s reason=%s reasons=%s coint_state=%s "
+                "components=%s cooldown_remaining=%s",
+                _active_pair_key(),
+                entry_gate_decision.reason,
+                ",".join(entry_gate_decision.reasons),
+                gate_payload.get("coint_state"),
+                gate_payload.get("entry_gate_component_scores"),
+                gate_payload.get("entry_gate_cooldown_remaining"),
+            )
+            _GATE_PAYLOAD_EXPLICIT_KEYS = {"pair", "ratio_long", "ratio_short", "min_ratio"}
+            _emit_entry_reject(
+                "entry_safety_gate",
+                entry_gate_decision.reason,
+                pair=_active_pair_key(),
+                strategy=strategy_name,
+                regime=regime_name,
+                signal=signal,
+                long_ticker=long_ticker,
+                short_ticker=short_ticker,
+                target_usdt=initial_capital_usdt,
+                liquidity_long_usdt=liquidity_long_usdt,
+                liquidity_short_usdt=liquidity_short_usdt,
+                ratio_long=ratio_long,
+                ratio_short=ratio_short,
+                min_ratio=min_liquidity_ratio,
+                **{k: v for k, v in gate_payload.items() if k not in _GATE_PAYLOAD_EXPLICIT_KEYS},
             )
             return kill_switch, signal_detected, trade_placed
 

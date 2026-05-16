@@ -91,6 +91,7 @@ from session_risk_circuit_breaker import (
     RiskCircuitBreakerState,
     evaluate_risk_circuit_breaker,
 )
+from entry_safety_gate import EntrySafetyGateConfig, record_entry_safety_pair_event
 from advanced_ml_runtime import (
     advanced_ml_config_snapshot,
     advanced_ml_runtime_mode,
@@ -241,6 +242,7 @@ def _build_startup_config_snapshot(regime_mode, strategy_mode):
             "event_heartbeat_seconds": _env_text("STATBOT_EVENT_HEARTBEAT_SECONDS", "60"),
         },
         "risk_circuit_breaker": RiskCircuitBreakerConfig.from_env().to_dict(),
+        "entry_safety_gate": EntrySafetyGateConfig.from_env().to_dict(),
         "exit_guards": {
             "full_tp_guard_multiplier": _env_float("STATBOT_FULL_TP_GUARD_MULTIPLIER", 1.0, minimum=0.0),
             "partial_tp_guard_multiplier": _env_float("STATBOT_PARTIAL_TP_GUARD_MULTIPLIER", 1.0, minimum=0.0),
@@ -3362,6 +3364,8 @@ if __name__ == "__main__":
     regime_market_symbol = _get_regime_market_symbol()
     last_regime_eval_ts = 0.0
     last_advanced_regime_eval_ts = 0.0
+    last_advanced_regime_result = None
+    last_advanced_regime_pair = ""
     last_regime_decision = None
     last_regime_gate_log_ts = 0.0
     strategy_router = StrategyRouter()
@@ -3428,6 +3432,23 @@ if __name__ == "__main__":
         )
     else:
         logger.info("Entry risk circuit breaker disabled; no STATBOT_* risk-stop limits configured.")
+
+    entry_safety_config = EntrySafetyGateConfig.from_env()
+    if entry_safety_config.enabled:
+        logger.warning(
+            "Entry safety gate enabled: min_cointegration_component=%.2f "
+            "min_correlation_component=%.2f max_break_risk=%.3f "
+            "coint_cooldowns(watch/lost/broken/watch_timeout)=%.0f/%.0f/%.0f/%.0fs",
+            entry_safety_config.min_cointegration_component,
+            entry_safety_config.min_correlation_component,
+            entry_safety_config.max_break_risk,
+            entry_safety_config.cointegration_watch_cooldown_seconds,
+            entry_safety_config.cointegration_lost_cooldown_seconds,
+            entry_safety_config.cointegration_broken_cooldown_seconds,
+            entry_safety_config.watch_timeout_cooldown_seconds,
+        )
+    else:
+        logger.info("Entry safety gate disabled (STATBOT_ENTRY_SAFETY_GATE_ENABLED=0/off).")
 
     advanced_ml_startup_snapshot = log_advanced_ml_startup_status(logger)
 
@@ -3985,6 +4006,8 @@ if __name__ == "__main__":
                 )
                 if advanced_regime_result is not None:
                     last_advanced_regime_eval_ts = current_time
+                    last_advanced_regime_result = advanced_regime_result
+                    last_advanced_regime_pair = f"{ticker_1}/{ticker_2}"
                     advanced_mode = advanced_ml_runtime_mode()
                     emit_event(
                         "advanced_ml_regime_live" if advanced_mode == "live" else "advanced_ml_regime_shadow",
@@ -4145,6 +4168,10 @@ if __name__ == "__main__":
                                 should_switch_for_coint = _COINT_GATE_STREAK >= _COINT_GATE_THRESHOLD
                                 switch_reason_for_coint = "cointegration_lost"
                             if should_switch_for_coint:
+                                record_entry_safety_pair_event(
+                                    f"{ticker_1}/{ticker_2}",
+                                    switch_reason_for_coint,
+                                )
                                 logger.warning(
                                     "Cointegration %s persisted. Triggering pair switch (reason=%s).",
                                     coint_state,
@@ -4593,6 +4620,11 @@ if __name__ == "__main__":
                         regime_decision=last_regime_decision,
                         strategy_mode=strategy_mode,
                         strategy_decision=last_strategy_decision,
+                        advanced_regime_result=(
+                            last_advanced_regime_result
+                            if last_advanced_regime_pair == f"{ticker_1}/{ticker_2}"
+                            else None
+                        ),
                     )
                     kill_switch = res_ks
                     if sig_seen:

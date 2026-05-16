@@ -485,6 +485,19 @@ def _build_entry_rejection_rows(rows: list[RunEvent]) -> list[dict]:
                 "action": str(payload.get("action") or "").strip(),
                 "long_error": str(payload.get("long_error") or "").strip(),
                 "short_error": str(payload.get("short_error") or "").strip(),
+                "entry_gate_passed": _coerce_bool(payload.get("entry_gate_passed")),
+                "entry_gate_block_reason": str(payload.get("entry_gate_block_reason") or "").strip(),
+                "entry_gate_component_scores": json.dumps(
+                    payload.get("entry_gate_component_scores") or {},
+                    sort_keys=True,
+                ),
+                "entry_gate_cooldown_remaining": _coerce_float(
+                    payload.get("entry_gate_cooldown_remaining")
+                ),
+                "coint_state": str(payload.get("coint_state") or "").strip(),
+                "router_shadow_state": json.dumps(payload.get("router_shadow_state") or {}, sort_keys=True),
+                "ml_shadow_state": json.dumps(payload.get("ml_shadow_state") or {}, sort_keys=True),
+                "break_risk": _coerce_float(payload.get("break_risk")),
             }
         )
     return output
@@ -1320,6 +1333,14 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
                 "action",
                 "long_error",
                 "short_error",
+                "entry_gate_passed",
+                "entry_gate_block_reason",
+                "entry_gate_component_scores",
+                "entry_gate_cooldown_remaining",
+                "coint_state",
+                "router_shadow_state",
+                "ml_shadow_state",
+                "break_risk",
             ],
         )
         artifact_entries.append(_artifact(entry_rejections_path, "csv", len(entry_rejection_rows)))

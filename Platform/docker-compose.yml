@@ -1,4 +1,20 @@
 services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${MULLVAD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${MULLVAD_ADDRESSES}
+      - SERVER_COUNTRIES=Singapore
+    volumes:
+      - gluetun_data:/gluetun
+
   postgres:
     image: postgres:16
     environment:
@@ -70,7 +86,9 @@ services:
     build:
       context: ./api
     restart: unless-stopped
+    network_mode: "service:gluetun"
     depends_on:
+      - gluetun
       - api
       - postgres
       - redis
@@ -93,7 +111,9 @@ services:
     build:
       context: ./api
     restart: unless-stopped
+    network_mode: "service:gluetun"
     depends_on:
+      - gluetun
       - api
       - postgres
       - redis
@@ -115,7 +135,9 @@ services:
     build:
       context: ./api
     restart: unless-stopped
+    network_mode: "service:gluetun"
     depends_on:
+      - gluetun
       - api
       - postgres
       - redis
@@ -172,3 +194,4 @@ volumes:
   pgadmin_data:
   web_node_modules:
   web_next_dist:
+  gluetun_data:

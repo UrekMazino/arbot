@@ -1,0 +1,242 @@
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from entry_safety_gate import (  # noqa: E402
+    EntrySafetyGateConfig,
+    clear_entry_safety_gate_state,
+    evaluate_entry_safety_gate,
+    record_entry_safety_pair_event,
+)
+import func_trade_management as ftm  # noqa: E402
+
+
+def _config(**overrides):
+    values = {
+        "enabled": True,
+        "min_cointegration_component": 20.0,
+        "min_correlation_component": 7.0,
+        "block_liquidity_floor": True,
+        "block_risk_off_thin_liquidity": True,
+        "block_risk_off_vol_shock": True,
+        "block_trending_ml": True,
+        "max_break_risk": 0.15,
+        "cointegration_watch_cooldown_seconds": 1800.0,
+        "cointegration_lost_cooldown_seconds": 3600.0,
+        "cointegration_broken_cooldown_seconds": 7200.0,
+        "watch_timeout_cooldown_seconds": 3600.0,
+    }
+    values.update(overrides)
+    return EntrySafetyGateConfig(**values)
+
+
+def _quality(**components):
+    defaults = {
+        "cointegration": 24.0,
+        "correlation": 9.0,
+        "liquidity": 14.0,
+    }
+    defaults.update(components)
+    return SimpleNamespace(components=defaults)
+
+
+def _good_metrics():
+    return {
+        "coint_flag": 1,
+        "coint_health": "healthy",
+        "p_value": 0.01,
+        "correlation": 0.9,
+        "zero_crossings": 25,
+    }
+
+
+def _decision(**kwargs):
+    cfg = kwargs.pop("config", _config())
+    now = kwargs.pop("now", 1000.0)
+    metrics = kwargs.pop("metrics", _good_metrics())
+    quality_decision = kwargs.pop("quality_decision", _quality())
+    return evaluate_entry_safety_gate(
+        pair="AAA-USDT-SWAP/BBB-USDT-SWAP",
+        metrics=metrics,
+        quality_decision=quality_decision,
+        ratio_long=10.0,
+        ratio_short=10.0,
+        min_liquidity_ratio=5.0,
+        config=cfg,
+        now=now,
+        **kwargs,
+    )
+
+
+def setup_function():
+    clear_entry_safety_gate_state()
+
+
+def test_gate_blocks_recent_cointegration_lost_pair():
+    cfg = _config()
+    record_entry_safety_pair_event(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "cointegration_lost",
+        now=100.0,
+        config=cfg,
+    )
+
+    decision = _decision(config=cfg, now=101.0)
+
+    assert not decision.passed
+    assert "recent_cointegration_lost_cooldown" in decision.reasons
+    assert decision.cooldown_remaining_seconds is not None
+
+
+def test_gate_blocks_recent_cointegration_watch_timeout_pair():
+    cfg = _config()
+    record_entry_safety_pair_event(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "cointegration_watch_timeout",
+        now=100.0,
+        config=cfg,
+    )
+
+    decision = _decision(config=cfg, now=101.0)
+
+    assert not decision.passed
+    assert "recent_cointegration_watch_timeout_cooldown" in decision.reasons
+
+
+def test_gate_blocks_current_watch_or_broken_coint_state():
+    watch_decision = _decision(metrics={"coint_flag": 0, "coint_health": "watch"})
+    broken_decision = _decision(metrics={"coint_flag": 0, "coint_health": "broken"})
+
+    assert not watch_decision.passed
+    assert "cointegration_watch" in watch_decision.reasons
+    assert not broken_decision.passed
+    assert "cointegration_broken" in broken_decision.reasons
+
+
+def test_gate_blocks_low_cointegration_component_score():
+    decision = _decision(quality_decision=_quality(cointegration=19.99))
+
+    assert not decision.passed
+    assert "cointegration_component_below_threshold" in decision.reasons
+
+
+def test_gate_blocks_low_correlation_component_score():
+    decision = _decision(quality_decision=_quality(correlation=6.99))
+
+    assert not decision.passed
+    assert "correlation_component_below_threshold" in decision.reasons
+
+
+def test_gate_blocks_risk_off_thin_liquidity():
+    regime = SimpleNamespace(regime="RISK_OFF", reason_codes=["thin_liquidity"])
+
+    decision = _decision(regime_decision=regime)
+
+    assert not decision.passed
+    assert "risk_off_thin_liquidity" in decision.reasons
+
+
+def test_gate_blocks_risk_off_vol_shock():
+    regime = SimpleNamespace(regime="RISK_OFF", reason_codes=["vol_shock"])
+
+    decision = _decision(regime_decision=regime)
+
+    assert not decision.passed
+    assert "risk_off_vol_shock" in decision.reasons
+
+
+def test_gate_blocks_ml_trending_or_high_break_risk():
+    trending = SimpleNamespace(regime=SimpleNamespace(value="TRENDING"), break_risk=0.05)
+    high_break = SimpleNamespace(regime=SimpleNamespace(value="RANGE"), break_risk=0.151)
+
+    trending_decision = _decision(advanced_regime_result=trending)
+    high_break_decision = _decision(advanced_regime_result=high_break)
+
+    assert not trending_decision.passed
+    assert "advanced_ml_trending" in trending_decision.reasons
+    assert not high_break_decision.passed
+    assert "advanced_ml_break_risk_high" in high_break_decision.reasons
+
+
+def test_gate_allows_good_range_mean_reverting_pair():
+    regime = SimpleNamespace(regime="RANGE", reason_codes=[])
+    strategy = SimpleNamespace(active_strategy="STATARB_MR", reason_codes=[])
+    advanced = SimpleNamespace(regime=SimpleNamespace(value="RANGE"), break_risk=0.05)
+
+    decision = _decision(
+        regime_decision=regime,
+        strategy_decision=strategy,
+        advanced_regime_result=advanced,
+    )
+
+    assert decision.passed
+    assert decision.reason == "entry_safety_gate_passed"
+
+
+def test_cooldown_expires_and_pair_can_pass_again():
+    cfg = _config(cointegration_lost_cooldown_seconds=10.0)
+    record_entry_safety_pair_event(
+        "AAA-USDT-SWAP/BBB-USDT-SWAP",
+        "cointegration_lost",
+        now=100.0,
+        config=cfg,
+    )
+
+    blocked = _decision(config=cfg, now=105.0)
+    passed = _decision(config=cfg, now=111.0)
+
+    assert not blocked.passed
+    assert passed.passed
+
+
+def test_disabled_gate_preserves_current_behavior():
+    decision = _decision(
+        config=_config(enabled=False),
+        metrics={"coint_flag": 0, "coint_health": "broken"},
+        quality_decision=_quality(cointegration=0.0, correlation=0.0),
+    )
+
+    assert decision.passed
+    assert decision.reason == "entry_safety_gate_disabled"
+
+
+def test_block_payload_contains_dashboard_ready_fields():
+    decision = _decision(quality_decision=_quality(cointegration=10.0))
+    payload = decision.to_payload()
+
+    assert payload["entry_gate_passed"] is False
+    assert payload["entry_gate_block_reason"]
+    assert payload["entry_gate_component_scores"]["cointegration"] == 10.0
+    assert "config_thresholds" in payload
+
+
+def test_helper_does_not_import_order_execution_modules():
+    import entry_safety_gate
+
+    imported_names = set(vars(entry_safety_gate))
+    assert "initialise_order_execution" not in imported_names
+    assert "place_entry_with_stop" not in imported_names
+
+
+def test_entry_safety_gate_emit_event_contains_reason(monkeypatch):
+    captured = {}
+
+    def fake_emit_event(event_type, payload=None, severity="info", logger=None):
+        captured["event_type"] = event_type
+        captured["payload"] = payload or {}
+        captured["severity"] = severity
+        return True
+
+    monkeypatch.setattr(ftm, "emit_event", fake_emit_event)
+    decision = _decision(quality_decision=_quality(cointegration=10.0))
+
+    ftm._emit_entry_safety_gate(decision, pair="AAA/BBB", strategy="STATARB_MR", regime="RANGE", signal="BUY_SPREAD")
+
+    assert captured["event_type"] == "entry_safety_gate"
+    assert captured["severity"] == "warn"
+    assert captured["payload"]["reason"] == "cointegration_component_below_threshold"
+    assert captured["payload"]["entry_gate_block_reason"] == "cointegration_component_below_threshold"

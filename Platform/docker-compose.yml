@@ -176,7 +176,9 @@ services:
     depends_on:
       - api
     environment:
-      NEXT_PUBLIC_API_BASE: http://127.0.0.1:8082/api/v2
+      # API_BACKEND_URL is server-side only — Next.js proxies /api/v2/* to the API
+      # container via Docker's internal DNS, so the browser hits same-origin /api/v2.
+      API_BACKEND_URL: http://api:8080
       NEXT_PUBLIC_WS_BASE: ws://127.0.0.1:8082
     ports:
       - "3000:3000"

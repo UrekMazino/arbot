@@ -1803,14 +1803,17 @@ export default function CointegratedPairPage() {
         });
       }
     } catch (err) {
+      const isNetworkError = !(err instanceof ApiError);
       const payload = err instanceof ApiError && err.payload && typeof err.payload === "object"
         ? err.payload as { blockers?: string[]; force_available?: boolean }
         : null;
       setSwitchModal({
-        title: "Manual switch blocked",
+        title: isNetworkError ? "Connection error" : "Manual switch blocked",
         message: cleanApiMessage(
           err,
-          "Manual pair switch is not allowed while there is an active position or order.",
+          isNetworkError
+            ? "Could not reach the API server. Check that the backend is running."
+            : "Manual pair switch is not allowed while there is an active position or order.",
         ),
         pair,
         blockers: payload?.blockers,

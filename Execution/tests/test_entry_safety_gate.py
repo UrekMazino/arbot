@@ -24,7 +24,7 @@ def _config(**overrides):
         "block_risk_off_thin_liquidity": True,
         "block_risk_off_vol_shock": True,
         "block_trending_ml": True,
-        "max_break_risk": 0.15,
+        "max_break_risk": 0.12,
         "cointegration_watch_cooldown_seconds": 1800.0,
         "cointegration_lost_cooldown_seconds": 3600.0,
         "cointegration_broken_cooldown_seconds": 7200.0,
@@ -151,7 +151,7 @@ def test_gate_blocks_risk_off_vol_shock():
 
 def test_gate_blocks_ml_trending_or_high_break_risk():
     trending = SimpleNamespace(regime=SimpleNamespace(value="TRENDING"), break_risk=0.05)
-    high_break = SimpleNamespace(regime=SimpleNamespace(value="RANGE"), break_risk=0.151)
+    high_break = SimpleNamespace(regime=SimpleNamespace(value="RANGE"), break_risk=0.121)
 
     trending_decision = _decision(advanced_regime_result=trending)
     high_break_decision = _decision(advanced_regime_result=high_break)

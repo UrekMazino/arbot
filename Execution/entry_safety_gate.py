@@ -77,7 +77,7 @@ class EntrySafetyGateConfig:
     block_risk_off_thin_liquidity: bool = True
     block_risk_off_vol_shock: bool = True
     block_trending_ml: bool = True
-    max_break_risk: float = 0.15
+    max_break_risk: float = 0.12
     cointegration_watch_cooldown_seconds: float = 1800.0
     cointegration_lost_cooldown_seconds: float = 3600.0
     cointegration_broken_cooldown_seconds: float = 7200.0
@@ -109,7 +109,7 @@ class EntrySafetyGateConfig:
                 True,
             ),
             block_trending_ml=_env_flag("STATBOT_ENTRY_GATE_BLOCK_TRENDING_ML", True),
-            max_break_risk=_env_float("STATBOT_ENTRY_GATE_MAX_BREAK_RISK", 0.15, minimum=0.0),
+            max_break_risk=_env_float("STATBOT_ENTRY_GATE_MAX_BREAK_RISK", 0.12, minimum=0.0),
             cointegration_watch_cooldown_seconds=_env_float(
                 "STATBOT_ENTRY_GATE_COINTEGRATION_WATCH_COOLDOWN_SECONDS",
                 1800.0,

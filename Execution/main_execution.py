@@ -90,6 +90,10 @@ from session_risk_circuit_breaker import (
     RiskCircuitBreakerConfig,
     RiskCircuitBreakerState,
     evaluate_risk_circuit_breaker,
+    record_session_trade_result,
+    get_session_consecutive_losses,
+    get_session_realized_pnl,
+    get_session_run_id,
 )
 from entry_safety_gate import EntrySafetyGateConfig, record_entry_safety_pair_event
 from advanced_ml_runtime import (
@@ -3424,11 +3428,13 @@ if __name__ == "__main__":
     if risk_circuit_config.any_limit_enabled():
         logger.warning(
             "Entry risk circuit breaker configured: session_max_loss_usdt=%s "
-            "max_consecutive_losses=%s max_drawdown_usdt=%s disable_entries_after_risk_stop=%s",
+            "max_consecutive_losses=%s max_drawdown_usdt=%s "
+            "disable_entries_after_risk_stop=%s state_mode=%s",
             risk_circuit_config.session_max_loss_usdt,
             risk_circuit_config.max_consecutive_losses,
             risk_circuit_config.max_drawdown_usdt,
             risk_circuit_config.disable_entries_after_risk_stop,
+            risk_circuit_config.state_mode,
         )
     else:
         logger.info("Entry risk circuit breaker disabled; no STATBOT_* risk-stop limits configured.")
@@ -3747,15 +3753,23 @@ if __name__ == "__main__":
 
             if equity_trusted:
                 _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equity_usdt)
-            session_realized_pnl_for_gate = (
-                session_pnl if equity_trusted and is_manage_new_trades else None
-            )
+            # In session mode, use the in-memory realized PnL (accumulated from
+            # closed trades this run). Fall back to equity-delta when persistent
+            # mode is active, preserving the previous behaviour.
+            if risk_circuit_config.state_mode == "session":
+                session_realized_pnl_for_gate = get_session_realized_pnl()
+            else:
+                session_realized_pnl_for_gate = (
+                    session_pnl if equity_trusted and is_manage_new_trades else None
+                )
             risk_circuit_decision = evaluate_risk_circuit_breaker(
                 RiskCircuitBreakerState(
                     session_realized_pnl_usdt=session_realized_pnl_for_gate,
-                    consecutive_losses=get_consecutive_losses(),
+                    session_consecutive_losses=get_session_consecutive_losses(),
+                    persistent_consecutive_losses=get_consecutive_losses(),
                     current_drawdown_usdt=session_pnl if equity_trusted else None,
                     equity_trusted=bool(equity_trusted),
+                    run_id=get_session_run_id(),
                 ),
                 risk_circuit_config,
             )
@@ -3766,9 +3780,10 @@ if __name__ == "__main__":
                     or (current_time - last_risk_circuit_log_ts) >= 60
                 ):
                     logger.warning(
-                        "risk_circuit_breaker_active: reasons=%s action=%s",
+                        "risk_circuit_breaker_active: reasons=%s action=%s state_mode=%s",
                         ",".join(risk_reasons),
                         "block_new_entries" if risk_circuit_decision.block_new_entries else "observe_only",
+                        risk_circuit_config.state_mode,
                     )
                     emit_event(
                         "risk_alert",
@@ -3779,9 +3794,12 @@ if __name__ == "__main__":
                             "reasons": list(risk_reasons),
                             "entry_block_reasons": list(risk_circuit_decision.entry_block_reasons),
                             "block_new_entries": risk_circuit_decision.block_new_entries,
-                            "session_realized_pnl_usdt": session_realized_pnl_for_gate,
+                            "state_mode": risk_circuit_config.state_mode,
+                            "session_realized_pnl_usdt": get_session_realized_pnl(),
+                            "session_consecutive_losses": get_session_consecutive_losses(),
+                            "persistent_consecutive_losses": get_consecutive_losses(),
                             "current_drawdown_usdt": session_pnl if equity_trusted else None,
-                            "consecutive_losses": get_consecutive_losses(),
+                            "run_id": get_session_run_id(),
                         },
                         severity="critical" if risk_circuit_decision.block_new_entries else "warn",
                         logger=logger,
@@ -5171,6 +5189,7 @@ if __name__ == "__main__":
                 if record_trade_history:
                     is_win = actual_pnl > 0
                     record_trade_result(is_win)
+                    record_session_trade_result(is_win, actual_pnl)
                     try:
                         strategy_perf = record_strategy_trade_result(
                             entry_strategy,

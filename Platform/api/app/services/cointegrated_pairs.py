@@ -1038,6 +1038,15 @@ def _add_replay_trade_markers(points: list[dict[str, Any]]) -> dict[str, int]:
             if abs(z_value) <= exit_z:
                 _set_marker(
                     point,
+                    value_key="replay_exit_candidate_z",
+                    label_key="replay_exit_candidate_label",
+                    value=z_value,
+                    label=f"Replay exit {replay_side}: Z={z_value:.2f} reverted inside +/-{exit_z:.2f}",
+                    count_key="replay_exit_candidate_count",
+                )
+                # backward-compat alias
+                _set_marker(
+                    point,
                     value_key="replay_exit_z",
                     label_key="replay_exit_label",
                     value=z_value,
@@ -1077,15 +1086,34 @@ def _add_replay_trade_markers(points: list[dict[str, Any]]) -> dict[str, int]:
             )
             if duration is not None and duration < min_continuous:
                 continue
+            side_value_key = (
+                "replay_buy_entry_z" if side == "BUY_SPREAD" else "replay_sell_entry_z"
+            )
+            side_label_key = (
+                "replay_buy_entry_label" if side == "BUY_SPREAD" else "replay_sell_entry_label"
+            )
+            side_count_key = (
+                "replay_buy_entry_count" if side == "BUY_SPREAD" else "replay_sell_entry_count"
+            )
+            entry_label = (
+                f"Replay entry {side}: Z={z_value:.2f} {side_text}, "
+                f"persistence {sum(qualified)}/{min_persist}"
+            )
+            _set_marker(
+                point,
+                value_key=side_value_key,
+                label_key=side_label_key,
+                value=z_value,
+                label=entry_label,
+                count_key=side_count_key,
+            )
+            # backward-compat alias
             _set_marker(
                 point,
                 value_key="replay_entry_z",
                 label_key="replay_entry_label",
                 value=z_value,
-                label=(
-                    f"Replay entry {side}: Z={z_value:.2f} {side_text}, "
-                    f"persistence {sum(qualified)}/{min_persist}"
-                ),
+                label=entry_label,
                 count_key="replay_entry_count",
                 extra={"replay_entry_side": side},
             )
@@ -1363,9 +1391,18 @@ def get_cointegrated_pair_detail(sym_1: str, sym_2: str, limit: int = 720, db: A
                 "replay_entry_label": None,
                 "replay_entry_count": 0,
                 "replay_entry_side": None,
+                "replay_buy_entry_z": None,
+                "replay_buy_entry_label": None,
+                "replay_buy_entry_count": 0,
+                "replay_sell_entry_z": None,
+                "replay_sell_entry_label": None,
+                "replay_sell_entry_count": 0,
                 "replay_exit_z": None,
                 "replay_exit_label": None,
                 "replay_exit_count": 0,
+                "replay_exit_candidate_z": None,
+                "replay_exit_candidate_label": None,
+                "replay_exit_candidate_count": 0,
                 "blocked_entry_z": None,
                 "blocked_entry_label": None,
                 "blocked_entry_count": 0,

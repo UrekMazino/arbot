@@ -24,6 +24,7 @@ import {
   CointegratedPairsResponse,
   CounterfactualExitStudy,
   DecisionScoreTimelinePoint,
+  PairSummary,
   PairSupplyStatus,
   PairDecisionAuditChart,
   UserRecord,
@@ -33,6 +34,7 @@ import {
   getAdminPairsHealth,
   getMe,
   getPairDecisionAuditChart,
+  getPairHistory,
   getPairSupplyStatus,
   isUnauthorizedError,
   removeCointegratedPair,
@@ -1333,6 +1335,7 @@ export default function CointegratedPairPage() {
   } | null>(null);
   const [selectedPair, setSelectedPair] = useState<CointegratedPair | null>(null);
   const [detail, setDetail] = useState<CointegratedPairDetail | null>(null);
+  const [pairSummary, setPairSummary] = useState<PairSummary | null>(null);
   const [auditChart, setAuditChart] = useState<PairDecisionAuditChart | null>(null);
   const [counterfactualStudy, setCounterfactualStudy] = useState<CounterfactualExitStudy | null>(null);
   const [counterfactualLoading, setCounterfactualLoading] = useState(false);
@@ -1364,6 +1367,25 @@ export default function CointegratedPairPage() {
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!selectedPair?.pair) {
+      setPairSummary(null);
+      return;
+    }
+    const pairName = selectedPair.pair;
+    let cancelled = false;
+    getPairHistory({ search: pairName, pageSize: 1 })
+      .then((res) => {
+        if (cancelled) return;
+        const match = res.rows.find((r) => r.pair === pairName) ?? res.rows[0] ?? null;
+        setPairSummary(match);
+      })
+      .catch(() => {
+        if (!cancelled) setPairSummary(null);
+      });
+    return () => { cancelled = true; };
+  }, [selectedPair?.pair]);
 
   useEffect(() => {
     if (loading || !user) return;
@@ -2329,6 +2351,31 @@ export default function CointegratedPairPage() {
                 tone="sky"
               />
               <MetricCard label="Spread Std" value={fmtNumber(detailMatchesSelection ? detail?.stats.spread_std : null, 5)} hint="Latest chart window" tone="violet" />
+              <MetricCard
+                label="Avg Hedge Ratio"
+                value={fmtNumber(pairSummary?.avg_hedge_ratio ?? null, 4)}
+                hint="Mean entry hedge ratio across trades"
+                tone="violet"
+              />
+              <MetricCard
+                label="Hedge Drift"
+                value={pairSummary?.avg_hedge_drift_pct != null ? `${fmtNumber(pairSummary.avg_hedge_drift_pct, 2)}%` : "n/a"}
+                hint="Avg hedge ratio drift from entry"
+                tone={pairSummary?.avg_hedge_drift_pct != null && Math.abs(pairSummary.avg_hedge_drift_pct) > 5 ? "amber" : "sky"}
+              />
+              <MetricCard
+                label="Last Trade"
+                value={
+                  pairSummary?.last_traded_at != null
+                    ? (() => {
+                        const secs = parseTimestampSeconds(pairSummary.last_traded_at);
+                        return secs != null ? new Date(secs * 1000).toLocaleString() : "n/a";
+                      })()
+                    : "n/a"
+                }
+                hint="Most recent closed trade"
+                tone="teal"
+              />
             </div>
           </div>
           ) : null}

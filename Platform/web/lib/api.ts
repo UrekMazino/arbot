@@ -1639,6 +1639,27 @@ export async function removePairFromGraveyard(pair: string): Promise<RemovePairG
   });
 }
 
+export async function addPairToHospital(
+  pair: string,
+  cooldownSeconds: number,
+  reason = "manual",
+): Promise<{ ok: boolean; pair_key: string; cooldown_seconds: number; health: AdminPairsHealth }> {
+  return apiRequest("/admin/pairs/health/hospital", {
+    method: "POST",
+    body: JSON.stringify({ pair, cooldown_seconds: cooldownSeconds, reason }),
+  });
+}
+
+export async function addPairToGraveyard(
+  pair: string,
+  ttlDays: number | null,
+): Promise<{ ok: boolean; pair_key: string; ttl_days: number | null; reason: string; health: AdminPairsHealth }> {
+  return apiRequest("/admin/pairs/health/graveyard", {
+    method: "POST",
+    body: JSON.stringify({ pair, ttl_days: ttlDays }),
+  });
+}
+
 export async function getCointegratedPairs(limit = 500): Promise<CointegratedPairsResponse> {
   return apiRequest<CointegratedPairsResponse>(`/admin/cointegrated-pairs?limit=${limit}`, { method: "GET" });
 }

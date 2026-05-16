@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import {
+  addPairToGraveyard,
+  addPairToHospital,
   getMe,
   getPairHistory,
   isUnauthorizedError,
@@ -25,6 +27,20 @@ type StatusFilter = "all" | "stable" | "warning" | "hospital" | "graveyard";
 type PnlFilter = "all" | "winners" | "losers";
 type HedgeDriftFilter = "all" | "high_drift";
 type SortDir = "asc" | "desc";
+type ActionType = "hospital" | "graveyard";
+
+type ActionModal = {
+  pair: string;
+  type: ActionType;
+  cooldownSeconds: number;
+  ttlDays: number | null;
+};
+
+type MenuState = {
+  pair: string;
+  top: number;
+  left: number;
+};
 
 type FilterState = {
   search: string;
@@ -187,6 +203,12 @@ export default function PairHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [menuState, setMenuState] = useState<MenuState | null>(null);
+  const [actionModal, setActionModal] = useState<ActionModal | null>(null);
+  const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const {
     startDate,
     endDate,
@@ -237,6 +259,35 @@ export default function PairHistoryPage() {
   }, [filters.search]);
 
   const navItems = useMemo(() => getAdminNavItems(user), [user]);
+
+  // Close floating menu on outside click
+  useEffect(() => {
+    if (!menuState) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuState(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [menuState]);
+
+  const openMenu = useCallback((pair: string, btnEl: HTMLButtonElement) => {
+    const rect = btnEl.getBoundingClientRect();
+    setMenuState({ pair, top: rect.bottom + 4, left: rect.left });
+  }, []);
+
+  const openActionModal = useCallback((pair: string, type: ActionType) => {
+    setMenuState(null);
+    setActionError(null);
+    setActionSuccess(null);
+    setActionModal({
+      pair,
+      type,
+      cooldownSeconds: 3600,
+      ttlDays: 7,
+    });
+  }, []);
 
   const loadPairHistory = useCallback(
     async (forceRefresh = false) => {
@@ -292,6 +343,27 @@ export default function PairHistoryPage() {
       status,
     ],
   );
+
+  const submitAction = useCallback(async () => {
+    if (!actionModal) return;
+    setActionSubmitting(true);
+    setActionError(null);
+    try {
+      if (actionModal.type === "hospital") {
+        await addPairToHospital(actionModal.pair, actionModal.cooldownSeconds);
+      } else {
+        await addPairToGraveyard(actionModal.pair, actionModal.ttlDays);
+      }
+      const label = actionModal.type === "hospital" ? "Hospital" : "Graveyard";
+      setActionSuccess(`${actionModal.pair} moved to ${label}.`);
+      setActionModal(null);
+      void loadPairHistory(true);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Action failed.");
+    } finally {
+      setActionSubmitting(false);
+    }
+  }, [actionModal, loadPairHistory]);
 
   useEffect(() => {
     if (authLoading || !user || !canAccessAdminPath(user, ACTIVE_HREF)) return;
@@ -549,30 +621,31 @@ export default function PairHistoryPage() {
           </div>
         ) : (
           <TableFrame>
-            <table className="min-w-[1440px] text-left text-sm">
+            <table className="w-full text-left text-xs">
               <thead className="border-b border-white/10 text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">Pair</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Net PnL", "net_pnl_usdt")}</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Trades", "total_trades")}</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Win Rate", "win_rate")}</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Profit Factor", "profit_factor")}</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Max Drawdown", "max_drawdown_usdt")}</th>
-                  <th className="px-4 py-3">Best Trade</th>
-                  <th className="px-4 py-3">Worst Trade</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Avg Hold", "avg_hold_seconds")}</th>
-                  <th className="px-4 py-3">Avg Entry Z</th>
-                  <th className="px-4 py-3">Avg Exit Z</th>
-                  <th className="px-4 py-3">Avg Hedge Ratio</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Hedge Drift", "avg_hedge_drift_pct")}</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">{renderSortableHeader("Last Trade", "last_traded_at")}</th>
-                  <th className="px-4 py-3">Action</th>
+                  <th className="px-2 py-1.5">Pair</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Net PnL", "net_pnl_usdt")}</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Trades", "total_trades")}</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Win Rate", "win_rate")}</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Profit Factor", "profit_factor")}</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Max Drawdown", "max_drawdown_usdt")}</th>
+                  <th className="px-2 py-1.5">Best Trade</th>
+                  <th className="px-2 py-1.5">Worst Trade</th>
+                  <th className="px-2 py-1.5">{renderSortableHeader("Avg Hold", "avg_hold_seconds")}</th>
+                  <th className="px-2 py-1.5">Avg Entry Z</th>
+                  <th className="px-2 py-1.5">Avg Exit Z</th>
+                  <th className="px-2 py-1.5">Status</th>
+                  <th className="px-2 py-1.5">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {rows.map((row) => (
-                  <PairHistoryRow key={row.pair} row={row} onOpen={() => router.push(pairDetailHref(row.pair))} />
+                  <PairHistoryRow
+                    key={row.pair}
+                    row={row}
+                    onOpenMenu={(btnEl) => openMenu(row.pair, btnEl)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -619,17 +692,136 @@ export default function PairHistoryPage() {
           </div>
         </div>
       </PanelCard>
+
+      {/* Floating action menu — fixed position to escape table overflow */}
+      {menuState && (
+        <div
+          ref={menuRef}
+          style={{ position: "fixed", top: menuState.top, left: menuState.left, zIndex: 9999 }}
+          className="min-w-[172px] overflow-hidden rounded-lg border border-white/10 bg-gray-900 py-1 shadow-2xl"
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-white/[0.07]"
+            onClick={() => { router.push(pairDetailHref(menuState.pair)); setMenuState(null); }}
+          >
+            <svg aria-hidden="true" className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/><path d="M17 3l-7 7"/><path d="M12 3h5v5"/></svg>
+            Details
+          </button>
+          <div className="my-1 border-t border-white/10" />
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-amber-300 hover:bg-white/[0.07]"
+            onClick={() => openActionModal(menuState.pair, "hospital")}
+          >
+            <svg aria-hidden="true" className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2v16M2 10h16"/></svg>
+            Move to Hospital
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-xs text-rose-400 hover:bg-white/[0.07]"
+            onClick={() => openActionModal(menuState.pair, "graveyard")}
+          >
+            <svg aria-hidden="true" className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="12" height="14" rx="1"/><path d="M8 4V2h4v2"/></svg>
+            Move to Graveyard
+          </button>
+        </div>
+      )}
+
+      {/* Action confirmation modal */}
+      {actionModal && (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-gray-950/70 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-gray-900 p-5 shadow-2xl">
+            <h2 className="text-base font-semibold text-slate-100">
+              {actionModal.type === "hospital" ? "Move to Hospital" : "Move to Graveyard"}
+            </h2>
+            <p className="mt-1 text-xs text-slate-400 font-mono">{actionModal.pair}</p>
+
+            <div className="mt-4">
+              <label className="block text-xs font-medium text-slate-300 mb-1">
+                {actionModal.type === "hospital" ? "Cooldown Duration" : "Ban Duration"}
+              </label>
+              {actionModal.type === "hospital" ? (
+                <select
+                  className={UI_CLASSES.inputSmall + " w-full"}
+                  value={actionModal.cooldownSeconds}
+                  onChange={(e) => setActionModal((m) => m ? { ...m, cooldownSeconds: Number(e.target.value) } : m)}
+                >
+                  <option value={3600}>1 Hour</option>
+                  <option value={14400}>4 Hours</option>
+                  <option value={86400}>1 Day</option>
+                  <option value={604800}>1 Week</option>
+                </select>
+              ) : (
+                <select
+                  className={UI_CLASSES.inputSmall + " w-full"}
+                  value={actionModal.ttlDays ?? "permanent"}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setActionModal((m) => m ? { ...m, ttlDays: val === "permanent" ? null : Number(val) } : m);
+                  }}
+                >
+                  <option value={7}>1 Week</option>
+                  <option value={30}>1 Month</option>
+                  <option value="permanent">Permanent</option>
+                </select>
+              )}
+            </div>
+
+            {actionError && (
+              <p className="mt-3 text-xs text-rose-400">{actionError}</p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className={UI_CLASSES.secondaryButton}
+                disabled={actionSubmitting}
+                onClick={() => { setActionModal(null); setActionError(null); }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={actionSubmitting}
+                className={
+                  actionModal.type === "hospital"
+                    ? "inline-flex items-center rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-400 disabled:opacity-60"
+                    : "inline-flex items-center rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60"
+                }
+                onClick={() => void submitAction()}
+              >
+                {actionSubmitting ? "Saving…" : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success toast */}
+      {actionSuccess && (
+        <div className="fixed bottom-6 right-6 z-[9999] flex items-center gap-2 rounded-lg border border-emerald-700 bg-emerald-950 px-4 py-3 text-xs text-emerald-300 shadow-xl">
+          {actionSuccess}
+          <button type="button" className="ml-2 text-emerald-400 hover:text-white" onClick={() => setActionSuccess(null)}>✕</button>
+        </div>
+      )}
     </DashboardShell>
   );
 }
 
-function PairHistoryRow({ row, onOpen }: { row: PairSummary; onOpen: () => void }) {
+function PairHistoryRow({
+  row,
+  onOpenMenu,
+}: {
+  row: PairSummary;
+  onOpenMenu: (btnEl: HTMLButtonElement) => void;
+}) {
   return (
     <tr className="text-slate-300 transition hover:bg-white/[0.03]">
-      <td className="px-4 py-3 align-top">
+      <td className="px-2 py-1.5 align-top">
         <div className="font-medium text-slate-100">{row.pair}</div>
         {row.tags.length > 0 ? (
-          <div className="mt-2 flex max-w-[280px] flex-wrap gap-1.5">
+          <div className="mt-1 flex max-w-[180px] flex-wrap gap-1">
             {row.tags.map((tag) => (
               <StatusPill key={tag} label={tag.replaceAll("_", " ")} tone={tagTone(tag)} />
             ))}
@@ -638,33 +830,37 @@ function PairHistoryRow({ row, onOpen }: { row: PairSummary; onOpen: () => void 
           <div className="mt-1 text-xs text-slate-500">No tags</div>
         )}
       </td>
-      <td className={`px-4 py-3 align-top font-medium ${pnlClass(row.net_pnl_usdt)}`}>
+      <td className={`px-2 py-1.5 align-top font-medium ${pnlClass(row.net_pnl_usdt)}`}>
         {formatMoney(row.net_pnl_usdt)}
       </td>
-      <td className="px-4 py-3 align-top">{formatInteger(row.total_trades)}</td>
-      <td className="px-4 py-3 align-top">{formatPercent(row.win_rate)}</td>
-      <td className="px-4 py-3 align-top">{formatNumber(row.profit_factor)}</td>
-      <td className={`px-4 py-3 align-top ${pnlClass(row.max_drawdown_usdt)}`}>
+      <td className="px-2 py-1.5 align-top">{formatInteger(row.total_trades)}</td>
+      <td className="px-2 py-1.5 align-top">{formatPercent(row.win_rate)}</td>
+      <td className="px-2 py-1.5 align-top">{formatNumber(row.profit_factor)}</td>
+      <td className={`px-2 py-1.5 align-top ${pnlClass(row.max_drawdown_usdt)}`}>
         {formatMoney(row.max_drawdown_usdt)}
       </td>
-      <td className={`px-4 py-3 align-top ${pnlClass(row.best_trade?.pnl_usdt)}`}>
+      <td className={`px-2 py-1.5 align-top ${pnlClass(row.best_trade?.pnl_usdt)}`}>
         {formatMoney(row.best_trade?.pnl_usdt)}
       </td>
-      <td className={`px-4 py-3 align-top ${pnlClass(row.worst_trade?.pnl_usdt)}`}>
+      <td className={`px-2 py-1.5 align-top ${pnlClass(row.worst_trade?.pnl_usdt)}`}>
         {formatMoney(row.worst_trade?.pnl_usdt)}
       </td>
-      <td className="px-4 py-3 align-top">{formatDuration(row.avg_hold_seconds)}</td>
-      <td className="px-4 py-3 align-top">{formatNumber(row.avg_entry_z)}</td>
-      <td className="px-4 py-3 align-top">{formatNumber(row.avg_exit_z)}</td>
-      <td className="px-4 py-3 align-top">{formatNumber(row.avg_hedge_ratio, 4)}</td>
-      <td className="px-4 py-3 align-top">{formatPercent(row.avg_hedge_drift_pct)}</td>
-      <td className="px-4 py-3 align-top">
+      <td className="px-2 py-1.5 align-top">{formatDuration(row.avg_hold_seconds)}</td>
+      <td className="px-2 py-1.5 align-top">{formatNumber(row.avg_entry_z)}</td>
+      <td className="px-2 py-1.5 align-top">{formatNumber(row.avg_exit_z)}</td>
+      <td className="px-2 py-1.5 align-top">
         <StatusPill label={row.status ?? "n/a"} tone={statusTone(row.status)} />
       </td>
-      <td className="px-4 py-3 align-top">{formatTimestamp(row.last_traded_at)}</td>
-      <td className="px-4 py-3 align-top">
-        <button type="button" className={UI_CLASSES.secondaryButton} onClick={onOpen}>
-          Open Pair Detail
+      <td className="px-2 py-1.5 align-top">
+        <button
+          type="button"
+          className={`${UI_CLASSES.secondaryButton} inline-flex items-center gap-1`}
+          onClick={(e) => onOpenMenu(e.currentTarget)}
+        >
+          Actions
+          <svg aria-hidden="true" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+          </svg>
         </button>
       </td>
     </tr>

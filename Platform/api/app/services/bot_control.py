@@ -2868,3 +2868,86 @@ def remove_pair_from_graveyard(
         "requested_by": requested_by or "",
         "health": get_pair_health_data(),
     }
+
+
+_MANUAL_GRAVEYARD_REASON: dict[int | None, str] = {
+    7: "manual",
+    30: "orderbook_dead",
+    None: "compliance_restricted",
+}
+
+
+def add_pair_to_hospital(
+    pair: object = "",
+    cooldown_seconds: int = 3600,
+    reason: str = "manual",
+    requested_by: str | None = None,
+) -> dict:
+    """Manually add a pair to the hospital queue with a cooldown period."""
+    pair_key, _ = _graveyard_pair_keys_from_payload(pair=pair)
+    cooldown_seconds = max(1, int(cooldown_seconds))
+    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+    hospital = data.get("hospital", {})
+    if not isinstance(hospital, dict):
+        hospital = {}
+    existing = hospital.get(pair_key)
+    visits = int(existing.get("visits", 0) or 0) if isinstance(existing, dict) else 0
+    hospital[pair_key] = {
+        "ts": time.time(),
+        "cooldown": cooldown_seconds,
+        "reason": str(reason or "manual"),
+        "visits": visits + 1,
+    }
+    data["hospital"] = hospital
+    _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
+    _append_control_log(
+        "INFO",
+        f"Added pair to hospital: pair={pair_key} cooldown={cooldown_seconds}s by={requested_by or 'unknown'}",
+    )
+    return {
+        "ok": True,
+        "pair_key": pair_key,
+        "cooldown_seconds": cooldown_seconds,
+        "requested_by": requested_by or "",
+        "health": get_pair_health_data(),
+    }
+
+
+def add_pair_to_graveyard_manual(
+    pair: object = "",
+    ttl_days: int | None = 7,
+    requested_by: str | None = None,
+) -> dict:
+    """Manually move a pair to the graveyard with a configurable TTL."""
+    pair_key, _ = _graveyard_pair_keys_from_payload(pair=pair)
+    reason = _MANUAL_GRAVEYARD_REASON.get(ttl_days, "manual")
+    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+
+    graveyard = data.get("graveyard", {})
+    if not isinstance(graveyard, dict):
+        graveyard = {}
+    graveyard[pair_key] = {
+        "ts": time.time(),
+        "reason": reason,
+        "ttl_days": ttl_days,
+    }
+    data["graveyard"] = graveyard
+
+    hospital = data.get("hospital", {})
+    if isinstance(hospital, dict) and pair_key in hospital:
+        hospital.pop(pair_key, None)
+        data["hospital"] = hospital
+
+    _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
+    _append_control_log(
+        "INFO",
+        f"Added pair to graveyard (manual): pair={pair_key} ttl_days={ttl_days} reason={reason} by={requested_by or 'unknown'}",
+    )
+    return {
+        "ok": True,
+        "pair_key": pair_key,
+        "ttl_days": ttl_days,
+        "reason": reason,
+        "requested_by": requested_by or "",
+        "health": get_pair_health_data(),
+    }

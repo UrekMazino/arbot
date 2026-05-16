@@ -269,7 +269,14 @@ export default function PairDetailPage() {
       auth={auth}
       actions={
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={UI_CLASSES.secondaryButton} onClick={() => router.push("/admin/dashboard/pairs/history")}>
+          <button
+            type="button"
+            className={UI_CLASSES.secondaryButton}
+            onClick={() => router.push("/admin/dashboard/pairs/history")}
+          >
+            <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5l-7 5 7 5" />
+            </svg>
             Pair History
           </button>
           <button type="button" className={UI_CLASSES.secondaryButton} disabled={refreshing} onClick={() => void refreshAll()}>
@@ -278,6 +285,18 @@ export default function PairDetailPage() {
         </div>
       }
     >
+      <div className="mb-4">
+        <button
+          type="button"
+          onClick={() => router.push("/admin/dashboard/pairs/history")}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 transition hover:text-slate-100"
+        >
+          <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5l-7 5 7 5" />
+          </svg>
+          Back to Pair History
+        </button>
+      </div>
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
         <MetricCard label="Pair" value={pair} tone="sky" />
         <MetricCard label="Current Status" value={summary?.status ?? "n/a"} tone={statusTone === "error" ? "rose" : statusTone === "warn" ? "amber" : "teal"} />

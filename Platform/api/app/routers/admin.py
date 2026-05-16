@@ -12,6 +12,8 @@ from ..deps import get_current_user, get_db_session, get_user_permission_ids, re
 from ..models import User
 from ..services.bot_control import (
     ManualPairSwitchBlocked,
+    add_pair_to_hospital,
+    add_pair_to_graveyard_manual,
     build_report_run_zip,
     clear_active_pair,
     clear_logs_and_reports,
@@ -469,6 +471,43 @@ def admin_pair_detail_summary(
             start_ts=start_ts,
             end_ts=end_ts,
             refresh=refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/pairs/health/hospital")
+def admin_add_pair_to_hospital(
+    payload: dict = Body(default_factory=dict),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
+):
+    try:
+        return add_pair_to_hospital(
+            pair=payload.get("pair") or "",
+            cooldown_seconds=int(payload.get("cooldown_seconds") or 3600),
+            reason=str(payload.get("reason") or "manual"),
+            requested_by=user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.post("/pairs/health/graveyard")
+def admin_add_pair_to_graveyard(
+    payload: dict = Body(default_factory=dict),
+    user: User = Depends(require_permissions("manage_pair_supply", "manage_bot")),
+):
+    try:
+        ttl_raw = payload.get("ttl_days")
+        ttl_days = None if ttl_raw is None else int(ttl_raw)
+        return add_pair_to_graveyard_manual(
+            pair=payload.get("pair") or "",
+            ttl_days=ttl_days,
+            requested_by=user.email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

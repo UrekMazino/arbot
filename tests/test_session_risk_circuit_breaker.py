@@ -19,7 +19,7 @@ def test_disabled_config_preserves_current_entry_behavior():
     decision = evaluate_risk_circuit_breaker(
         RiskCircuitBreakerState(
             session_realized_pnl_usdt=-100.0,
-            consecutive_losses=99,
+            session_consecutive_losses=99,
             current_drawdown_usdt=-100.0,
         ),
         RiskCircuitBreakerConfig(),
@@ -47,7 +47,7 @@ def test_session_loss_limit_blocks_new_entry_and_emits_risk_payload():
 
 def test_consecutive_loss_limit_blocks_new_entry():
     decision = evaluate_risk_circuit_breaker(
-        RiskCircuitBreakerState(consecutive_losses=3),
+        RiskCircuitBreakerState(session_consecutive_losses=3),
         RiskCircuitBreakerConfig(max_consecutive_losses=3),
     )
 
@@ -71,7 +71,7 @@ def test_disable_entries_flag_can_observe_without_blocking_or_closing():
     decision = evaluate_risk_circuit_breaker(
         RiskCircuitBreakerState(
             session_realized_pnl_usdt=-6.0,
-            consecutive_losses=4,
+            session_consecutive_losses=4,
             current_drawdown_usdt=-12.0,
         ),
         RiskCircuitBreakerConfig(

@@ -1,40 +1,159 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# In-memory session state — resets automatically on each new process (run).
-# In "session" mode the circuit breaker uses these counters; in "persistent"
-# mode it reads from pair_strategy_state.json via get_consecutive_losses().
+# Session state persistence
+#
+# The subprocess manager sets STATBOT_RUN_ID before launching the bot and
+# preserves it across pair-switch restarts (sys.exit(3)).  We use that env var
+# as the persistence key so that a restarted process can detect it is the same
+# run and reload the session counters from disk instead of starting from zero.
+#
+# Tests redirect SESSION_RISK_STATE_FILE to a temp path via setup_module /
+# setup_method before any getter or setter is called.
 # ──────────────────────────────────────────────────────────────────────────────
 
-_session_run_id: str = str(uuid.uuid4())
+SESSION_RISK_STATE_FILE: Path = (
+    Path(__file__).resolve().parent / "state" / "session_risk_state.json"
+)
+
+
+def _stable_run_id() -> str:
+    """Return a run_id that is stable across pair-switch process restarts.
+
+    Uses STATBOT_RUN_ID set by the subprocess manager.  Falls back to a fresh
+    UUID when the env var is absent (local dev, tests).
+    """
+    env = os.getenv("STATBOT_RUN_ID", "").strip()
+    return env if env else str(uuid.uuid4())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# In-memory session state.
+# Values are initialised to zero and then potentially overwritten by
+# _load_session_state() immediately below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_session_run_id: str = _stable_run_id()
 _session_consecutive_losses: int = 0
 _session_realized_pnl_usdt: float = 0.0
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Disk I/O helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _load_session_state() -> None:
+    """Read persisted counters from SESSION_RISK_STATE_FILE if run_id matches.
+
+    Called automatically at module import and via reload_session_state() in
+    tests.  All errors are silently swallowed — a missing or corrupt file just
+    means we start from zero, which is always safe.
+    """
+    global _session_consecutive_losses, _session_realized_pnl_usdt
+    try:
+        path = SESSION_RISK_STATE_FILE
+        if not path.exists():
+            return
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("run_id") != _session_run_id:
+            return  # different run → do not inherit state
+        _session_consecutive_losses = int(data.get("session_consecutive_losses", 0))
+        _session_realized_pnl_usdt = float(data.get("session_realized_pnl_usdt", 0.0))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _save_session_state() -> None:
+    """Persist current counters to SESSION_RISK_STATE_FILE atomically.
+
+    Uses write-to-tmp-then-rename so a crash mid-write never leaves a corrupt
+    file.  Errors are swallowed: the circuit breaker always functions from its
+    in-memory state even if the disk write fails.
+    """
+    path = SESSION_RISK_STATE_FILE
+    payload = json.dumps(
+        {
+            "run_id": _session_run_id,
+            "session_consecutive_losses": _session_consecutive_losses,
+            "session_realized_pnl_usdt": _session_realized_pnl_usdt,
+            "updated_at": time.time(),
+        }
+    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".scb_tmp_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp_path, str(path))
+        except Exception:  # noqa: BLE001
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except Exception:  # noqa: BLE001
+        pass  # best-effort; in-memory state is still authoritative
+
+
+# Load persisted state immediately when the module is first imported.
+# In production the process start triggers this, restoring counters from the
+# previous pair-switch restart if the run_id matches.
+_load_session_state()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Public API
+# ──────────────────────────────────────────────────────────────────────────────
+
 def reset_session_circuit_breaker_state() -> None:
     """Reset all session-local counters and issue a new run ID.
 
-    Called automatically on process start (module load gives zero state).
+    Generates a fresh UUID run_id so the new session does not inherit any
+    persisted state from a prior run.  Removes the state file at the current
+    SESSION_RISK_STATE_FILE path so that a subsequent reload does not restore
+    stale values.
+
     Exposed for tests — do not call from production trade logic.
     """
     global _session_run_id, _session_consecutive_losses, _session_realized_pnl_usdt
     _session_run_id = str(uuid.uuid4())
     _session_consecutive_losses = 0
     _session_realized_pnl_usdt = 0.0
+    try:
+        if SESSION_RISK_STATE_FILE.exists():
+            SESSION_RISK_STATE_FILE.unlink()
+    except OSError:
+        pass
+
+
+def reload_session_state() -> None:
+    """Re-read persisted state from SESSION_RISK_STATE_FILE.
+
+    Exposed for tests to simulate a pair-switch process restart: after zeroing
+    the in-memory counters, calling this function restores them from disk the
+    same way a fresh module import would.
+    """
+    _load_session_state()
 
 
 def record_session_trade_result(is_win: bool, pnl_usdt: float = 0.0) -> None:
-    """Record a closed trade in session-local state.
+    """Record a closed trade result in session state and persist to disk.
 
-    Call this alongside record_trade_result() in func_pair_state so both
-    the persistent pair-blacklist counter and the session circuit breaker
-    counter stay in sync.
+    Call this alongside record_trade_result() in func_pair_state so both the
+    persistent pair-blacklist counter and the session circuit breaker counter
+    stay in sync.  The disk write is atomic so a concurrent restart cannot read
+    a half-written file.
     """
     global _session_consecutive_losses, _session_realized_pnl_usdt
     if is_win:
@@ -42,6 +161,7 @@ def record_session_trade_result(is_win: bool, pnl_usdt: float = 0.0) -> None:
     else:
         _session_consecutive_losses += 1
     _session_realized_pnl_usdt += float(pnl_usdt)
+    _save_session_state()
 
 
 def get_session_consecutive_losses() -> int:
@@ -122,8 +242,9 @@ class RiskCircuitBreakerConfig:
     max_consecutive_losses: int | None = None
     max_drawdown_usdt: float | None = None
     disable_entries_after_risk_stop: bool = True
-    # "session"    — counters reset on each process start (new run); default.
-    # "persistent" — counters accumulate across restarts via pair_strategy_state.json.
+    # "session"    — counters persist across pair-switch restarts within the
+    #                same run_id; reset at the start of a new run.
+    # "persistent" — counters accumulate across runs via pair_strategy_state.json.
     state_mode: str = "session"
 
     @classmethod
@@ -168,14 +289,15 @@ class RiskCircuitBreakerConfig:
 class RiskCircuitBreakerState:
     # Realized PnL accumulated from closed trades this session (in-memory sum).
     session_realized_pnl_usdt: float | None = None
-    # In-memory consecutive-loss counter — resets to 0 on process start.
+    # In-memory consecutive-loss counter — persisted across pair-switch restarts
+    # but resets to 0 when a new run_id is issued.
     session_consecutive_losses: int | None = None
-    # Persistent counter from pair_strategy_state.json — survives restarts.
+    # Persistent counter from pair_strategy_state.json — survives across runs.
     persistent_consecutive_losses: int | None = None
     # Equity-based drawdown for the drawdown rule (can be None if equity untrusted).
     current_drawdown_usdt: float | None = None
     equity_trusted: bool = True
-    # Run UUID assigned at process start; included in breach payloads.
+    # Run UUID included in breach payloads.
     run_id: str | None = None
 
 
@@ -258,8 +380,8 @@ def evaluate_risk_circuit_breaker(
             )
 
     # --- Consecutive losses ---
-    # In "session" mode use the in-memory counter (resets with each new run).
-    # In "persistent" mode use the counter read from pair_strategy_state.json.
+    # In "session" mode use the persisted-then-reloaded session counter.
+    # In "persistent" mode use the counter from pair_strategy_state.json.
     if config.state_mode == "persistent":
         effective_losses = _int_or_none(state.persistent_consecutive_losses)
         losses_source = "persistent"

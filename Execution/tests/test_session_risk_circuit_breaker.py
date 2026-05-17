@@ -1,4 +1,6 @@
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -16,6 +18,25 @@ from session_risk_circuit_breaker import (  # noqa: E402
     record_session_trade_result,
     reset_session_circuit_breaker_state,
 )
+
+# ── module-level state-file isolation ─────────────────────────────────────────
+# Redirect SESSION_RISK_STATE_FILE to a temp directory for the entire module so
+# tests never read from or write to the production state file.
+
+_orig_state_file = scb.SESSION_RISK_STATE_FILE
+_tmp_module_dir: Path | None = None
+
+
+def setup_module(_mod=None):
+    global _tmp_module_dir
+    _tmp_module_dir = Path(tempfile.mkdtemp())
+    scb.SESSION_RISK_STATE_FILE = _tmp_module_dir / "session_risk_state.json"
+
+
+def teardown_module(_mod=None):
+    scb.SESSION_RISK_STATE_FILE = _orig_state_file
+    if _tmp_module_dir and _tmp_module_dir.exists():
+        shutil.rmtree(_tmp_module_dir, ignore_errors=True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import time
@@ -5,8 +6,71 @@ from pathlib import Path
 
 _STATE_DIR = Path(__file__).resolve().parent / "state"
 STATE_FILE = _STATE_DIR / "pair_strategy_state.json"
+_STATE_LOCK_FILE = _STATE_DIR / "pair_strategy_state.json.lock"
 GRAVEYARD_TICKERS_FILE = _STATE_DIR / "graveyard_tickers.json"
 TICKER_GRAVEYARD_PREFIX = "ticker::"
+
+
+@contextlib.contextmanager
+def _state_file_lock(timeout: float = 8.0):
+    """Cross-process advisory lock for pair_strategy_state.json.
+
+    Uses O_CREAT|O_EXCL atomic creation so only one process/thread holds the
+    lock at a time.  Stale locks (process crashed mid-write) are removed after
+    *timeout* seconds and the caller retries once more.
+    """
+    _STATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(str(_STATE_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                # Stale lock — remove and retry once.
+                try:
+                    _STATE_LOCK_FILE.unlink()
+                except OSError:
+                    pass
+            else:
+                time.sleep(0.005)
+    try:
+        yield
+    finally:
+        try:
+            _STATE_LOCK_FILE.unlink()
+        except OSError:
+            pass
+
+
+def _merge_permanent_graveyard(state: dict, on_disk: dict) -> None:
+    """Preserve permanent graveyard entries (ttl_days=None) that the API service
+    wrote to disk while this process had stale in-memory state.
+
+    Only the one-way direction is applied: if a key exists on disk with
+    ttl_days=None and is absent from the caller's state, it was written by the
+    API after the caller's last load_pair_state() — add it so the write is not
+    silently overwritten.
+
+    Entries that exist only in the caller's state are always kept as-is; the
+    caller may have just created them itself.
+    """
+    disk_gvy = on_disk.get("graveyard", {})
+    if not isinstance(disk_gvy, dict):
+        return
+    caller_gvy = state.get("graveyard", {})
+    if not isinstance(caller_gvy, dict):
+        caller_gvy = {}
+
+    for key, disk_entry in disk_gvy.items():
+        if not isinstance(disk_entry, dict) or disk_entry.get("ttl_days") is not None:
+            continue  # only permanent entries participate in the merge
+        if key not in caller_gvy:
+            caller_gvy[key] = disk_entry
+
+    state["graveyard"] = caller_gvy
 
 # Pair history/hospital defaults
 DEFAULT_HISTORY_MIN_TRADES = 1
@@ -422,8 +486,18 @@ def load_pair_state():
 def save_pair_state(state):
     try:
         _STATE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f, indent=4)
+        with _state_file_lock():
+            # Re-read on-disk state to pull in permanent graveyard entries the
+            # API service may have written since our last load_pair_state().
+            if STATE_FILE.exists():
+                try:
+                    on_disk = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+                    if isinstance(on_disk, dict):
+                        _merge_permanent_graveyard(state, on_disk)
+                except Exception:
+                    pass
+            with open(STATE_FILE, "w") as f:
+                json.dump(state, f, indent=4)
     except Exception as e:
         print(f"Error saving pair state: {e}")
 
@@ -770,7 +844,12 @@ def add_to_graveyard(t1, t2, reason=""):
 
     reason_text = str(reason or "")
     existing_entry = graveyard.get(pair_key)
-    preserve_existing = reason_text.strip().lower() == "startup_invalid_pair" and existing_entry is not None
+    preserve_existing = (
+        # Never overwrite a startup-invalid sentinel.
+        (reason_text.strip().lower() == "startup_invalid_pair" and existing_entry is not None)
+        # Never downgrade a permanent (dashboard-set) entry to a TTL-based one.
+        or (isinstance(existing_entry, dict) and existing_entry.get("ttl_days") is None)
+    )
     if not preserve_existing:
         ttl_days = _graveyard_days_for_reason(reason_text)
         graveyard[pair_key] = {

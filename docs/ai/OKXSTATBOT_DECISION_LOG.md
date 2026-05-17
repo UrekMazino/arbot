@@ -1,0 +1,9 @@
+- Full TP now outranks partial TP.
+- ExitOrchestrator guard now aligns with trade-manager guard.
+- PnL profit lock added, disabled by default but enabled in controlled config.
+- Entry Safety Gate added, disabled by code default but enabled in controlled runtime.
+- Stop-loss trigger validation hardened.
+- Emergency flatten verification added.
+- Circuit breaker state split into session vs persistent.
+- Startup pair hospital/graveyard validation added.
+- Guard Floor Cost Calibration Audit and Apply Plan added to repo, but Apply Plan is not active yet.

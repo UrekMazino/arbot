@@ -567,6 +567,58 @@ EXIT_DECISION_TRACE_FIELDS = [
     "trade_manager_action",
     "trade_manager_reason",
     "why_full_tp_not_selected",
+    # ── Part A: opportunity-trace extensions ──────────────────────────────────
+    "run_id",
+    "entry_strategy",
+    "entry_regime",
+    "current_regime",
+    "abs_entry_z",
+    "abs_current_z",
+    "z_improvement_pct",
+    "floating_pnl_source",
+    "pair_state_mfe_usdt",
+    "advanced_trade_manager_mfe_usdt",
+    "position_snapshot_unrealized_pnl_usdt",
+    "effective_full_tp_floor_usdt",
+    "pnl_profit_lock_activation_buffer_usdt",
+    "pnl_profit_lock_activation_floor",
+    "pnl_profit_lock_should_have_activated",
+    "pnl_profit_lock_should_have_selected",
+    "pnl_profit_lock_shadow_floor",
+    "pnl_profit_lock_activation_reason",
+    "pnl_profit_lock_miss_reason",
+    "exit_candidate_selected",
+    # Z-zone booleans
+    "inside_z_1_50",
+    "inside_z_1_25",
+    "inside_z_1_00",
+    "inside_z_0_75",
+    "inside_z_0_50",
+    "inside_z_0_35",
+    # Per-zone guard pass
+    "z_1_50_guard_passed",
+    "z_1_25_guard_passed",
+    "z_1_00_guard_passed",
+    "z_0_75_guard_passed",
+    "z_0_50_guard_passed",
+    "z_0_35_guard_passed",
+    # ── Part B: shadow exit candidates ───────────────────────────────────────
+    "shadow_exit_z_1_50_would_trigger",
+    "shadow_exit_z_1_00_would_trigger",
+    "shadow_early_net_profit_capture_would_trigger",
+    "shadow_early_net_profit_capture_reason",
+    "shadow_profit_lock_exit_would_trigger",
+    "shadow_trend_mr_block_would_trigger",
+    "shadow_trend_mr_block_reason",
+    # ── Part D: PnL source audit ──────────────────────────────────────────────
+    "pnl_source_mismatch",
+    "pnl_source_mismatch_description",
+    "atm_mfe_vs_pair_state_mfe_delta",
+    # ── Part E: TREND/RISK_OFF MR shadow ─────────────────────────────────────
+    "statarb_mr_in_trend_regime",
+    "statarb_mr_in_risk_off_regime",
+    "trend_or_riskoff_block_would_have_blocked",
+    "trend_or_riskoff_block_reason",
 ]
 
 
@@ -582,6 +634,51 @@ EXIT_DECISION_SUMMARY_FIELDS = [
     "first_full_tp_guard_pass_time",
     "max_pnl_during_full_tp_zone",
     "z_at_max_pnl_during_full_tp_zone",
+]
+
+
+# Fields for Part C: exit_opportunity_summary.csv (one row per closed trade)
+EXIT_OPPORTUNITY_SUMMARY_FIELDS = [
+    "pair",
+    "entry_ts",
+    "entry_strategy",
+    "entry_regime",
+    "actual_exit_reason",
+    "actual_final_pnl_usdt",
+    "entry_z",
+    "max_favorable_pnl_usdt",
+    "max_adverse_pnl_usdt",
+    "eval_count",
+    "best_pnl_inside_z_1_50",
+    "best_pnl_inside_z_1_25",
+    "best_pnl_inside_z_1_00",
+    "best_pnl_inside_z_0_75",
+    "best_pnl_inside_z_0_50",
+    "best_pnl_inside_z_0_35",
+    "first_time_guard_passed_any_zone",
+    "first_zone_where_guard_passed",
+    "full_tp_guard_pass_count",
+    "did_real_full_tp_trigger",
+    "did_profit_lock_activate",
+    "did_profit_lock_select",
+    "should_profit_lock_have_activated",
+    "pnl_source_mismatch_detected",
+    "pnl_source_mismatch_description",
+    "atm_vs_pair_state_mfe_delta_max",
+    "shadow_exit_z_1_50_triggered",
+    "shadow_exit_z_1_50_first_pnl",
+    "shadow_exit_z_1_00_triggered",
+    "shadow_exit_z_1_00_first_pnl",
+    "shadow_early_net_profit_capture_triggered",
+    "shadow_early_net_profit_capture_first_pnl",
+    "shadow_profit_lock_exit_triggered",
+    "shadow_profit_lock_exit_first_pnl",
+    "shadow_trend_mr_block_would_have_blocked",
+    "best_shadow_exit_candidate",
+    "best_shadow_exit_pnl_usdt",
+    "actual_vs_best_shadow_delta_usdt",
+    "statarb_mr_in_trend_regime",
+    "statarb_mr_in_risk_off_regime",
 ]
 
 
@@ -633,6 +730,80 @@ def _build_exit_decision_trace_rows(rows: list[RunEvent]) -> list[dict]:
                 "trade_manager_action": str(payload.get("trade_manager_action") or "").strip(),
                 "trade_manager_reason": str(payload.get("trade_manager_reason") or "").strip(),
                 "why_full_tp_not_selected": str(payload.get("why_full_tp_not_selected") or "").strip(),
+                # Part A extensions
+                "run_id": str(payload.get("run_id") or "").strip(),
+                "entry_strategy": str(payload.get("entry_strategy") or "").strip(),
+                "entry_regime": str(payload.get("entry_regime") or "").strip(),
+                "current_regime": str(payload.get("current_regime") or "").strip(),
+                "abs_entry_z": _coerce_float(payload.get("abs_entry_z")),
+                "abs_current_z": _coerce_float(payload.get("abs_current_z")),
+                "z_improvement_pct": _coerce_float(payload.get("z_improvement_pct")),
+                "floating_pnl_source": str(payload.get("floating_pnl_source") or "").strip(),
+                "pair_state_mfe_usdt": _coerce_float(payload.get("pair_state_mfe_usdt")),
+                "advanced_trade_manager_mfe_usdt": _coerce_float(payload.get("advanced_trade_manager_mfe_usdt")),
+                "position_snapshot_unrealized_pnl_usdt": _coerce_float(
+                    payload.get("position_snapshot_unrealized_pnl_usdt")
+                ),
+                "effective_full_tp_floor_usdt": _coerce_float(payload.get("effective_full_tp_floor_usdt")),
+                "pnl_profit_lock_activation_buffer_usdt": _coerce_float(
+                    payload.get("pnl_profit_lock_activation_buffer_usdt")
+                ),
+                "pnl_profit_lock_activation_floor": _coerce_float(payload.get("pnl_profit_lock_activation_floor")),
+                "pnl_profit_lock_should_have_activated": _coerce_bool(
+                    payload.get("pnl_profit_lock_should_have_activated")
+                ),
+                "pnl_profit_lock_should_have_selected": _coerce_bool(
+                    payload.get("pnl_profit_lock_should_have_selected")
+                ),
+                "pnl_profit_lock_shadow_floor": _coerce_float(payload.get("pnl_profit_lock_shadow_floor")),
+                "pnl_profit_lock_activation_reason": str(
+                    payload.get("pnl_profit_lock_activation_reason") or ""
+                ).strip(),
+                "pnl_profit_lock_miss_reason": str(payload.get("pnl_profit_lock_miss_reason") or "").strip(),
+                "exit_candidate_selected": str(payload.get("exit_candidate_selected") or "").strip(),
+                # Z-zone booleans
+                "inside_z_1_50": _coerce_bool(payload.get("inside_z_1_50")),
+                "inside_z_1_25": _coerce_bool(payload.get("inside_z_1_25")),
+                "inside_z_1_00": _coerce_bool(payload.get("inside_z_1_00")),
+                "inside_z_0_75": _coerce_bool(payload.get("inside_z_0_75")),
+                "inside_z_0_50": _coerce_bool(payload.get("inside_z_0_50")),
+                "inside_z_0_35": _coerce_bool(payload.get("inside_z_0_35")),
+                # Per-zone guard pass
+                "z_1_50_guard_passed": _coerce_bool(payload.get("z_1_50_guard_passed")),
+                "z_1_25_guard_passed": _coerce_bool(payload.get("z_1_25_guard_passed")),
+                "z_1_00_guard_passed": _coerce_bool(payload.get("z_1_00_guard_passed")),
+                "z_0_75_guard_passed": _coerce_bool(payload.get("z_0_75_guard_passed")),
+                "z_0_50_guard_passed": _coerce_bool(payload.get("z_0_50_guard_passed")),
+                "z_0_35_guard_passed": _coerce_bool(payload.get("z_0_35_guard_passed")),
+                # Part B: shadow exit candidates
+                "shadow_exit_z_1_50_would_trigger": _coerce_bool(payload.get("shadow_exit_z_1_50_would_trigger")),
+                "shadow_exit_z_1_00_would_trigger": _coerce_bool(payload.get("shadow_exit_z_1_00_would_trigger")),
+                "shadow_early_net_profit_capture_would_trigger": _coerce_bool(
+                    payload.get("shadow_early_net_profit_capture_would_trigger")
+                ),
+                "shadow_early_net_profit_capture_reason": str(
+                    payload.get("shadow_early_net_profit_capture_reason") or ""
+                ).strip(),
+                "shadow_profit_lock_exit_would_trigger": _coerce_bool(
+                    payload.get("shadow_profit_lock_exit_would_trigger")
+                ),
+                "shadow_trend_mr_block_would_trigger": _coerce_bool(
+                    payload.get("shadow_trend_mr_block_would_trigger")
+                ),
+                "shadow_trend_mr_block_reason": str(payload.get("shadow_trend_mr_block_reason") or "").strip(),
+                # Part D: PnL source audit
+                "pnl_source_mismatch": _coerce_bool(payload.get("pnl_source_mismatch")),
+                "pnl_source_mismatch_description": str(
+                    payload.get("pnl_source_mismatch_description") or ""
+                ).strip(),
+                "atm_mfe_vs_pair_state_mfe_delta": _coerce_float(payload.get("atm_mfe_vs_pair_state_mfe_delta")),
+                # Part E: TREND/RISK_OFF MR shadow
+                "statarb_mr_in_trend_regime": _coerce_bool(payload.get("statarb_mr_in_trend_regime")),
+                "statarb_mr_in_risk_off_regime": _coerce_bool(payload.get("statarb_mr_in_risk_off_regime")),
+                "trend_or_riskoff_block_would_have_blocked": _coerce_bool(
+                    payload.get("trend_or_riskoff_block_would_have_blocked")
+                ),
+                "trend_or_riskoff_block_reason": str(payload.get("trend_or_riskoff_block_reason") or "").strip(),
             }
         )
     return output
@@ -708,6 +879,178 @@ def _build_exit_decision_summary_rows(rows: list[dict]) -> list[dict]:
                 "z_at_max_pnl_during_full_tp_zone": (
                     _coerce_float(max_zone_row.get("current_z")) if max_zone_row else None
                 ),
+            }
+        )
+    return output
+
+
+def _build_exit_opportunity_summary_rows(rows: list[dict]) -> list[dict]:
+    """Part C: one row per closed trade summarising opportunity and shadow exits."""
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        pair = str(row.get("pair") or "").strip()
+        entry_ts = str(row.get("entry_ts") or "").strip()
+        grouped[(pair, entry_ts)].append(row)
+
+    def _best_pnl_in_zone(trade_rows: list[dict], zone_key: str) -> float | None:
+        pnls = [
+            _coerce_float(r.get("floating_pnl_usdt"))
+            for r in trade_rows
+            if bool(r.get(zone_key))
+        ]
+        pnls = [p for p in pnls if p is not None]
+        return max(pnls) if pnls else None
+
+    def _first_trigger_pnl(trade_rows: list[dict], trigger_key: str) -> float | None:
+        for r in trade_rows:
+            if bool(r.get(trigger_key)):
+                return _coerce_float(r.get("floating_pnl_usdt"))
+        return None
+
+    output: list[dict] = []
+    for (pair, entry_ts), trade_rows in grouped.items():
+        # Actual exit row (last row with a full exit action)
+        exit_rows = [
+            r for r in trade_rows
+            if str(r.get("selected_exit_action") or "").strip().lower() == "full_exit"
+        ]
+        actual_exit_reason = str(exit_rows[-1].get("selected_candidate_name") or "").strip() if exit_rows else ""
+        actual_final_pnl = _coerce_float(exit_rows[-1].get("floating_pnl_usdt")) if exit_rows else None
+
+        # entry fields (from first row)
+        first_row = trade_rows[0] if trade_rows else {}
+        entry_z_val = _coerce_float(first_row.get("entry_z"))
+        entry_strategy = str(first_row.get("entry_strategy") or "").strip()
+        entry_regime = str(first_row.get("entry_regime") or "").strip()
+
+        # MFE / MAE across all evaluations
+        all_pnls = [_coerce_float(r.get("floating_pnl_usdt")) for r in trade_rows]
+        all_pnls = [p for p in all_pnls if p is not None]
+        max_mfe = max(all_pnls) if all_pnls else None
+        max_mae = min(all_pnls) if all_pnls else None
+
+        # Best PnL per Z zone
+        best_z150 = _best_pnl_in_zone(trade_rows, "inside_z_1_50")
+        best_z125 = _best_pnl_in_zone(trade_rows, "inside_z_1_25")
+        best_z100 = _best_pnl_in_zone(trade_rows, "inside_z_1_00")
+        best_z075 = _best_pnl_in_zone(trade_rows, "inside_z_0_75")
+        best_z050 = _best_pnl_in_zone(trade_rows, "inside_z_0_50")
+        best_z035 = _best_pnl_in_zone(trade_rows, "inside_z_0_35")
+
+        # First time guard passed in any zone
+        _zone_guard_keys = [
+            ("z_1_50_guard_passed", "inside_z_1_50"),
+            ("z_1_25_guard_passed", "inside_z_1_25"),
+            ("z_1_00_guard_passed", "inside_z_1_00"),
+            ("z_0_75_guard_passed", "inside_z_0_75"),
+            ("z_0_50_guard_passed", "inside_z_0_50"),
+            ("z_0_35_guard_passed", "inside_z_0_35"),
+        ]
+        first_guard_pass_time = None
+        first_guard_pass_zone = ""
+        for r in trade_rows:
+            for gkey, _ in _zone_guard_keys:
+                if bool(r.get(gkey)) and first_guard_pass_time is None:
+                    first_guard_pass_time = str(r.get("timestamp") or "").strip()
+                    first_guard_pass_zone = gkey.replace("_guard_passed", "")
+                    break
+            if first_guard_pass_time:
+                break
+
+        guard_pass_count = sum(1 for r in trade_rows if bool(r.get("full_tp_guard_passed")))
+        did_full_tp = any(bool(r.get("full_tp_selected")) for r in trade_rows)
+        did_lock_activate = any(bool(r.get("pnl_profit_lock_active")) for r in trade_rows)
+        did_lock_select = any(bool(r.get("pnl_profit_lock_selected")) for r in trade_rows)
+        should_lock_have = any(bool(r.get("pnl_profit_lock_should_have_activated")) for r in trade_rows)
+
+        # PnL source mismatch
+        mismatch_detected = any(bool(r.get("pnl_source_mismatch")) for r in trade_rows)
+        mismatch_desc = ""
+        for r in trade_rows:
+            if bool(r.get("pnl_source_mismatch")):
+                mismatch_desc = str(r.get("pnl_source_mismatch_description") or "").strip()
+                break
+        delta_vals = [
+            _coerce_float(r.get("atm_mfe_vs_pair_state_mfe_delta"))
+            for r in trade_rows
+            if _coerce_float(r.get("atm_mfe_vs_pair_state_mfe_delta")) is not None
+        ]
+        max_mfe_delta = max((abs(d) for d in delta_vals), default=None)
+
+        # Shadow triggers — first PnL captured when trigger fires
+        sh_z150 = any(bool(r.get("shadow_exit_z_1_50_would_trigger")) for r in trade_rows)
+        sh_z150_pnl = _first_trigger_pnl(trade_rows, "shadow_exit_z_1_50_would_trigger")
+        sh_z100 = any(bool(r.get("shadow_exit_z_1_00_would_trigger")) for r in trade_rows)
+        sh_z100_pnl = _first_trigger_pnl(trade_rows, "shadow_exit_z_1_00_would_trigger")
+        sh_early = any(bool(r.get("shadow_early_net_profit_capture_would_trigger")) for r in trade_rows)
+        sh_early_pnl = _first_trigger_pnl(trade_rows, "shadow_early_net_profit_capture_would_trigger")
+        sh_lock = any(bool(r.get("shadow_profit_lock_exit_would_trigger")) for r in trade_rows)
+        sh_lock_pnl = _first_trigger_pnl(trade_rows, "shadow_profit_lock_exit_would_trigger")
+        sh_trend_block = any(bool(r.get("shadow_trend_mr_block_would_trigger")) for r in trade_rows)
+
+        # Best shadow exit: whichever first-trigger PnL is highest
+        _candidates: list[tuple[str, float]] = []
+        for name, pnl_val in [
+            ("shadow_exit_z_1_50", sh_z150_pnl),
+            ("shadow_exit_z_1_00", sh_z100_pnl),
+            ("shadow_early_net_profit_capture", sh_early_pnl),
+            ("shadow_profit_lock_exit", sh_lock_pnl),
+        ]:
+            if pnl_val is not None:
+                _candidates.append((name, pnl_val))
+        best_shadow_name = ""
+        best_shadow_pnl: float | None = None
+        if _candidates:
+            best_shadow_name, best_shadow_pnl = max(_candidates, key=lambda t: t[1])
+        actual_vs_shadow_delta: float | None = None
+        if actual_final_pnl is not None and best_shadow_pnl is not None:
+            actual_vs_shadow_delta = round(actual_final_pnl - best_shadow_pnl, 6)
+
+        statarb_in_trend = any(bool(r.get("statarb_mr_in_trend_regime")) for r in trade_rows)
+        statarb_in_riskoff = any(bool(r.get("statarb_mr_in_risk_off_regime")) for r in trade_rows)
+
+        output.append(
+            {
+                "pair": pair,
+                "entry_ts": entry_ts,
+                "entry_strategy": entry_strategy,
+                "entry_regime": entry_regime,
+                "actual_exit_reason": actual_exit_reason,
+                "actual_final_pnl_usdt": actual_final_pnl,
+                "entry_z": entry_z_val,
+                "max_favorable_pnl_usdt": max_mfe,
+                "max_adverse_pnl_usdt": max_mae,
+                "eval_count": len(trade_rows),
+                "best_pnl_inside_z_1_50": best_z150,
+                "best_pnl_inside_z_1_25": best_z125,
+                "best_pnl_inside_z_1_00": best_z100,
+                "best_pnl_inside_z_0_75": best_z075,
+                "best_pnl_inside_z_0_50": best_z050,
+                "best_pnl_inside_z_0_35": best_z035,
+                "first_time_guard_passed_any_zone": first_guard_pass_time or "",
+                "first_zone_where_guard_passed": first_guard_pass_zone,
+                "full_tp_guard_pass_count": guard_pass_count,
+                "did_real_full_tp_trigger": did_full_tp,
+                "did_profit_lock_activate": did_lock_activate,
+                "did_profit_lock_select": did_lock_select,
+                "should_profit_lock_have_activated": should_lock_have,
+                "pnl_source_mismatch_detected": mismatch_detected,
+                "pnl_source_mismatch_description": mismatch_desc,
+                "atm_vs_pair_state_mfe_delta_max": max_mfe_delta,
+                "shadow_exit_z_1_50_triggered": sh_z150,
+                "shadow_exit_z_1_50_first_pnl": sh_z150_pnl,
+                "shadow_exit_z_1_00_triggered": sh_z100,
+                "shadow_exit_z_1_00_first_pnl": sh_z100_pnl,
+                "shadow_early_net_profit_capture_triggered": sh_early,
+                "shadow_early_net_profit_capture_first_pnl": sh_early_pnl,
+                "shadow_profit_lock_exit_triggered": sh_lock,
+                "shadow_profit_lock_exit_first_pnl": sh_lock_pnl,
+                "shadow_trend_mr_block_would_have_blocked": sh_trend_block,
+                "best_shadow_exit_candidate": best_shadow_name,
+                "best_shadow_exit_pnl_usdt": best_shadow_pnl,
+                "actual_vs_best_shadow_delta_usdt": actual_vs_shadow_delta,
+                "statarb_mr_in_trend_regime": statarb_in_trend,
+                "statarb_mr_in_risk_off_regime": statarb_in_riskoff,
             }
         )
     return output
@@ -882,6 +1225,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     ).scalars().all()
     exit_decision_trace_rows = _build_exit_decision_trace_rows(exit_decision_trace_events)
     exit_decision_summary_rows = _build_exit_decision_summary_rows(exit_decision_trace_rows)
+    exit_opportunity_summary_rows = _build_exit_opportunity_summary_rows(exit_decision_trace_rows)
 
     wins = 0
     losses = 0
@@ -1082,6 +1426,7 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
     risk_alerts_path = report_dir / "risk_alerts.csv"
     exit_decision_trace_path = report_dir / "exit_decision_trace.csv"
     exit_decision_summary_path = report_dir / "exit_decision_summary.csv"
+    exit_opportunity_summary_path = report_dir / "exit_opportunity_summary.csv"
     manifest_path = report_dir / "report_manifest.json"
 
     _write_csv(
@@ -1383,6 +1728,12 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
         artifact_entries.append(_artifact(exit_decision_summary_path, "csv", len(exit_decision_summary_rows)))
     else:
         _remove_if_exists(exit_decision_summary_path)
+
+    if exit_opportunity_summary_rows:
+        _write_csv(exit_opportunity_summary_path, exit_opportunity_summary_rows, EXIT_OPPORTUNITY_SUMMARY_FIELDS)
+        artifact_entries.append(_artifact(exit_opportunity_summary_path, "csv", len(exit_opportunity_summary_rows)))
+    else:
+        _remove_if_exists(exit_opportunity_summary_path)
 
     manifest_path.write_text(
         json.dumps(

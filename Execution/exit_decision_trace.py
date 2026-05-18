@@ -69,6 +69,27 @@ def _candidate_metadata(candidate: Any) -> Mapping[str, Any]:
     return metadata if isinstance(metadata, Mapping) else {}
 
 
+# ── Shadow candidate evaluation ───────────────────────────────────────────────
+
+_SHADOW_Z_ZONES = {
+    "inside_z_1_50": 1.50,
+    "inside_z_1_25": 1.25,
+    "inside_z_1_00": 1.00,
+    "inside_z_0_75": 0.75,
+    "inside_z_0_50": 0.50,
+    "inside_z_0_35": 0.35,
+}
+
+_SHADOW_GUARD_KEYS = {
+    "inside_z_1_50": "z_1_50_guard_passed",
+    "inside_z_1_25": "z_1_25_guard_passed",
+    "inside_z_1_00": "z_1_00_guard_passed",
+    "inside_z_0_75": "z_0_75_guard_passed",
+    "inside_z_0_50": "z_0_50_guard_passed",
+    "inside_z_0_35": "z_0_35_guard_passed",
+}
+
+
 def build_exit_decision_trace_payload(
     *,
     timestamp: float,
@@ -80,6 +101,16 @@ def build_exit_decision_trace_payload(
     trade_state: Any,
     trade_manager_result: Mapping[str, Any] | None,
     exit_decision: Any,
+    # ── Opportunity diagnostics context (all optional for backward compat) ──
+    run_id: str | None = None,
+    entry_strategy: str | None = None,
+    entry_regime: str | None = None,
+    current_regime: str | None = None,
+    pair_state_mfe_usdt: float | None = None,
+    position_snapshot_unrealized_pnl_usdt: float | None = None,
+    floating_pnl_source: str | None = None,
+    current_break_risk: float | None = None,
+    coint_flag: int | None = None,
 ) -> dict[str, Any]:
     """Build read-only exit diagnostics without mutating trade-manager state."""
 
@@ -242,7 +273,162 @@ def build_exit_decision_trace_payload(
     else:
         why_full_tp_not_selected = "no_exit_selected"
 
+    # ── Part A: Z-improvement and source fields ───────────────────────────────
+    entry_z_val = _finite_float(_mapping_get(trade_state, "entry_z"))
+    abs_entry_z = abs(entry_z_val) if entry_z_val is not None else None
+    abs_current_z = abs(z) if z is not None else None
+    z_improvement_pct: float | None = None
+    if abs_entry_z is not None and abs_current_z is not None and abs_entry_z > 0:
+        z_improvement_pct = round((abs_entry_z - abs_current_z) / abs_entry_z * 100.0, 4)
+
+    atm_mfe_usdt = max_favorable_pnl  # AdvancedTradeManager MFE (same source, alias)
+    ps_mfe_usdt = _finite_float(pair_state_mfe_usdt)
+
+    # ── Part A: Profit-lock should-have analysis ──────────────────────────────
+    activation_buffer = _finite_float(config.get("pnl_profit_lock_activation_buffer_usdt"), 0.05) or 0.05
+    min_lock_usdt = _finite_float(config.get("pnl_profit_lock_min_lock_usdt"), 0.0) or 0.0
+    pnl_lock_activation_floor = full_tp_effective_min + activation_buffer
+
+    pnl_profit_lock_should_have_activated = bool(
+        pnl_profit_lock_enabled
+        and max_favorable_pnl is not None
+        and pnl is not None
+        and max_favorable_pnl >= pnl_lock_activation_floor
+    )
+
+    pnl_profit_lock_shadow_floor: float | None = None
+    if pnl_profit_lock_should_have_activated and max_favorable_pnl is not None:
+        gvb = pnl_profit_lock_giveback_pct if pnl_profit_lock_giveback_pct is not None else 0.50
+        pnl_profit_lock_shadow_floor = max(
+            full_tp_effective_min,
+            min_lock_usdt,
+            max_favorable_pnl * (1.0 - gvb),
+        )
+
+    pnl_profit_lock_should_have_selected = bool(
+        pnl_profit_lock_should_have_activated
+        and pnl is not None
+        and pnl_profit_lock_shadow_floor is not None
+        and pnl <= pnl_profit_lock_shadow_floor
+    )
+
+    if not pnl_profit_lock_enabled:
+        pnl_profit_lock_activation_reason = "disabled"
+    elif max_favorable_pnl is None or pnl is None:
+        pnl_profit_lock_activation_reason = "pnl_unavailable"
+    elif max_favorable_pnl >= pnl_lock_activation_floor:
+        pnl_profit_lock_activation_reason = (
+            f"mfe={max_favorable_pnl:.4f}_ge_floor={pnl_lock_activation_floor:.4f}"
+        )
+    else:
+        pnl_profit_lock_activation_reason = (
+            f"mfe={max_favorable_pnl:.4f}_lt_floor={pnl_lock_activation_floor:.4f}"
+        )
+
+    pnl_profit_lock_miss_reason = ""
+    if pnl_profit_lock_should_have_activated and not pnl_profit_lock_active:
+        pnl_profit_lock_miss_reason = "active_flag_not_set_in_trade_state"
+    elif pnl_profit_lock_should_have_selected and not pnl_profit_lock_selected:
+        _sf = pnl_profit_lock_shadow_floor
+        _sfstr = f"{_sf:.4f}" if _sf is not None else "?"
+        _pstr = f"{pnl:.4f}" if pnl is not None else "?"
+        pnl_profit_lock_miss_reason = f"should_select_pnl={_pstr}_le_floor={_sfstr}_but_not_selected"
+
+    # ── Part A: Z-zone booleans and per-zone guard-pass ───────────────────────
+    _shadow_guard_floor = max(full_tp_effective_min, 0.0)
+    z_zone_results: dict[str, bool] = {}
+    z_guard_results: dict[str, bool] = {}
+    for zone_key, threshold in _SHADOW_Z_ZONES.items():
+        inside = bool(z is not None and abs(z) <= threshold)
+        guard_ok = bool(inside and pnl is not None and pnl >= _shadow_guard_floor)
+        z_zone_results[zone_key] = inside
+        guard_key = _SHADOW_GUARD_KEYS[zone_key]
+        z_guard_results[guard_key] = guard_ok
+
+    # ── Part B: Shadow exit candidates (diagnostic only, never executed) ──────
+    shadow_exit_z_1_50_would_trigger = bool(
+        z is not None and pnl is not None and abs(z) <= 1.50 and pnl >= _shadow_guard_floor
+    )
+    shadow_exit_z_1_00_would_trigger = bool(
+        z is not None and pnl is not None and abs(z) <= 1.00 and pnl >= _shadow_guard_floor
+    )
+
+    # shadow_early_net_profit_capture: profit above floor + z improved 30% + at least one quality signal
+    _z_improved_30 = z_improvement_pct is not None and z_improvement_pct >= 30.0
+    _pnl_above_guard = pnl is not None and pnl >= _shadow_guard_floor
+    _coint_weakening = coint_flag is not None and int(coint_flag) == 0
+    _mfe_giveback = (
+        max_favorable_pnl is not None
+        and pnl is not None
+        and max_favorable_pnl > 0.0
+        and pnl < max_favorable_pnl * 0.70
+    )
+    _break_risk_elevated = current_break_risk is not None and _finite_float(current_break_risk, 0.0) > 0.10
+    _regime_adverse = str(current_regime or "").strip().upper() in ("TREND", "RISK_OFF")
+    _any_quality_signal = _coint_weakening or _mfe_giveback or _break_risk_elevated or _regime_adverse
+    shadow_early_net_profit_capture_would_trigger = bool(
+        _z_improved_30 and _pnl_above_guard and _any_quality_signal
+    )
+    _early_parts: list[str] = []
+    if _coint_weakening:
+        _early_parts.append("coint_lost")
+    if _mfe_giveback:
+        _early_parts.append("mfe_giveback")
+    if _break_risk_elevated:
+        _early_parts.append("break_risk_high")
+    if _regime_adverse:
+        _early_parts.append(f"regime_{str(current_regime or '').strip().upper()}")
+    shadow_early_net_profit_capture_reason = "+".join(_early_parts) if _early_parts else ""
+
+    # shadow_profit_lock_exit: lock should be active but isn't — and PnL would have triggered it
+    shadow_profit_lock_exit_would_trigger = bool(
+        pnl_profit_lock_should_have_activated
+        and pnl_profit_lock_shadow_floor is not None
+        and pnl is not None
+        and pnl <= pnl_profit_lock_shadow_floor
+        and not pnl_profit_lock_active
+    )
+
+    # shadow_trend_mr_block: STATARB_MR entered in TREND/RISK_OFF (entry would have been blocked)
+    _strategy_upper = str(entry_strategy or "").strip().upper()
+    _entry_regime_upper = str(entry_regime or "").strip().upper()
+    _in_trend = _entry_regime_upper == "TREND"
+    _in_risk_off = _entry_regime_upper == "RISK_OFF"
+    shadow_trend_mr_block_would_trigger = bool(_strategy_upper == "STATARB_MR" and (_in_trend or _in_risk_off))
+    shadow_trend_mr_block_reason = (
+        f"STATARB_MR_in_{_entry_regime_upper}" if shadow_trend_mr_block_would_trigger else ""
+    )
+
+    # ── Part D: PnL source consistency audit ──────────────────────────────────
+    atm_mfe_vs_pair_state_mfe_delta: float | None = None
+    pnl_source_mismatch = False
+    pnl_source_mismatch_description = ""
+    if atm_mfe_usdt is not None and ps_mfe_usdt is not None:
+        atm_mfe_vs_pair_state_mfe_delta = round(atm_mfe_usdt - ps_mfe_usdt, 6)
+        if abs(atm_mfe_vs_pair_state_mfe_delta) > 0.001:
+            pnl_source_mismatch = True
+            pnl_source_mismatch_description = (
+                f"ATM_MFE={atm_mfe_usdt:.4f} pair_state_MFE={ps_mfe_usdt:.4f} "
+                f"delta={atm_mfe_vs_pair_state_mfe_delta:.4f}"
+            )
+
+    pos_snap_pnl = _finite_float(position_snapshot_unrealized_pnl_usdt)
+    if not pnl_source_mismatch and pnl is not None and pos_snap_pnl is not None:
+        _snap_delta = abs(pnl - pos_snap_pnl)
+        if _snap_delta > 0.01:
+            pnl_source_mismatch = True
+            pnl_source_mismatch_description = (
+                f"floating_pnl={pnl:.4f} position_snapshot={pos_snap_pnl:.4f} "
+                f"delta={pnl - pos_snap_pnl:.4f}"
+            )
+
+    # ── Part E: TREND/RISK_OFF MR shadow block ────────────────────────────────
+    statarb_mr_in_trend_regime = bool(_strategy_upper == "STATARB_MR" and _entry_regime_upper == "TREND")
+    statarb_mr_in_risk_off_regime = bool(_strategy_upper == "STATARB_MR" and _entry_regime_upper == "RISK_OFF")
+    trend_or_riskoff_block_would_have_blocked = shadow_trend_mr_block_would_trigger
+
     return {
+        # ── Existing fields (unchanged) ───────────────────────────────────────
         "timestamp": timestamp,
         "pair": str(pair or "").strip(),
         "entry_ts": _mapping_get(trade_state, "entry_time"),
@@ -281,6 +467,47 @@ def build_exit_decision_trace_payload(
         "trade_manager_action": tm_action,
         "trade_manager_reason": tm_reason,
         "why_full_tp_not_selected": why_full_tp_not_selected,
+        # ── Part A: new opportunity-trace fields ──────────────────────────────
+        "run_id": str(run_id or "").strip(),
+        "entry_strategy": str(entry_strategy or "").strip(),
+        "entry_regime": _entry_regime_upper,
+        "current_regime": str(current_regime or "").strip().upper(),
+        "abs_entry_z": abs_entry_z,
+        "abs_current_z": abs_current_z,
+        "z_improvement_pct": z_improvement_pct,
+        "floating_pnl_source": str(floating_pnl_source or "").strip(),
+        "pair_state_mfe_usdt": ps_mfe_usdt,
+        "advanced_trade_manager_mfe_usdt": atm_mfe_usdt,
+        "position_snapshot_unrealized_pnl_usdt": pos_snap_pnl,
+        "effective_full_tp_floor_usdt": full_tp_effective_min,
+        "pnl_profit_lock_activation_buffer_usdt": activation_buffer,
+        "pnl_profit_lock_activation_floor": pnl_lock_activation_floor,
+        "pnl_profit_lock_should_have_activated": pnl_profit_lock_should_have_activated,
+        "pnl_profit_lock_should_have_selected": pnl_profit_lock_should_have_selected,
+        "pnl_profit_lock_shadow_floor": pnl_profit_lock_shadow_floor,
+        "pnl_profit_lock_activation_reason": pnl_profit_lock_activation_reason,
+        "pnl_profit_lock_miss_reason": pnl_profit_lock_miss_reason,
+        "exit_candidate_selected": selected_candidate,
+        # ── Part A: Z-zone booleans ───────────────────────────────────────────
+        **z_zone_results,
+        **z_guard_results,
+        # ── Part B: shadow exit candidates ───────────────────────────────────
+        "shadow_exit_z_1_50_would_trigger": shadow_exit_z_1_50_would_trigger,
+        "shadow_exit_z_1_00_would_trigger": shadow_exit_z_1_00_would_trigger,
+        "shadow_early_net_profit_capture_would_trigger": shadow_early_net_profit_capture_would_trigger,
+        "shadow_early_net_profit_capture_reason": shadow_early_net_profit_capture_reason,
+        "shadow_profit_lock_exit_would_trigger": shadow_profit_lock_exit_would_trigger,
+        "shadow_trend_mr_block_would_trigger": shadow_trend_mr_block_would_trigger,
+        "shadow_trend_mr_block_reason": shadow_trend_mr_block_reason,
+        # ── Part D: PnL source audit ──────────────────────────────────────────
+        "pnl_source_mismatch": pnl_source_mismatch,
+        "pnl_source_mismatch_description": pnl_source_mismatch_description,
+        "atm_mfe_vs_pair_state_mfe_delta": atm_mfe_vs_pair_state_mfe_delta,
+        # ── Part E: TREND/RISK_OFF MR shadow block ────────────────────────────
+        "statarb_mr_in_trend_regime": statarb_mr_in_trend_regime,
+        "statarb_mr_in_risk_off_regime": statarb_mr_in_risk_off_regime,
+        "trend_or_riskoff_block_would_have_blocked": trend_or_riskoff_block_would_have_blocked,
+        "trend_or_riskoff_block_reason": shadow_trend_mr_block_reason,
     }
 
 

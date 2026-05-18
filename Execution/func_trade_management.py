@@ -3812,9 +3812,11 @@ def monitor_exit(
         get_coint_lost_confirm_count,
         get_entry_equity,
         get_entry_notional,
+        get_entry_regime,
         get_entry_strategy,
         get_entry_time,
         get_entry_z_score,
+        get_trade_mae_mfe_snapshot,
         set_coint_lost_confirm_count,
         set_coint_lost_since_ts,
     )
@@ -3857,6 +3859,7 @@ def monitor_exit(
     entry_time = get_entry_time()
     entry_notional = get_entry_notional()
     entry_strategy = get_entry_strategy()
+    entry_regime = get_entry_regime()
     try:
         entry_notional_val = float(entry_notional)
         if entry_notional_val <= 0:
@@ -4344,6 +4347,15 @@ def monitor_exit(
     if isinstance(tm_result, dict):
         trace_ts = time.time()
         try:
+            _trace_current_regime = str(
+                _decision_get(regime_decision, "regime", "") or ""
+            ).strip().upper()
+            _trace_pnl_source = (
+                "equity_delta"
+                if entry_equity is not None and floating_pnl_usdt != total_unrealized_pnl
+                else "position_unrealized"
+            )
+            _trace_mae_mfe = get_trade_mae_mfe_snapshot()
             emit_event(
                 "exit_decision_trace",
                 payload=build_exit_decision_trace_payload(
@@ -4356,6 +4368,15 @@ def monitor_exit(
                     trade_state=trade_manager.trade_state,
                     trade_manager_result=tm_result,
                     exit_decision=exit_decision,
+                    run_id=os.getenv("STATBOT_RUN_ID", ""),
+                    entry_strategy=str(entry_strategy or "").strip(),
+                    entry_regime=str(entry_regime or "").strip(),
+                    current_regime=_trace_current_regime,
+                    pair_state_mfe_usdt=_trace_mae_mfe.get("max_favorable_pnl_usdt"),
+                    position_snapshot_unrealized_pnl_usdt=total_unrealized_pnl,
+                    floating_pnl_source=_trace_pnl_source,
+                    current_break_risk=_finite_float(metrics.get("break_risk")),
+                    coint_flag=int(coint_flag) if coint_flag is not None else None,
                 ),
                 severity="info",
                 logger=logger,

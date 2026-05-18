@@ -24,6 +24,7 @@ def _config(**overrides):
         "block_risk_off_thin_liquidity": True,
         "block_risk_off_vol_shock": True,
         "block_trending_ml": True,
+        "block_statarb_mr_in_trend": True,
         "max_break_risk": 0.12,
         "cointegration_watch_cooldown_seconds": 1800.0,
         "cointegration_lost_cooldown_seconds": 3600.0,
@@ -240,3 +241,125 @@ def test_entry_safety_gate_emit_event_contains_reason(monkeypatch):
     assert captured["severity"] == "warn"
     assert captured["payload"]["reason"] == "cointegration_component_below_threshold"
     assert captured["payload"]["entry_gate_block_reason"] == "cointegration_component_below_threshold"
+
+
+# ---------------------------------------------------------------------------
+# Patch 4 — Regime-Aligned Mean Reversion Safety (STATARB_MR + TREND block)
+# ---------------------------------------------------------------------------
+
+def _trend_regime():
+    return SimpleNamespace(regime="TREND", reason_codes=["trend_continuation"])
+
+
+def _range_regime():
+    return SimpleNamespace(regime="RANGE", reason_codes=[])
+
+
+def _statarb_mr_strategy():
+    return SimpleNamespace(active_strategy="STATARB_MR", desired_strategy="STATARB_MR", reason_codes=[])
+
+
+def _other_strategy(name="TREND_SPREAD"):
+    return SimpleNamespace(active_strategy=name, desired_strategy=name, reason_codes=[])
+
+
+def test_statarb_mr_in_trend_is_blocked():
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    assert not decision.passed
+    assert "statarb_mr_trend_regime_block" in decision.reasons
+    assert decision.reason == "statarb_mr_trend_regime_block"
+
+
+def test_statarb_mr_in_range_is_not_blocked_by_trend_rule():
+    decision = _decision(
+        regime_decision=_range_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    assert decision.passed
+
+
+def test_statarb_mr_in_risk_off_is_not_blocked_by_trend_rule():
+    regime = SimpleNamespace(regime="RISK_OFF", reason_codes=[])
+    decision = _decision(
+        config=_config(block_risk_off_thin_liquidity=False, block_risk_off_vol_shock=False),
+        regime_decision=regime,
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    assert decision.passed
+    assert "statarb_mr_trend_regime_block" not in decision.reasons
+
+
+def test_non_mr_strategy_in_trend_is_not_blocked_by_trend_rule():
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_other_strategy("DEFENSIVE"),
+    )
+    assert decision.passed
+    assert "statarb_mr_trend_regime_block" not in decision.reasons
+
+
+def test_statarb_mr_trend_block_respects_config_flag_false():
+    decision = _decision(
+        config=_config(block_statarb_mr_in_trend=False),
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    assert decision.passed
+    assert "statarb_mr_trend_regime_block" not in decision.reasons
+
+
+def test_statarb_mr_trend_block_metadata_fields():
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    payload = decision.to_payload()
+    assert payload.get("statarb_mr_trend_blocked") is True
+    assert payload.get("blocked_regime") == "TREND"
+
+
+def test_statarb_mr_trend_block_no_metadata_when_not_blocked():
+    decision = _decision(
+        regime_decision=_range_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    payload = decision.to_payload()
+    assert "statarb_mr_trend_blocked" not in payload
+    assert "blocked_regime" not in payload
+
+
+def test_statarb_mr_trend_block_config_in_thresholds_payload():
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    payload = decision.to_payload()
+    thresholds = payload.get("config_thresholds", {})
+    assert "block_statarb_mr_in_trend" in thresholds
+    assert thresholds["block_statarb_mr_in_trend"] is True
+
+
+def test_statarb_mr_trend_block_does_not_affect_other_gate_checks():
+    # Cointegration failure should still fire independently of the TREND block
+    decision = _decision(
+        config=_config(block_statarb_mr_in_trend=False),
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+        quality_decision=_quality(cointegration=5.0),
+    )
+    assert not decision.passed
+    assert "cointegration_component_below_threshold" in decision.reasons
+    assert "statarb_mr_trend_regime_block" not in decision.reasons
+
+
+def test_statarb_mr_trend_block_disabled_gate_not_blocked():
+    decision = _decision(
+        config=_config(enabled=False),
+        regime_decision=_trend_regime(),
+        strategy_decision=_statarb_mr_strategy(),
+    )
+    assert decision.passed
+    assert decision.reason == "entry_safety_gate_disabled"

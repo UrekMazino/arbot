@@ -77,6 +77,7 @@ class EntrySafetyGateConfig:
     block_risk_off_thin_liquidity: bool = True
     block_risk_off_vol_shock: bool = True
     block_trending_ml: bool = True
+    block_statarb_mr_in_trend: bool = True
     max_break_risk: float = 0.12
     cointegration_watch_cooldown_seconds: float = 1800.0
     cointegration_lost_cooldown_seconds: float = 3600.0
@@ -109,6 +110,7 @@ class EntrySafetyGateConfig:
                 True,
             ),
             block_trending_ml=_env_flag("STATBOT_ENTRY_GATE_BLOCK_TRENDING_ML", True),
+            block_statarb_mr_in_trend=_env_flag("STATBOT_ENTRY_GATE_BLOCK_STATARB_MR_IN_TREND", True),
             max_break_risk=_env_float("STATBOT_ENTRY_GATE_MAX_BREAK_RISK", 0.12, minimum=0.0),
             cointegration_watch_cooldown_seconds=_env_float(
                 "STATBOT_ENTRY_GATE_COINTEGRATION_WATCH_COOLDOWN_SECONDS",
@@ -141,6 +143,7 @@ class EntrySafetyGateConfig:
             "block_risk_off_thin_liquidity": bool(self.block_risk_off_thin_liquidity),
             "block_risk_off_vol_shock": bool(self.block_risk_off_vol_shock),
             "block_trending_ml": bool(self.block_trending_ml),
+            "block_statarb_mr_in_trend": bool(self.block_statarb_mr_in_trend),
             "max_break_risk": float(self.max_break_risk),
             "cointegration_watch_cooldown_seconds": float(self.cointegration_watch_cooldown_seconds),
             "cointegration_lost_cooldown_seconds": float(self.cointegration_lost_cooldown_seconds),
@@ -381,6 +384,11 @@ def evaluate_entry_safety_gate(
         )
     ):
         reasons.append("trend_candidate_with_weak_quality")
+
+    if config.block_statarb_mr_in_trend and strategy_name == "STATARB_MR" and regime_name == "TREND":
+        reasons.append("statarb_mr_trend_regime_block")
+        metadata["statarb_mr_trend_blocked"] = True
+        metadata["blocked_regime"] = regime_name
 
     advanced_regime = _normalize_text(advanced.get("advanced_regime"))
     break_risk = advanced.get("break_risk")

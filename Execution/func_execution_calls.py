@@ -1,3 +1,5 @@
+import os
+
 from config_execution_api import (
     account_session,
     trade_session,
@@ -297,6 +299,118 @@ def validate_stop_trigger_price(
     return {"valid": True, "rounded_trigger_px": rounded_text, "reason": None, "metadata": metadata}
 
 
+def validate_stop_tick_distance(
+    inst_id,
+    side,
+    entry_price,
+    stop_price,
+    instrument_info=None,
+    min_ticks=None,
+):
+    """
+    Verify that the stop price is at least `min_ticks` tick-sizes away from the
+    entry price.  For a sell stop (closing a long) the stop must be below entry
+    by at least `tickSz * min_ticks`; for a buy stop (closing a short) it must
+    be above entry by the same margin.
+
+    Instruments like SHIB-USDT-SWAP have tickSz=0.000001, so a 3% stop placed
+    at entry_price * 0.97 rounds to the floor tick and ends up only 0.26 ticks
+    away—OKX then rejects the algo order at placement time.  This check catches
+    that failure *before* the entry order is placed.
+
+    Returns a dict with keys:
+        valid (bool)
+        reason (str | None)
+        distance_ticks (float | None)
+        min_required_ticks (int)
+        tick_size (str | None)
+        metadata (dict)
+    """
+    side_norm = _normalize_value(side)
+    tick_size = _decimal_from_info(instrument_info, "tickSz")
+    entry_dec = _decimal_from_value(entry_price)
+    stop_dec = _decimal_from_value(stop_price)
+
+    if min_ticks is None:
+        raw = os.getenv("STATBOT_MIN_STOP_DISTANCE_TICKS", "2")
+        try:
+            min_ticks = max(int(float(raw)), 0)
+        except (TypeError, ValueError):
+            min_ticks = 2
+
+    tick_str = _format_decimal(tick_size) if tick_size > 0 else None
+    metadata = {
+        "inst_id": inst_id,
+        "side": side_norm,
+        "entry_price": entry_price,
+        "stop_price": stop_price,
+        "tick_size": tick_str,
+        "min_required_ticks": min_ticks,
+    }
+
+    if tick_size <= 0 or min_ticks <= 0:
+        metadata["distance_ticks"] = None
+        return {"valid": True, "reason": None, "distance_ticks": None,
+                "min_required_ticks": min_ticks, "tick_size": tick_str, "metadata": metadata}
+
+    if entry_dec is None or entry_dec <= 0 or stop_dec is None or stop_dec <= 0:
+        metadata["distance_ticks"] = None
+        return {"valid": False, "reason": "invalid_price_for_tick_distance_check",
+                "distance_ticks": None, "min_required_ticks": min_ticks,
+                "tick_size": tick_str, "metadata": metadata}
+
+    if side_norm == "sell":
+        raw_distance = entry_dec - stop_dec
+    elif side_norm == "buy":
+        raw_distance = stop_dec - entry_dec
+    else:
+        metadata["distance_ticks"] = None
+        return {"valid": False, "reason": "invalid_side_for_tick_distance_check",
+                "distance_ticks": None, "min_required_ticks": min_ticks,
+                "tick_size": tick_str, "metadata": metadata}
+
+    if raw_distance <= 0:
+        metadata["distance_ticks"] = 0.0
+        return {"valid": False, "reason": "stop_wrong_side_of_entry",
+                "distance_ticks": 0.0, "min_required_ticks": min_ticks,
+                "tick_size": tick_str, "metadata": {**metadata, "distance_ticks": 0.0}}
+
+    distance_ticks = float(raw_distance / tick_size)
+    metadata["distance_ticks"] = distance_ticks
+
+    if distance_ticks < min_ticks:
+        return {
+            "valid": False,
+            "reason": "stop_too_close_in_ticks",
+            "distance_ticks": distance_ticks,
+            "min_required_ticks": min_ticks,
+            "tick_size": tick_str,
+            "metadata": metadata,
+        }
+
+    return {
+        "valid": True,
+        "reason": None,
+        "distance_ticks": distance_ticks,
+        "min_required_ticks": min_ticks,
+        "tick_size": tick_str,
+        "metadata": metadata,
+    }
+
+
+def _block_entry_if_stop_invalid():
+    raw = os.getenv("STATBOT_BLOCK_ENTRY_IF_STOP_INVALID", "true").strip().lower()
+    return raw not in ("0", "false", "no", "n", "off")
+
+
+def _get_min_stop_distance_ticks():
+    raw = os.getenv("STATBOT_MIN_STOP_DISTANCE_TICKS", "2")
+    try:
+        return max(int(float(raw)), 0)
+    except (TypeError, ValueError):
+        return 2
+
+
 def _get_max_order_qty(instrument_info, order_type):
     order_type = _normalize_value(order_type) or "market"
     if order_type == "limit":
@@ -462,6 +576,7 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         ok = False
         error = size_limits.get("error", "")
     stop_validation = None
+    tick_dist_check = None
     if ok and place_stop:
         stop_side = "sell" if entry_side == "buy" else "buy"
         stop_validation = validate_stop_trigger_price(
@@ -476,6 +591,14 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
             error = f"stop_loss_preflight_failed: {stop_validation.get('reason')}"
         else:
             stop_price = stop_validation.get("rounded_trigger_px")
+            if _block_entry_if_stop_invalid():
+                tick_dist_check = validate_stop_tick_distance(
+                    inst_id, stop_side, entry_price, stop_price,
+                    instrument_info=info, min_ticks=_get_min_stop_distance_ticks(),
+                )
+                if not tick_dist_check["valid"]:
+                    ok = False
+                    error = f"stop_loss_tick_distance_failed: {tick_dist_check.get('reason')}"
 
     return {
         "ok": ok,
@@ -496,6 +619,7 @@ def preview_entry_details(inst_id, direction, capital, orderbook_payload=None,
         "max_order_notional_usdt": size_limits.get("max_order_notional_usdt"),
         "max_stop_notional_usdt": size_limits.get("max_stop_notional_usdt"),
         "stop_trigger_validation": stop_validation,
+        "stop_tick_distance_validation": tick_dist_check,
         "orderbook_payload": orderbook_payload,
         "instrument_info": info,
         "error": error,
@@ -660,6 +784,32 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         stop_price = stop_validation.get("rounded_trigger_px")
         details["stop_price"] = stop_price
 
+        if _block_entry_if_stop_invalid():
+            min_ticks = _get_min_stop_distance_ticks()
+            tick_dist = validate_stop_tick_distance(
+                inst_id, stop_side, entry_price, stop_price,
+                instrument_info=info, min_ticks=min_ticks,
+            )
+            details["stop_tick_distance_preflight"] = tick_dist
+            if not tick_dist["valid"]:
+                error = (
+                    f"stop_loss_tick_distance_failed: {tick_dist.get('reason')} "
+                    f"distance={tick_dist.get('distance_ticks'):.4f} ticks "
+                    f"min={tick_dist.get('min_required_ticks')} "
+                    f"tickSz={tick_dist.get('tick_size')}"
+                    if tick_dist.get("distance_ticks") is not None
+                    else f"stop_loss_tick_distance_failed: {tick_dist.get('reason')}"
+                )
+                print(f"ERROR: {error} inst_id={inst_id}")
+                return {
+                    "entry": None,
+                    "stop": None,
+                    "details": details,
+                    "ok": False,
+                    "error": error,
+                    "error_type": "stop_loss_tick_distance_failed",
+                }
+
     if limit_offset and limit_offset != 0:
         offset = abs(float(limit_offset))
         if entry_side == "buy":
@@ -709,6 +859,30 @@ def place_entry_with_stop(inst_id, direction, capital, orderbook_payload=None, s
         result["error"] = error
         result["error_type"] = "stop_loss_post_fill_validation_failed"
         return result
+
+    if _block_entry_if_stop_invalid():
+        min_ticks = _get_min_stop_distance_ticks()
+        fill_ref = post_entry_reference_price or entry_price
+        post_fill_tick_dist = validate_stop_tick_distance(
+            inst_id, stop_side, fill_ref, stop_price,
+            instrument_info=info, min_ticks=min_ticks,
+        )
+        details["post_fill_tick_distance_validation"] = post_fill_tick_dist
+        if not post_fill_tick_dist["valid"]:
+            error = (
+                f"stop_loss_post_fill_tick_distance_failed: {post_fill_tick_dist.get('reason')} "
+                f"distance={post_fill_tick_dist.get('distance_ticks'):.4f} ticks "
+                f"min={post_fill_tick_dist.get('min_required_ticks')} "
+                f"tickSz={post_fill_tick_dist.get('tick_size')} "
+                f"fill_price={fill_ref} stop={stop_price}"
+                if post_fill_tick_dist.get("distance_ticks") is not None
+                else f"stop_loss_post_fill_tick_distance_failed: {post_fill_tick_dist.get('reason')}"
+            )
+            print(f"ERROR: {error} inst_id={inst_id}")
+            result["ok"] = False
+            result["error"] = error
+            result["error_type"] = "stop_loss_post_fill_validation_failed"
+            return result
 
     stop_res = place_stop_loss_order(
         inst_id,

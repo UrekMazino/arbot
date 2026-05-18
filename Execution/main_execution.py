@@ -3160,10 +3160,19 @@ if __name__ == "__main__":
         start_ts = os.getenv("STATBOT_START_TS")
         if not start_ts:
             start_ts = str(time.time())
+        _existing_run_id = os.getenv("STATBOT_RUN_ID", "").strip()
+        if _existing_run_id:
+            stable_run_id = _existing_run_id
+        else:
+            _log_path = str(os.getenv("STATBOT_LOG_PATH", "")).strip()
+            _log_parent = Path(_log_path).parent.name if _log_path else ""
+            stable_run_id = _log_parent if _log_parent else f"run-{start_ts}"
+        logger.info("manager_stable_run_id=%s", stable_run_id)
         while True:
             env = os.environ.copy()
             env["STATBOT_MANAGED"] = "1"
             env["STATBOT_START_TS"] = start_ts
+            env["STATBOT_RUN_ID"] = stable_run_id
             try:
                 # Use sys.executable to ensure the same Python interpreter is used
                 ret = subprocess.call([sys.executable] + sys.argv, env=env)
@@ -3403,6 +3412,12 @@ if __name__ == "__main__":
     last_strategy_decision = None
     last_strategy_gate_log_ts = 0.0
     risk_circuit_config = RiskCircuitBreakerConfig.from_env()
+    logger.info(
+        "child_STATBOT_RUN_ID=%s session_consecutive_losses=%d session_realized_pnl_usdt=%.4f",
+        get_session_run_id(),
+        get_session_consecutive_losses(),
+        get_session_realized_pnl(),
+    )
     last_risk_circuit_log_ts = 0.0
     last_risk_circuit_reasons = ()
     _COINT_GATE_THRESHOLD = _get_coint_gate_threshold()

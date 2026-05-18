@@ -337,3 +337,61 @@ class TestSessionRiskStatePersistence:
 
         assert get_session_consecutive_losses() == 0
         assert get_session_realized_pnl() == 0.0
+
+    # ── Test M: STATBOT_RUN_ID env var is honoured by _stable_run_id() ────────
+
+    def test_m_statbot_run_id_env_var_honoured(self):
+        """_stable_run_id() returns STATBOT_RUN_ID when the manager sets it.
+
+        The subprocess manager sets env["STATBOT_RUN_ID"] = stable_run_id before
+        every subprocess.call().  This test confirms the circuit breaker module
+        picks that value up rather than generating a fresh UUID.
+        """
+        import os
+
+        expected = "run_90_20260517_test"
+        prev = os.environ.get("STATBOT_RUN_ID")
+        os.environ["STATBOT_RUN_ID"] = expected
+        try:
+            result = scb._stable_run_id()
+        finally:
+            if prev is None:
+                os.environ.pop("STATBOT_RUN_ID", None)
+            else:
+                os.environ["STATBOT_RUN_ID"] = prev
+
+        assert result == expected, (
+            "_stable_run_id() must return the STATBOT_RUN_ID env var set by the manager"
+        )
+
+    # ── Test N: manager-set run_id allows state to reload after pair-switch ────
+
+    def test_n_manager_set_run_id_reloads_after_pair_switch(self):
+        """Session counters survive a simulated pair-switch restart when run_id matches.
+
+        Simulates the manager wiring: the manager sets STATBOT_RUN_ID once; every
+        child inherits the same value so _session_run_id is identical across restarts.
+        """
+        stable_id = "run_90_20260517_test"
+
+        # Simulate child process startup with manager-derived run_id.
+        scb._session_run_id = stable_id
+        scb._session_consecutive_losses = 0
+        scb._session_realized_pnl_usdt = 0.0
+
+        # Child 1 records a loss and persists state.
+        record_session_trade_result(is_win=False, pnl_usdt=-0.30)
+        assert get_session_consecutive_losses() == 1
+
+        # Pair-switch restart: in-memory counters zeroed; run_id kept stable.
+        scb._session_consecutive_losses = 0
+        scb._session_realized_pnl_usdt = 0.0
+        # _session_run_id is NOT reset — manager guarantees same STATBOT_RUN_ID.
+        reload_session_state()
+
+        assert get_session_consecutive_losses() == 1, (
+            "session loss count must survive pair-switch restart when run_id matches"
+        )
+        assert abs(get_session_realized_pnl() - (-0.30)) < 1e-9, (
+            "realized PnL must survive pair-switch restart when run_id matches"
+        )

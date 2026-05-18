@@ -381,6 +381,51 @@ def close_all_positions(kill_switch, tickers=None, return_result=False):
     return result if return_result else 0
 
 
+def _emit_final_flatten_status(result, tickers, retry_count):
+    """Log one of the three mandatory final-state lines and include required fields."""
+    status = result.get("final_flatten_status", "unknown_state")
+    close_attempts = result.get("close_attempts") or []
+    remaining = result.get("remaining_position_qty") or {}
+
+    requested_qty = sum(
+        float(a.get("requested_qty") or 0) for a in close_attempts
+    )
+    filled_qty = sum(
+        float(a.get("filled_qty") or 0) for a in close_attempts
+        if a.get("filled_qty") is not None
+    )
+    remaining_qty = sum(float(v) for v in remaining.values())
+
+    # final_position_qty: sum of remaining known open qty
+    final_position_qty = remaining_qty
+
+    # open_orders_count and algo_orders_count from the last known state in result
+    last_state = result.get("_last_flat_check_state") or {}
+    open_orders_count = len(last_state.get("orders") or [])
+    algo_orders_count = last_state.get("algo_orders_count")
+
+    log_fn = logger.info if status == "flat" else logger.critical
+    algo_info = (
+        f" algo_orders={algo_orders_count}"
+        if algo_orders_count is not None
+        else ""
+    )
+    log_fn(
+        "EMERGENCY_FLATTEN_%s: tickers=%s retry_count=%d "
+        "requested_qty=%.8f filled_qty=%.8f remaining_qty=%.8f "
+        "final_position_qty=%.8f open_orders=%d%s",
+        status.upper(),
+        "/".join(tickers),
+        retry_count,
+        requested_qty,
+        filled_qty,
+        remaining_qty,
+        final_position_qty,
+        open_orders_count,
+        algo_info,
+    )
+
+
 def close_all_positions_and_confirm(kill_switch=0, tickers=None, timeout_seconds=None, poll_seconds=None):
     active = _active_tickers(tickers)
     poll = poll_seconds if poll_seconds is not None else float(emergency_flatten_poll_seconds or 0.0)
@@ -394,67 +439,86 @@ def close_all_positions_and_confirm(kill_switch=0, tickers=None, timeout_seconds
     if not emergency_flatten_verify_enabled:
         result["confirmed_flat"] = None
         result["flatten_verification_enabled"] = False
+        result["final_flatten_status"] = "unknown_state"
+        _emit_final_flatten_status(result, active, 0)
         return result
 
     result["flatten_verification_enabled"] = True
     result["flatten_max_retries"] = max_retries
     result["flatten_dust_contracts"] = dust_contracts
 
-    for retry_idx in range(max_retries + 1):
-        state = get_account_state()
-        flat, blockers = account_tickers_are_flat(active, state=state, dust_contracts=dust_contracts)
-        if flat:
-            result["ok"] = True
-            result["confirmed_flat"] = True
-            result["blockers"] = []
-            result["kill_switch"] = 0
-            result["final_flatten_status"] = "flat"
-            return result
+    try:
+        for retry_idx in range(max_retries + 1):
+            state = get_account_state()
+            result["_last_flat_check_state"] = state
+            flat, blockers = account_tickers_are_flat(active, state=state, dust_contracts=dust_contracts)
+            if flat:
+                result["ok"] = True
+                result["confirmed_flat"] = True
+                result["blockers"] = []
+                result["kill_switch"] = 0
+                result["final_flatten_status"] = "flat"
+                _emit_final_flatten_status(result, active, retry_idx)
+                return result
 
-        last_blockers = blockers
-        remaining_positions = _remaining_positions_from_state(state, active, dust_contracts=dust_contracts)
-        result["remaining_position_qty"] = {
-            item["inst_id"]: item["size"] for item in remaining_positions
-        }
-        if retry_idx >= max_retries:
-            break
-        if poll:
-            time.sleep(poll)
-        for item in remaining_positions:
-            logger.critical(
-                "Emergency flatten retry %d/%d for %s: remaining %.8f %s",
-                retry_idx + 1,
-                max_retries,
-                item["inst_id"],
-                item["size"],
-                item["side"],
-            )
-            close_response = place_market_close_order(item["inst_id"], item["size"], item["side"])
-            attempt = {
-                "ticker": item["inst_id"],
-                "requested_qty": item["size"],
-                "side": item["side"],
-                "retry": retry_idx + 1,
-                "response": close_response,
+            last_blockers = blockers
+            remaining_positions = _remaining_positions_from_state(state, active, dust_contracts=dust_contracts)
+            result["remaining_position_qty"] = {
+                item["inst_id"]: item["size"] for item in remaining_positions
             }
-            if isinstance(close_response, dict):
-                fill_summary = close_response.get("fill_summary") or {}
-                if fill_summary:
-                    attempt["filled_qty"] = fill_summary.get("qty")
-            result.setdefault("close_attempts", []).append(attempt)
+            if retry_idx >= max_retries:
+                break
+            if poll:
+                time.sleep(poll)
+            for item in remaining_positions:
+                logger.critical(
+                    "Emergency flatten retry %d/%d for %s: remaining %.8f %s",
+                    retry_idx + 1,
+                    max_retries,
+                    item["inst_id"],
+                    item["size"],
+                    item["side"],
+                )
+                close_response = place_market_close_order(item["inst_id"], item["size"], item["side"])
+                attempt = {
+                    "ticker": item["inst_id"],
+                    "requested_qty": item["size"],
+                    "side": item["side"],
+                    "retry": retry_idx + 1,
+                    "response": close_response,
+                }
+                if isinstance(close_response, dict):
+                    fill_summary = close_response.get("fill_summary") or {}
+                    if fill_summary:
+                        attempt["filled_qty"] = fill_summary.get("qty")
+                result.setdefault("close_attempts", []).append(attempt)
 
-    result["ok"] = False
-    result["confirmed_flat"] = False
-    result["blockers"] = last_blockers
-    result["errors"] = list(dict.fromkeys([*result.get("errors", []), *last_blockers]))
-    result["kill_switch"] = kill_switch
-    result["final_flatten_status"] = "not_flat"
-    logger.critical(
-        "Emergency flatten confirmation failed for %s after %s retries: %s",
-        "/".join(active),
-        max_retries,
-        "; ".join(last_blockers),
-    )
+        result["ok"] = False
+        result["confirmed_flat"] = False
+        result["blockers"] = last_blockers
+        result["errors"] = list(dict.fromkeys([*result.get("errors", []), *last_blockers]))
+        result["kill_switch"] = kill_switch
+        result["final_flatten_status"] = "not_flat"
+        logger.critical(
+            "Emergency flatten confirmation failed for %s after %s retries: %s",
+            "/".join(active),
+            max_retries,
+            "; ".join(last_blockers),
+        )
+
+    except Exception as exc:
+        result["ok"] = False
+        result["confirmed_flat"] = False
+        result["final_flatten_status"] = "unknown_state"
+        logger.critical(
+            "Emergency flatten raised unexpected exception for %s: %s",
+            "/".join(active),
+            exc,
+        )
+
+    finally:
+        _emit_final_flatten_status(result, active, max_retries)
+
     return result
 
 

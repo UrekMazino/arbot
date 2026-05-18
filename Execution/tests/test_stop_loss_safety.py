@@ -89,6 +89,12 @@ def test_post_fill_stop_validation_failure_triggers_emergency_close(monkeypatch)
     monkeypatch.setattr(func_execution_calls, "validate_stop_trigger_price", fake_validate)
     monkeypatch.setattr(
         func_execution_calls,
+        "validate_stop_tick_distance",
+        lambda *args, **kwargs: {"valid": True, "reason": None, "distance_ticks": 5.0,
+                                 "min_required_ticks": 2, "tick_size": "0.000001", "metadata": {}},
+    )
+    monkeypatch.setattr(
+        func_execution_calls,
         "place_market_order",
         lambda *args, **kwargs: {"code": "0", "data": [{"ordId": "ENTRY1", "sCode": "0"}]},
     )

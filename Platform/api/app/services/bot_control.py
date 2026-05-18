@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import mimetypes
 import os
@@ -2168,11 +2169,44 @@ def update_env_setting(key: str, value: str) -> dict:
 
 
 PAIR_STRATEGY_STATE_FILE = EXECUTION_ROOT / "state" / "pair_strategy_state.json"
+_PAIR_STATE_LOCK_FILE = EXECUTION_ROOT / "state" / "pair_strategy_state.json.lock"
 ACTIVE_PAIR_FILE = EXECUTION_ROOT / "state" / "active_pair.json"
 MANUAL_PAIR_SWITCH_FILE = EXECUTION_ROOT / "state" / "manual_pair_switch.json"
 GRAVEYARD_TICKERS_FILE = EXECUTION_ROOT / "state" / "graveyard_tickers.json"
 TICKER_GRAVEYARD_PREFIX = "ticker::"
 TICKER_ID_RE = re.compile(r"^[A-Z0-9]+-[A-Z]+-SWAP$")
+
+
+@contextlib.contextmanager
+def _pair_state_file_lock(timeout: float = 8.0):
+    """Cross-process advisory lock for pair_strategy_state.json.
+
+    Uses the same lock file as func_pair_state._state_file_lock so that writes
+    from the API service and the execution process are serialized.
+    """
+    _PAIR_STATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(str(_PAIR_STATE_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                try:
+                    _PAIR_STATE_LOCK_FILE.unlink()
+                except OSError:
+                    pass
+            else:
+                time.sleep(0.005)
+    try:
+        yield
+    finally:
+        try:
+            _PAIR_STATE_LOCK_FILE.unlink()
+        except OSError:
+            pass
 
 
 class ManualPairSwitchBlocked(RuntimeError):
@@ -2833,27 +2867,31 @@ def remove_pair_from_graveyard(
 ) -> dict:
     """Remove a pair-level graveyard entry from pair strategy state."""
     pair_key, candidate_keys = _graveyard_pair_keys_from_payload(pair=pair, sym_1=sym_1, sym_2=sym_2)
-    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
-    graveyard = data.get("graveyard", {})
-    if not isinstance(graveyard, dict):
-        graveyard = {}
-
     removed_entries: dict[str, dict] = {}
-    for candidate_key in list(candidate_keys):
-        if _is_ticker_graveyard_key(candidate_key):
-            continue
-        entry = graveyard.get(candidate_key)
-        if isinstance(entry, dict):
-            removed_entries[candidate_key] = entry
-            graveyard.pop(candidate_key, None)
+    with _pair_state_file_lock():
+        data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+        graveyard = data.get("graveyard", {})
+        if not isinstance(graveyard, dict):
+            graveyard = {}
+
+        for candidate_key in list(candidate_keys):
+            if _is_ticker_graveyard_key(candidate_key):
+                continue
+            entry = graveyard.get(candidate_key)
+            if isinstance(entry, dict):
+                removed_entries[candidate_key] = entry
+                graveyard.pop(candidate_key, None)
+
+        removed = bool(removed_entries)
+        if removed:
+            data["graveyard"] = graveyard
+            data["graveyard_last_removed_pair"] = pair_key
+            data["graveyard_last_removed_at"] = _utc_iso_now()
+            data["graveyard_last_removed_by"] = requested_by or ""
+            _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
 
     removed = bool(removed_entries)
     if removed:
-        data["graveyard"] = graveyard
-        data["graveyard_last_removed_pair"] = pair_key
-        data["graveyard_last_removed_at"] = _utc_iso_now()
-        data["graveyard_last_removed_by"] = requested_by or ""
-        _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
         _append_control_log(
             "INFO",
             f"Removed pair from Pair Health graveyard: pair={pair_key} by={requested_by or 'unknown'}",
@@ -2886,20 +2924,21 @@ def add_pair_to_hospital(
     """Manually add a pair to the hospital queue with a cooldown period."""
     pair_key, _ = _graveyard_pair_keys_from_payload(pair=pair)
     cooldown_seconds = max(1, int(cooldown_seconds))
-    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
-    hospital = data.get("hospital", {})
-    if not isinstance(hospital, dict):
-        hospital = {}
-    existing = hospital.get(pair_key)
-    visits = int(existing.get("visits", 0) or 0) if isinstance(existing, dict) else 0
-    hospital[pair_key] = {
-        "ts": time.time(),
-        "cooldown": cooldown_seconds,
-        "reason": str(reason or "manual"),
-        "visits": visits + 1,
-    }
-    data["hospital"] = hospital
-    _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
+    with _pair_state_file_lock():
+        data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+        hospital = data.get("hospital", {})
+        if not isinstance(hospital, dict):
+            hospital = {}
+        existing = hospital.get(pair_key)
+        visits = int(existing.get("visits", 0) or 0) if isinstance(existing, dict) else 0
+        hospital[pair_key] = {
+            "ts": time.time(),
+            "cooldown": cooldown_seconds,
+            "reason": str(reason or "manual"),
+            "visits": visits + 1,
+        }
+        data["hospital"] = hospital
+        _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
     _append_control_log(
         "INFO",
         f"Added pair to hospital: pair={pair_key} cooldown={cooldown_seconds}s by={requested_by or 'unknown'}",
@@ -2921,24 +2960,25 @@ def add_pair_to_graveyard_manual(
     """Manually move a pair to the graveyard with a configurable TTL."""
     pair_key, _ = _graveyard_pair_keys_from_payload(pair=pair)
     reason = _MANUAL_GRAVEYARD_REASON.get(ttl_days, "manual")
-    data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
+    with _pair_state_file_lock():
+        data = _read_json_object(PAIR_STRATEGY_STATE_FILE)
 
-    graveyard = data.get("graveyard", {})
-    if not isinstance(graveyard, dict):
-        graveyard = {}
-    graveyard[pair_key] = {
-        "ts": time.time(),
-        "reason": reason,
-        "ttl_days": ttl_days,
-    }
-    data["graveyard"] = graveyard
+        graveyard = data.get("graveyard", {})
+        if not isinstance(graveyard, dict):
+            graveyard = {}
+        graveyard[pair_key] = {
+            "ts": time.time(),
+            "reason": reason,
+            "ttl_days": ttl_days,
+        }
+        data["graveyard"] = graveyard
 
-    hospital = data.get("hospital", {})
-    if isinstance(hospital, dict) and pair_key in hospital:
-        hospital.pop(pair_key, None)
-        data["hospital"] = hospital
+        hospital = data.get("hospital", {})
+        if isinstance(hospital, dict) and pair_key in hospital:
+            hospital.pop(pair_key, None)
+            data["hospital"] = hospital
 
-    _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
+        _write_json_object(PAIR_STRATEGY_STATE_FILE, data)
     _append_control_log(
         "INFO",
         f"Added pair to graveyard (manual): pair={pair_key} ttl_days={ttl_days} reason={reason} by={requested_by or 'unknown'}",

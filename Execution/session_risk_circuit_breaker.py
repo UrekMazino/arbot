@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
@@ -8,6 +9,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -66,9 +69,20 @@ def _load_session_state() -> None:
             return
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("run_id") != _session_run_id:
+            _log.warning(
+                "session_risk_state_reset run_id_changed old=%s new=%s",
+                data.get("run_id"),
+                _session_run_id,
+            )
             return  # different run → do not inherit state
         _session_consecutive_losses = int(data.get("session_consecutive_losses", 0))
         _session_realized_pnl_usdt = float(data.get("session_realized_pnl_usdt", 0.0))
+        _log.info(
+            "session_risk_state_loaded run_id=%s session_consecutive_losses=%d session_realized_pnl_usdt=%.4f",
+            _session_run_id,
+            _session_consecutive_losses,
+            _session_realized_pnl_usdt,
+        )
     except Exception:  # noqa: BLE001
         pass
 

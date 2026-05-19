@@ -47,5 +47,12 @@
         "msg": "SHIB tickSz=0.000001 causes stop-loss post-fill rejection:",
         "ttl_days": 7,
         "source": "seed"
+    },
+    "ETHFI-USDT-SWAP": {
+        "reason": "repeated_pair_losses",
+        "code": "",
+        "msg": "2 appearances (runs 93+94), 2 cointegration failures, avg PnL -$0.533, largest MAE cluster. ETH staking derivative with reflexive tokenomics and unstable intraday beta — structurally misaligned with stat-arb cointegration assumptions.",
+        "ttl_days": null,
+        "source": "seed"
     }
 }

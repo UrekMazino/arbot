@@ -292,6 +292,7 @@ def evaluate_entry_safety_gate(
     advanced_regime_result: Any | None = None,
     now: float | None = None,
     config: EntrySafetyGateConfig | None = None,
+    entry_strategy_name: str | None = None,
 ) -> EntrySafetyGateDecision:
     config = config or EntrySafetyGateConfig.from_env()
     now_ts = time.time() if now is None else float(now)
@@ -385,7 +386,8 @@ def evaluate_entry_safety_gate(
     ):
         reasons.append("trend_candidate_with_weak_quality")
 
-    if config.block_statarb_mr_in_trend and strategy_name == "STATARB_MR" and regime_name == "TREND":
+    _exec_strategy = str(entry_strategy_name).strip().upper() if entry_strategy_name else strategy_name
+    if config.block_statarb_mr_in_trend and _exec_strategy == "STATARB_MR" and regime_name == "TREND":
         reasons.append("statarb_mr_trend_regime_block")
         metadata["statarb_mr_trend_blocked"] = True
         metadata["blocked_regime"] = regime_name

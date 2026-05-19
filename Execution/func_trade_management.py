@@ -3233,6 +3233,7 @@ def manage_new_trades(
             regime_decision=regime_decision,
             strategy_decision=strategy_decision,
             advanced_regime_result=advanced_regime_result,
+            entry_strategy_name=strategy_name,
         )
         _emit_entry_safety_gate(
             entry_gate_decision,

@@ -11,7 +11,7 @@ Current status:
 - Strategy router: shadow.
 - Advanced ML: shadow.
 - Circuit breaker state mode: session. Consecutive loss limit: 3.
-- STATARB_MR TREND-regime entries blocked (Patch 4, live).
+- STATARB_MR TREND-regime entries blocked (Patch 4 + Patch 4.1 fix, verified 2026-05-20). Shadow-router divergence bug fixed; block now fires correctly when shadow router has committed to TREND_SPREAD.
 - ETHFI-USDT-SWAP permanently graveyarded (repeated_pair_losses, Patch 5).
 - TEST1234 permanently blocked.
 - Startup pair safety validation implemented.

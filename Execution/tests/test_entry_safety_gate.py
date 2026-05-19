@@ -363,3 +363,26 @@ def test_statarb_mr_trend_block_disabled_gate_not_blocked():
     )
     assert decision.passed
     assert decision.reason == "entry_safety_gate_disabled"
+
+
+def test_statarb_mr_trend_block_fires_when_shadow_router_shows_trend_spread():
+    # Shadow router commits to TREND_SPREAD via hysteresis, but execution strategy is still STATARB_MR.
+    # entry_strategy_name overrides the router's active_strategy for the block check.
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_other_strategy("TREND_SPREAD"),
+        entry_strategy_name="STATARB_MR",
+    )
+    assert not decision.passed
+    assert "statarb_mr_trend_regime_block" in decision.reasons
+
+
+def test_statarb_mr_trend_block_blind_spot_without_entry_strategy_name():
+    # Without entry_strategy_name, gate falls back to router's active_strategy ("TREND_SPREAD").
+    # The block does not fire — documents the pre-fix failure mode for regression tracking.
+    decision = _decision(
+        regime_decision=_trend_regime(),
+        strategy_decision=_other_strategy("TREND_SPREAD"),
+    )
+    assert decision.passed
+    assert "statarb_mr_trend_regime_block" not in decision.reasons

@@ -1,7 +1,7 @@
 # Statistical Arbitrage Mean Reversion in Cryptocurrency Perpetual Swaps:
 ## An Iterative Diagnostic Framework for Edge Detection, Exit Architecture Calibration, and Epistemic Discipline Under Small-Sample Conditions
 
-**Author:** Joe Cvia
+**Author:** Joe Cris Viar
 **System:** OKXStatBot v1
 **Exchange:** OKX USDT-M Perpetual Swaps
 **Research Phase:** Controlled Experimental (200 USDT notional)

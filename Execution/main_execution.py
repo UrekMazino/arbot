@@ -153,10 +153,23 @@ from func_pair_state import (
     reset_health_failure,
     cleanup_expired_graveyard,
     check_startup_pair_block,
+    clear_pending_hard_exit,
 )
 
 # Setup logging
 logger = get_logger("main_execution")
+
+# Backoff delays (seconds) between consecutive failed emergency-flatten cycles.
+# Index 0 = after 1st failure, 1 = after 2nd, 2 = after 3rd, 3+ = capped at last value.
+_FLATTEN_BACKOFF_SCHEDULE = [5, 30, 120, 300]
+
+
+def _flatten_backoff_delay(cycle_count: int) -> int:
+    """Return seconds to wait before the next flatten cycle after `cycle_count` failures."""
+    if cycle_count <= 0:
+        return 0
+    idx = min(cycle_count - 1, len(_FLATTEN_BACKOFF_SCHEDULE) - 1)
+    return _FLATTEN_BACKOFF_SCHEDULE[idx]
 
 
 def _env_text(name, default=""):
@@ -3394,6 +3407,8 @@ if __name__ == "__main__":
     prev_total_pnl = None
     manual_close_clear_count = 0
     manual_close_clear_threshold = 3
+    _flatten_cycle_count = 0
+    _flatten_start_time = 0.0
     fee_tracker = FeeTracker()
     regime_router = RegimeRouter()
     regime_mode = regime_router.mode
@@ -4818,6 +4833,8 @@ if __name__ == "__main__":
 
             # Close all active orders and positions
             if kill_switch == 2:
+                if _flatten_start_time == 0.0:
+                    _flatten_start_time = time.time()
                 status_dict["message"] = "Closing existing trades..."
                 save_status(status_dict)
 
@@ -4914,11 +4931,25 @@ if __name__ == "__main__":
                         for item in (close_result.get("errors") or close_result.get("blockers") or [])
                         if str(item).strip()
                     ) or "close confirmation failed"
-                    logger.error("Close not confirmed; retrying close before recording trade result: %s", detail)
+                    _flatten_cycle_count += 1
+                    _flatten_elapsed = time.time() - _flatten_start_time
+                    _flatten_backoff = _flatten_backoff_delay(_flatten_cycle_count)
+                    logger.critical(
+                        "Emergency flatten cycle %d failed (elapsed=%.0fs, backoff=%.0fs): %s",
+                        _flatten_cycle_count,
+                        _flatten_elapsed,
+                        _flatten_backoff,
+                        detail,
+                    )
                     status_dict["message"] = "Close not confirmed; retrying close"
                     save_status(status_dict)
+                    if _flatten_backoff > 0:
+                        time.sleep(_flatten_backoff)
                     kill_switch = 2
                     continue
+                _flatten_cycle_count = 0
+                _flatten_start_time = 0.0
+                clear_pending_hard_exit()
                 kill_switch = int(close_result.get("kill_switch", 0) or 0)
 
                 post_equity_usdt = None

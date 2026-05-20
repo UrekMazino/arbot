@@ -1473,6 +1473,36 @@ def clear_entry_tracking():
     state["stall_warning_marks"] = []
     save_pair_state(state)
 
+
+# ---------------------------------------------------------------------------
+# Pending hard-exit intent — in-memory only (cleared on process restart)
+# ---------------------------------------------------------------------------
+
+_PENDING_HARD_EXIT: dict | None = None
+
+
+def set_pending_hard_exit(name: str, reason: str, priority: int) -> None:
+    """Record that EXIT_ORCHESTRATOR issued a hard-exit that has not yet been confirmed flat."""
+    global _PENDING_HARD_EXIT
+    _PENDING_HARD_EXIT = {
+        "name": name,
+        "reason": reason,
+        "priority": priority,
+        "ts": time.time(),
+    }
+
+
+def get_pending_hard_exit() -> dict | None:
+    """Return the pending hard-exit record, or None if no exit is pending."""
+    return _PENDING_HARD_EXIT
+
+
+def clear_pending_hard_exit() -> None:
+    """Clear the pending hard-exit record once position is confirmed flat."""
+    global _PENDING_HARD_EXIT
+    _PENDING_HARD_EXIT = None
+
+
 def can_reenter(cooldown_minutes=5):
     """Check if enough time has passed since last exit to prevent clustering."""
     state = load_pair_state()

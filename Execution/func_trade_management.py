@@ -39,6 +39,8 @@ from func_pair_state import (
     get_last_switch_time,
     record_health_failure,
     update_trade_mae_mfe_tracking,
+    set_pending_hard_exit,
+    get_pending_hard_exit,
 )
 
 
@@ -1643,6 +1645,8 @@ def _apply_exit_orchestrator_decision(decision, kill_switch):
             set_last_switch_reason(str(candidate.name))
         if bool(candidate.metadata.get("health_zero")):
             set_last_health_score(0)
+        if candidate.category == ExitCandidateCategory.HARD:
+            set_pending_hard_exit(candidate.name, candidate.reason, candidate.priority)
         _close_trade_manager()
         return 2
 
@@ -4286,6 +4290,25 @@ def monitor_exit(
         _close_trade_manager()
         tm_result = {"action": "NO_POSITION", "reason": "no_entry_context"}
         logger.warning("No entry Z-score tracked (restart scenario). Current Z=%.2f", latest_zscore)
+        _pending = get_pending_hard_exit()
+        if _pending is not None:
+            logger.warning(
+                "Restoring pending hard exit: name=%s priority=%d age=%.0fs",
+                _pending["name"],
+                _pending["priority"],
+                time.time() - _pending["ts"],
+            )
+            exit_candidates.append(
+                ExitCandidate(
+                    name=_pending["name"],
+                    category=ExitCandidateCategory.HARD,
+                    action=ExitAction.FULL_EXIT,
+                    reason="Persisted hard exit (entry context lost): %s" % _pending["reason"],
+                    priority=_pending["priority"],
+                    severity=1.0,
+                    metadata={"source": "pending_hard_exit", "switch_reason": ""},
+                )
+            )
         if abs(latest_zscore) > 8.0:
             exit_candidates.append(
                 ExitCandidate(
@@ -4298,7 +4321,7 @@ def monitor_exit(
                     metadata={"source": "no_entry_context", "switch_reason": ""},
                 )
             )
-        else:
+        elif _pending is None:
             logger.info("Holding position (no entry context). Will close on mean reversion only.")
 
     if total_unrealized_pnl > 5.0 and total_funding_cost > 2.0:

@@ -31,3 +31,22 @@ Patch 5 — Guard Calibration + ETHFI Exclusion (exp_guard050_ethfi_excluded_v1,
   Rationale: 2 appearances, 2 cointegration failures, avg PnL -$0.533, worst MAE cluster. ETH staking derivative structurally misaligned with stat-arb cointegration assumptions.
 - Two-variable change accepted: changes target orthogonal failure classes (guard → TP-zone activation rate; ETHFI → coint-failure rate). Attribution is recoverable via different telemetry channels.
 - Action threshold: 20 closed trades before any further config changes.
+
+Patch 6 — Emergency Flatten Safety (run 99+, 2026-05-20):
+- Type: Operational safety fix. No strategy or config changes.
+- Evidence: run_98 OKX 50001 outage (09:15:11–09:19:29 UTC). ~20 outer retry cycles fired in 4m18s with no delay between them. Spread moved 1.77 sigma adverse. Exit intent (hard exit, priority=90) lost after clear_entry_tracking() called inside close_all_positions.
+- Item 1 — Exponential backoff retry policy:
+  After first failed outer flatten cycle: 5s wait.
+  After second: 30s. After third: 120s. After fourth and beyond: 300s (capped).
+  Inner cycle (3 retries × ~1s poll) unchanged.
+  Cycle count and elapsed outage time logged at CRITICAL on each failure.
+  Files: main_execution.py (_FLATTEN_BACKOFF_SCHEDULE, _flatten_backoff_delay, kill_switch==2 block).
+- Item 2 — Persist hard-exit intent across retry cycles:
+  When EXIT_ORCHESTRATOR issues a full_exit with category=HARD, intent is stored in-memory via set_pending_hard_exit().
+  If the bot later enters the "restart scenario" branch (entry_z is None), it checks get_pending_hard_exit() and adds a HARD exit candidate restoring the original priority. This prevents the exit decision from downgrading to mean-reversion-only when the entry context is lost mid-outage.
+  Cleared only when close_account_positions_and_confirm() confirms flat.
+  Known limitation: pending_hard_exit is in-memory only. A subprocess restart (exit code 3) during the retry window clears it; on next startup the bot reverts to mean-reversion-only exit mode. File-based persistence is a future enhancement (Patch 7 candidate if this scenario occurs).
+  Files: func_pair_state.py (set/get/clear_pending_hard_exit), func_trade_management.py (_apply_exit_orchestrator_decision + restart scenario branch), main_execution.py (clear on success).
+- Tests: 12 new tests in test_patch6_flatten_safety.py covering backoff schedule values and intent persistence through clear_entry_tracking().
+- Trade counter at fix: 5/20. No new trades during investigation.
+- Deferred (not in this patch): EMERGENCY_FLATTEN_FLAT partial-fill telemetry label (item 3), provisional PnL recorded as final (item 4), alert/kill-switch after N consecutive failures (item 5 — needs design).

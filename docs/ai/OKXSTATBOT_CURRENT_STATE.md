@@ -12,6 +12,8 @@ Current status:
 - Advanced ML: shadow.
 - Circuit breaker state mode: session. Consecutive loss limit: 3.
 - STATARB_MR TREND-regime entries blocked (Patch 4 + Patch 4.1 fix, verified 2026-05-20). Shadow-router divergence bug fixed; block now fires correctly when shadow router has committed to TREND_SPREAD.
+- Emergency flatten retry policy: exponential backoff (5s/30s/120s/300s between outer cycles). Inner 3-retry cycle unchanged. Patch 6, active run 99+.
+- Hard-exit intent persisted across flatten retry cycles. EXIT_ORCHESTRATOR HARD exits survive clear_entry_tracking(). Cleared on confirmed flat. Patch 6, active run 99+.
 - ETHFI-USDT-SWAP permanently graveyarded (repeated_pair_losses, Patch 5).
 - TEST1234 permanently blocked.
 - Startup pair safety validation implemented.

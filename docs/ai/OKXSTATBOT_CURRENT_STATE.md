@@ -19,8 +19,8 @@ Current status:
 - Startup pair safety validation implemented.
 
 Experiment state:
-- trades_since_experiment_start: 5
-- runs_since_experiment_start: 4
+- trades_since_experiment_start: 8
+- runs_since_experiment_start: 5
 - action_threshold: 20 closed trades minimum before any further config changes
 
 Per-hypothesis confidence:

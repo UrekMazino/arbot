@@ -130,7 +130,10 @@ def get_pos_data_from_state(state, inst_id, direction="Long"):
 # Check for open positions
 def open_position_confirmation(inst_id="", inst_type_override=None, session=None):
     """
-    Return True if there is any open position (safe default True on errors).
+    Return (in_position, verified) tuple.
+    - (True,  True):  OKX confirmed an open position exists.
+    - (False, True):  OKX confirmed no open positions (account is flat).
+    - (True,  False): API unavailable; cannot verify account state — fail-safe assumes in-position.
     """
     active_session = session or account_session
     inst_type_value = inst_type_override or inst_type
@@ -139,19 +142,19 @@ def open_position_confirmation(inst_id="", inst_type_override=None, session=None
         response = active_session.get_positions(instType=inst_type_value, instId=inst_id)
     except Exception as exc:
         print(f"ERROR: Failed to fetch positions: {exc}")
-        return True
+        return True, False
 
     if not isinstance(response, dict):
         print("ERROR: Positions response invalid.")
-        return True
+        return True, False
 
     if response.get("code") != "0":
         print(f"ERROR: OKX positions failed: {response.get('msg')}")
-        return True
+        return True, False
 
     data = response.get("data", [])
     if not isinstance(data, list):
-        return True
+        return True, False
 
     for item in data:
         if not isinstance(item, dict):
@@ -162,9 +165,9 @@ def open_position_confirmation(inst_id="", inst_type_override=None, session=None
         except (TypeError, ValueError):
             continue
         if abs(pos_val) > 0:
-            return True
+            return True, True
 
-    return False
+    return False, True
 
 
 def _normalize_direction(direction):

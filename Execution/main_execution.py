@@ -3582,10 +3582,17 @@ if __name__ == "__main__":
         logger.warning("Failed to cleanup non-active positions at startup: %s", exc)
     
     # Check if we should start in monitoring mode (positions already open)
-    is_p_open = open_position_confirmation(signal_positive_ticker)
-    is_n_open = open_position_confirmation(signal_negative_ticker)
+    is_p_open, p_verified = open_position_confirmation(signal_positive_ticker)
+    is_n_open, n_verified = open_position_confirmation(signal_negative_ticker)
     if is_p_open or is_n_open:
-        logger.info("Open positions detected at startup. Entering monitoring mode (kill_switch=1).")
+        confirmed_open = (is_p_open and p_verified) or (is_n_open and n_verified)
+        if confirmed_open:
+            logger.info("Open positions detected at startup. Entering monitoring mode (kill_switch=1).")
+        else:
+            logger.warning(
+                "Account state unavailable at startup (OKX API unreachable) — "
+                "cannot confirm flat. Entering monitoring mode (kill_switch=1)."
+            )
         kill_switch = 1
 
     # Commence bot

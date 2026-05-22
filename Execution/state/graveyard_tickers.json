@@ -54,5 +54,12 @@
         "msg": "2 appearances (runs 93+94), 2 cointegration failures, avg PnL -$0.533, largest MAE cluster. ETH staking derivative with reflexive tokenomics and unstable intraday beta — structurally misaligned with stat-arb cointegration assumptions.",
         "ttl_days": null,
         "source": "seed"
+    },
+    "HMSTR-USDT-SWAP": {
+        "reason": "high_execution_cost_meme_token",
+        "code": "",
+        "msg": "run_102 T1: unexplained -$0.226 on $200 notional (161% of position gain). Actual execution cost ~$0.366 vs standard estimate $0.14 (2.6x). Equity_delta MFE depressed by ~$0.167 vs position mark-to-market due to entry costs absorbed immediately in equity. Meme token bid-ask spread structurally incompatible with standard execution cost assumptions at this notional.",
+        "ttl_days": null,
+        "source": "runtime"
     }
 }

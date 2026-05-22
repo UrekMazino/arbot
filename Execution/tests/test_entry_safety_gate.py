@@ -30,6 +30,10 @@ def _config(**overrides):
         "cointegration_lost_cooldown_seconds": 3600.0,
         "cointegration_broken_cooldown_seconds": 7200.0,
         "watch_timeout_cooldown_seconds": 3600.0,
+        "coint_stability_enabled": True,
+        "coint_stability_window": 5,
+        "coint_stability_slope_max": 0.020,
+        "coint_stability_min_sample_interval_seconds": 60.0,
     }
     values.update(overrides)
     return EntrySafetyGateConfig(**values)
@@ -386,3 +390,94 @@ def test_statarb_mr_trend_block_blind_spot_without_entry_strategy_name():
     )
     assert decision.passed
     assert "statarb_mr_trend_regime_block" not in decision.reasons
+
+
+# --- Patch 7: Forward-looking cointegration stability entry filter ---
+
+
+def test_coint_stability_blocks_rising_pvalue():
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=3,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    _decision(config=cfg, now=1000.0, metrics={**_good_metrics(), "p_value": 0.020})
+    _decision(config=cfg, now=1060.0, metrics={**_good_metrics(), "p_value": 0.040})
+    decision = _decision(config=cfg, now=1120.0, metrics={**_good_metrics(), "p_value": 0.060})
+    assert "coint_stability_slope_high" in decision.reasons
+    assert decision.component_scores["coint_stability_check_evaluated_count"] == 1.0
+    assert decision.component_scores["coint_stability_check_blocked_count"] == 1.0
+
+
+def test_coint_stability_allows_stable_pvalue():
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=3,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    _decision(config=cfg, now=1000.0, metrics={**_good_metrics(), "p_value": 0.020})
+    _decision(config=cfg, now=1060.0, metrics={**_good_metrics(), "p_value": 0.020})
+    decision = _decision(config=cfg, now=1120.0, metrics={**_good_metrics(), "p_value": 0.020})
+    assert "coint_stability_slope_high" not in decision.reasons
+    assert decision.component_scores["coint_stability_check_evaluated_count"] == 1.0
+    assert decision.component_scores["coint_stability_check_blocked_count"] == 0.0
+
+
+def test_coint_stability_allows_improving_pvalue():
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=3,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    _decision(config=cfg, now=1000.0, metrics={**_good_metrics(), "p_value": 0.060})
+    _decision(config=cfg, now=1060.0, metrics={**_good_metrics(), "p_value": 0.040})
+    decision = _decision(config=cfg, now=1120.0, metrics={**_good_metrics(), "p_value": 0.020})
+    assert "coint_stability_slope_high" not in decision.reasons
+    assert decision.component_scores["coint_stability_check_evaluated_count"] == 1.0
+    assert decision.component_scores["coint_stability_check_blocked_count"] == 0.0
+
+
+def test_coint_stability_insufficient_history_allows():
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=5,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    _decision(config=cfg, now=1000.0, metrics={**_good_metrics(), "p_value": 0.010})
+    decision = _decision(config=cfg, now=1060.0, metrics={**_good_metrics(), "p_value": 0.090})
+    assert "coint_stability_slope_high" not in decision.reasons
+    assert decision.component_scores["coint_stability_insufficient_history_count"] == 1.0
+    assert decision.component_scores["coint_stability_check_evaluated_count"] == 0.0
+
+
+def test_coint_stability_disabled_skips_check():
+    cfg = _config(coint_stability_enabled=False)
+    _decision(config=cfg, now=1000.0, metrics={**_good_metrics(), "p_value": 0.010})
+    _decision(config=cfg, now=1060.0, metrics={**_good_metrics(), "p_value": 0.050})
+    decision = _decision(config=cfg, now=1120.0, metrics={**_good_metrics(), "p_value": 0.090})
+    assert "coint_stability_slope_high" not in decision.reasons
+    assert "coint_stability_check_evaluated_count" not in decision.component_scores
+    assert "coint_stability_check_blocked_count" not in decision.component_scores
+
+
+def test_coint_stability_sample_interval_enforced():
+    # Verifies that samples closer than MIN_SAMPLE_INTERVAL_SECONDS are not appended.
+    # Without enforcement: the t=30 call would add p=0.090, giving 2 samples → block.
+    # With enforcement: t=30 sample is skipped; buffer still has 1 entry → insufficient → allow.
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=2,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    _decision(config=cfg, now=0.0, metrics={**_good_metrics(), "p_value": 0.010})
+    decision_too_soon = _decision(config=cfg, now=30.0, metrics={**_good_metrics(), "p_value": 0.090})
+    assert "coint_stability_slope_high" not in decision_too_soon.reasons
+    assert decision_too_soon.component_scores["coint_stability_insufficient_history_count"] == 1.0
+    # 60s from first sample — appended; 2-point slope = 0.080 > 0.010 → block
+    decision_ok = _decision(config=cfg, now=60.0, metrics={**_good_metrics(), "p_value": 0.090})
+    assert "coint_stability_slope_high" in decision_ok.reasons

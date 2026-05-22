@@ -50,3 +50,29 @@ Patch 6 — Emergency Flatten Safety (run 99+, 2026-05-20):
 - Tests: 12 new tests in test_patch6_flatten_safety.py covering backoff schedule values and intent persistence through clear_entry_tracking().
 - Trade counter at fix: 5/20. No new trades during investigation.
 - Deferred (not in this patch): EMERGENCY_FLATTEN_FLAT partial-fill telemetry label (item 3), provisional PnL recorded as final (item 4), alert/kill-switch after N consecutive failures (item 5 — needs design).
+
+Structural Review — exp_guard050_ethfi_excluded_v1 (20-trade review, 2026-05-23):
+- Verdict: B (Patch 5 inconclusive — no attributable wins, net contribution $0.00).
+- Guard pass mechanism: 0.34% pass rate across ~881 TP-zone evaluations. Dead in production. Multiplier setting irrelevant.
+- Profit-lock band mechanism: 5/5 winning trades had MFE > $0.230 old floor. Profit-lock would have activated under old config for all 5. 0 Patch-5-enabled wins.
+- Coint fragility confirmed dominant: 7/19 trades (36.8%) ended in coint failure; $2.027 = 63.8% of all losses.
+- Patch 5 retained: no evidence of cost; no evidence of benefit in this window. The floor reduction (0.230→0.170) was never the deciding factor on any trade.
+- Process note — Verdict A→B correction: initial analysis computed old activation floor as $0.255 (derived as $0.34 TP-target × 0.75, omitting the additive buffer). Corrected to $0.230 after tracing _resolve_net_profit_exit_floor_usdt and _check_pnl_profit_lock in code. Formula is activation_floor = (min_profit_usdt × multiplier) + activation_buffer; with min_profit_usdt=$0.240 at $200 notional and buffer=$0.05, old floor = ($0.240 × 0.75) + $0.05 = $0.230. The correction inverted the headline conclusion (A→B). Lesson: verify load-bearing constants against code, not derivation.
+
+Patch 7 — Forward-Looking Cointegration Stability Entry Filter (exp_coint_stability_v1, pending implementation):
+- Hypothesis: pairs entering coint failure during hold can be identified at entry by evaluating whether the p-value trend is deteriorating over recent evaluations.
+- Mechanism: entry gate evaluates slope of cointegration p-value over last N evaluations (default window=5). Rejects if slope exceeds threshold (default 0.020). Affects entry path only — no exit logic changes.
+- New config: STATBOT_ENTRY_COINT_STABILITY_WINDOW (int, default 5), STATBOT_ENTRY_COINT_STABILITY_SLOPE_MAX (float, default 0.020).
+- Parameter provenance: heuristic starting values, not data-derived. First 20 trades are a calibration window.
+- Pre-committed adjustment rule: if gate fire rate <15% of entries, loosen to slope_max=0.030; if >60%, tighten to slope_max=0.012. Re-run 20 trades before evaluating coint-failure-rate effect.
+- Success criteria: coint-failure rate ≤ 25% over next 20 trades; coint-exit losses ≤ $1.50.
+- Null criteria: coint-failure rate ≥ 30%, OR gate fires < 3 times total.
+- Shadow counter required: add coint_stability_check_evaluated_count to entry_gate_component_scores in entry_rejections.csv. Increments every time an entry attempt reaches the coint-stability check regardless of whether it fires. Distinguishes "gate didn't fire because pairs were stable" from "gate never reached because an earlier gate rejected first" — the Patch 4.1 blind-spot applied to calibration. If evaluated_count = 0 after 20 trades, gate is unreachable, not just inactive.
+- Files: Execution/entry_safety_gate.py, Execution/func_trade_management.py.
+- Tests required: 3 — reject rising p-value trend exceeding slope threshold; pass stable p-value; pass improving (decreasing) p-value.
+- Pre-run blockers: (1) Patch 7 implementation + shadow counter + tests; (2) CURRENT_STATE.md updated.
+
+HMSTR-USDT-SWAP added to graveyard (2026-05-23):
+- Reason: high_execution_cost_meme_token, permanent.
+- Evidence: run_102 T1 unexplained -$0.226 (161% of $0.070 position gain). Total execution cost ~$0.366 vs standard estimate $0.14 (2.6×). pnl_source_mismatch confirmed: equity_delta MFE $0.203 vs position_snapshot $0.370 at MFE peak — entry costs depressed the equity_delta by $0.167, causing profit_lock to fire at a distorted PnL level.
+- Caveat: single occurrence. Standard threshold for graveyard is pattern-based (multiple occurrences). Exception justified by magnitude (161% of gain) and structural meme-token argument (structurally wide bid-ask spreads economically incompatible with stat-arb at $200 notional). Not a pattern-based exclusion — flag if needed to revisit in future review.

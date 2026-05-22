@@ -83,6 +83,10 @@ class EntrySafetyGateConfig:
     cointegration_lost_cooldown_seconds: float = 3600.0
     cointegration_broken_cooldown_seconds: float = 7200.0
     watch_timeout_cooldown_seconds: float = 3600.0
+    coint_stability_enabled: bool = True
+    coint_stability_window: int = 5
+    coint_stability_slope_max: float = 0.020
+    coint_stability_min_sample_interval_seconds: float = 60.0
 
     @classmethod
     def from_env(cls) -> "EntrySafetyGateConfig":
@@ -132,6 +136,12 @@ class EntrySafetyGateConfig:
                 3600.0,
                 minimum=0.0,
             ),
+            coint_stability_enabled=_env_flag("STATBOT_ENTRY_COINT_STABILITY_ENABLED", True),
+            coint_stability_window=max(2, int(_env_float("STATBOT_ENTRY_COINT_STABILITY_WINDOW", 5.0, minimum=2.0))),
+            coint_stability_slope_max=_env_float("STATBOT_ENTRY_COINT_STABILITY_SLOPE_MAX", 0.020),
+            coint_stability_min_sample_interval_seconds=_env_float(
+                "STATBOT_ENTRY_COINT_STABILITY_MIN_SAMPLE_INTERVAL_SECONDS", 60.0, minimum=1.0
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -149,6 +159,10 @@ class EntrySafetyGateConfig:
             "cointegration_lost_cooldown_seconds": float(self.cointegration_lost_cooldown_seconds),
             "cointegration_broken_cooldown_seconds": float(self.cointegration_broken_cooldown_seconds),
             "watch_timeout_cooldown_seconds": float(self.watch_timeout_cooldown_seconds),
+            "coint_stability_enabled": bool(self.coint_stability_enabled),
+            "coint_stability_window": int(self.coint_stability_window),
+            "coint_stability_slope_max": float(self.coint_stability_slope_max),
+            "coint_stability_min_sample_interval_seconds": float(self.coint_stability_min_sample_interval_seconds),
         }
 
 
@@ -174,10 +188,23 @@ class EntrySafetyGateDecision:
 
 
 _PAIR_COOLDOWNS: dict[str, dict[str, Any]] = {}
+_PAIR_COINT_PVALUE_HISTORY: dict[str, list[tuple[float, float]]] = {}
 
 
 def clear_entry_safety_gate_state() -> None:
     _PAIR_COOLDOWNS.clear()
+    _PAIR_COINT_PVALUE_HISTORY.clear()
+
+
+def _ols_slope(values: list[float]) -> float:
+    n = len(values)
+    if n < 2:
+        return 0.0
+    x_mean = (n - 1) / 2.0
+    y_mean = sum(values) / n
+    num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+    den = sum((i - x_mean) ** 2 for i in range(n))
+    return num / den if den else 0.0
 
 
 def _cooldown_seconds_for_reason(reason: str, config: EntrySafetyGateConfig) -> float:
@@ -343,6 +370,38 @@ def evaluate_entry_safety_gate(
             reasons.append("cointegration_broken")
             record_entry_safety_pair_event(pair, "cointegration_broken", now=now_ts, config=config)
 
+    _coint_eval = 0
+    _coint_blocked = 0
+    _coint_insuff = 0
+    _coint_slope_val: float | None = None
+
+    if config.coint_stability_enabled:
+        _pair_key = _normalize_pair(pair)
+        _current_p = _safe_float(metrics.get("p_value"), None)
+        if _current_p is not None:
+            _history = _PAIR_COINT_PVALUE_HISTORY.setdefault(_pair_key, [])
+            _should_append = (
+                not _history
+                or now_ts - _history[-1][0] >= float(config.coint_stability_min_sample_interval_seconds)
+            )
+            if _should_append:
+                _history.append((now_ts, _current_p))
+                _max_keep = config.coint_stability_window * 2
+                if len(_history) > _max_keep:
+                    del _history[:-_max_keep]
+            _p_values = [p for _, p in _history]
+            if len(_p_values) >= config.coint_stability_window:
+                _recent = _p_values[-config.coint_stability_window:]
+                _slope = _ols_slope(_recent)
+                _coint_slope_val = _slope
+                _coint_eval = 1
+                if _slope > float(config.coint_stability_slope_max):
+                    reasons.append("coint_stability_slope_high")
+                    _coint_blocked = 1
+                    metadata["coint_stability_slope"] = _slope
+            else:
+                _coint_insuff = 1
+
     cointegration_component = components.get("cointegration")
     if (
         cointegration_component is not None
@@ -399,6 +458,13 @@ def evaluate_entry_safety_gate(
             reasons.append("advanced_ml_trending")
         if break_risk is not None and float(break_risk) >= float(config.max_break_risk):
             reasons.append("advanced_ml_break_risk_high")
+
+    if config.coint_stability_enabled:
+        components["coint_stability_check_evaluated_count"] = float(_coint_eval)
+        components["coint_stability_check_blocked_count"] = float(_coint_blocked)
+        components["coint_stability_insufficient_history_count"] = float(_coint_insuff)
+        if _coint_slope_val is not None:
+            components["coint_stability_slope"] = float(_coint_slope_val)
 
     unique_reasons = tuple(sorted(set(reason for reason in reasons if reason)))
     passed = not unique_reasons

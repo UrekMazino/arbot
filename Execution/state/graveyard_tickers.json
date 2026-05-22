@@ -44,8 +44,8 @@
     "SHIB-USDT-SWAP": {
         "reason": "stop_loss_tick_floor_unsafe",
         "code": "",
-        "msg": "SHIB tickSz=0.000001 causes stop-loss post-fill rejection:",
-        "ttl_days": 7,
+        "msg": "SHIB tickSz=0.000001 causes stop-loss post-fill rejection. Structural exchange constraint — not time-bound. Permanently excluded.",
+        "ttl_days": null,
         "source": "seed"
     },
     "ETHFI-USDT-SWAP": {

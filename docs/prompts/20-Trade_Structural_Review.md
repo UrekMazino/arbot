@@ -226,7 +226,11 @@ Patch-5-neutral win count (would have won without Patch 5): [count] of [total wi
 Estimated PnL contribution from Patch-5-enabled wins:
 - Sum of realized_pnl for Patch-5-enabled wins: [+$X]
 - Counterfactual estimate for these trades without Patch 5:
-  Counterfactual method: for each Patch-5-enabled win, look at the exit_decision_trace after the profit-lock activation point. Identify what happened to the pair post-activation (coint continued, deteriorated, etc.). If cointegration later failed (detectable in the trace via exit_reason or coint flags), the counterfactual exit would have been a coint-failure loss — estimate the counterfactual PnL as the median coint-failure exit PnL from other similar trades. If the pair would likely have exited normally, estimate the counterfactual as $0.00 (no profit). Label every counterfactual estimate explicitly as "assumed" with the reasoning shown.
+  Counterfactual method: for each Patch-5-enabled win, look at the exit_decision_trace after the profit-lock activation point. Identify what happened to the pair post-activation and apply whichever case matches:
+  - Case A — coint later failed (detectable via exit_reason or coint flags in the trace): counterfactual exit would have been a coint-failure loss. Estimate counterfactual PnL as the median coint-failure exit PnL from other similar trades.
+  - Case B — MFE later exceeded the old floor after profit-lock activated: the pair would have reached the old floor under prior config and activated profit-lock there. Estimate the counterfactual realized PnL by applying the same giveback ratio to peak_MFE anchored from the old-floor activation point rather than $0.170. This case produces a counterfactual WIN — the Patch 5 benefit for this trade is activation timing, not the difference between win and loss. Label: "assumed — old-floor activation scenario."
+  - Case C — pair likely exited normally without coint failure and MFE did not reach the old floor: estimate counterfactual as $0.00 (no profit).
+  Label every counterfactual estimate explicitly as "assumed" with the reasoning shown.
 - Net Patch 5 benefit (enabled-win PnL minus counterfactual PnL): [delta]
 
 Estimated PnL cost from Patch 5 changes:
@@ -509,7 +513,11 @@ Verdict C — Patch 5 should be reverted:
 Meets: net Patch 5 contribution (from 3C) is negative (< -$0.05) — trades that closed worse under the lower floor outweigh the enabled wins. This requires confirmed cases of the trailing stop catching trades at losses that a higher floor would have avoided.
 Action: revert STATBOT_FULL_TP_GUARD_MULTIPLIER to 0.75. Pursue a different lever.
 
+Noise-floor caveat: the $0.05 verdict boundaries are narrower than typical per-trade measurement noise (reconciliation residuals of $0.05–$0.15 are routine; execution gaps are not anomalies). If the net contribution from Section 3C falls within ±$0.10 of neutral, the estimate is within noise — assign Verdict B regardless of which side of the $0.05 boundary the point estimate sits. Reserve Verdict A for net contribution clearly above +$0.10; reserve Verdict C for net contribution clearly below -$0.10.
+
 State the verdict: [A / B / C]
+
+Sample size note: this verdict rests on 20 trades with ≤ 5 Patch-5-mechanism-relevant wins. Treat it as directional rather than statistically established — sufficient to decide the next research priority, not sufficient to rule out chance variation.
 
 Evidence summary (required, referencing Section 3 findings):
 - Patch-5-enabled win count: [N]

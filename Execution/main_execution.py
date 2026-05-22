@@ -93,6 +93,7 @@ from session_risk_circuit_breaker import (
     record_session_trade_result,
     get_session_consecutive_losses,
     get_session_realized_pnl,
+    get_session_trades_count,
     get_session_run_id,
 )
 from entry_safety_gate import EntrySafetyGateConfig, record_entry_safety_pair_event
@@ -1023,6 +1024,15 @@ def _get_max_uptime_hours():
     if hours <= 0:
         return 0.0
     return hours
+
+
+def _get_max_session_trades():
+    raw = os.getenv("STATBOT_MAX_SESSION_TRADES", "0")
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(count, 0)
 
 
 def _report_state_path():
@@ -3604,6 +3614,7 @@ if __name__ == "__main__":
     if cycle_limit < 0:
         cycle_limit = 0
     max_uptime_hours = _get_max_uptime_hours()
+    max_session_trades = _get_max_session_trades()
     run_end_reason = None
     run_end_detail = ""
     run_end_exit_code = 0
@@ -3626,6 +3637,14 @@ if __name__ == "__main__":
                         f"limit_hours={max_uptime_hours:.2f} uptime_hours={uptime_hours:.2f}"
                     )
                     status_dict["message"] = "Max uptime reached; exiting."
+                    save_status(status_dict)
+                    break
+            if max_session_trades > 0:
+                closed = get_session_trades_count()
+                if closed >= max_session_trades:
+                    run_end_reason = "max_session_trades"
+                    run_end_detail = f"limit={max_session_trades} closed={closed}"
+                    status_dict["message"] = "Session trade target reached; exiting."
                     save_status(status_dict)
                     break
 

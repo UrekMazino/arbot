@@ -271,7 +271,7 @@ class TestSessionRiskStatePersistence:
         # The file must be written but must contain ONLY the expected keys.
         data = json.loads(scb.SESSION_RISK_STATE_FILE.read_text(encoding="utf-8"))
         allowed_keys = {"run_id", "session_consecutive_losses",
-                        "session_realized_pnl_usdt", "updated_at"}
+                        "session_realized_pnl_usdt", "session_trades_count", "updated_at"}
         unexpected = set(data.keys()) - allowed_keys
         assert not unexpected, (
             f"state file must not contain extra keys: {unexpected}"

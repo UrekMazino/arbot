@@ -49,6 +49,7 @@ def _stable_run_id() -> str:
 _session_run_id: str = _stable_run_id()
 _session_consecutive_losses: int = 0
 _session_realized_pnl_usdt: float = 0.0
+_session_trades_count: int = 0
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ def _load_session_state() -> None:
     tests.  All errors are silently swallowed — a missing or corrupt file just
     means we start from zero, which is always safe.
     """
-    global _session_consecutive_losses, _session_realized_pnl_usdt
+    global _session_consecutive_losses, _session_realized_pnl_usdt, _session_trades_count
     try:
         path = SESSION_RISK_STATE_FILE
         if not path.exists():
@@ -77,11 +78,13 @@ def _load_session_state() -> None:
             return  # different run → do not inherit state
         _session_consecutive_losses = int(data.get("session_consecutive_losses", 0))
         _session_realized_pnl_usdt = float(data.get("session_realized_pnl_usdt", 0.0))
+        _session_trades_count = int(data.get("session_trades_count", 0))
         _log.info(
-            "session_risk_state_loaded run_id=%s session_consecutive_losses=%d session_realized_pnl_usdt=%.4f",
+            "session_risk_state_loaded run_id=%s session_consecutive_losses=%d session_realized_pnl_usdt=%.4f session_trades_count=%d",
             _session_run_id,
             _session_consecutive_losses,
             _session_realized_pnl_usdt,
+            _session_trades_count,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -100,6 +103,7 @@ def _save_session_state() -> None:
             "run_id": _session_run_id,
             "session_consecutive_losses": _session_consecutive_losses,
             "session_realized_pnl_usdt": _session_realized_pnl_usdt,
+            "session_trades_count": _session_trades_count,
             "updated_at": time.time(),
         }
     )
@@ -140,10 +144,11 @@ def reset_session_circuit_breaker_state() -> None:
 
     Exposed for tests — do not call from production trade logic.
     """
-    global _session_run_id, _session_consecutive_losses, _session_realized_pnl_usdt
+    global _session_run_id, _session_consecutive_losses, _session_realized_pnl_usdt, _session_trades_count
     _session_run_id = str(uuid.uuid4())
     _session_consecutive_losses = 0
     _session_realized_pnl_usdt = 0.0
+    _session_trades_count = 0
     try:
         if SESSION_RISK_STATE_FILE.exists():
             SESSION_RISK_STATE_FILE.unlink()
@@ -169,12 +174,13 @@ def record_session_trade_result(is_win: bool, pnl_usdt: float = 0.0) -> None:
     stay in sync.  The disk write is atomic so a concurrent restart cannot read
     a half-written file.
     """
-    global _session_consecutive_losses, _session_realized_pnl_usdt
+    global _session_consecutive_losses, _session_realized_pnl_usdt, _session_trades_count
     if is_win:
         _session_consecutive_losses = 0
     else:
         _session_consecutive_losses += 1
     _session_realized_pnl_usdt += float(pnl_usdt)
+    _session_trades_count += 1
     _save_session_state()
 
 
@@ -184,6 +190,10 @@ def get_session_consecutive_losses() -> int:
 
 def get_session_realized_pnl() -> float:
     return _session_realized_pnl_usdt
+
+
+def get_session_trades_count() -> int:
+    return _session_trades_count
 
 
 def get_session_run_id() -> str:

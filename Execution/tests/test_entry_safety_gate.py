@@ -10,6 +10,7 @@ from entry_safety_gate import (  # noqa: E402
     EntrySafetyGateConfig,
     clear_entry_safety_gate_state,
     evaluate_entry_safety_gate,
+    record_entry_coint_pvalue,
     record_entry_safety_pair_event,
 )
 import func_trade_management as ftm  # noqa: E402
@@ -481,3 +482,47 @@ def test_coint_stability_sample_interval_enforced():
     # 60s from first sample — appended; 2-point slope = 0.080 > 0.010 → block
     decision_ok = _decision(config=cfg, now=60.0, metrics={**_good_metrics(), "p_value": 0.090})
     assert "coint_stability_slope_high" in decision_ok.reasons
+
+
+# --- Patch 7.1: record_entry_coint_pvalue pre-populates the ring buffer ---
+
+
+def test_record_entry_coint_pvalue_enables_gate_evaluation():
+    # Pre-populate the buffer via the monitoring-loop path (5 samples at 60s intervals).
+    # The gate should see evaluated_count=1, not insufficient_history, on the first gate call.
+    # Uses the _decision helper's default pair so buffer key alignment is guaranteed.
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=5,
+        coint_stability_slope_max=0.020,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    pair = "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    for i in range(5):
+        record_entry_coint_pvalue(pair, 0.05 + i * 0.001, float(i * 60), config=cfg)
+    # First gate call — buffer is full, slope should be computable
+    decision = _decision(config=cfg, now=300.0, metrics={**_good_metrics(), "p_value": 0.054})
+    assert decision.component_scores["coint_stability_check_evaluated_count"] == 1.0
+    assert decision.component_scores["coint_stability_insufficient_history_count"] == 0.0
+
+
+def test_record_entry_coint_pvalue_respects_sample_interval():
+    # The monitoring loop runs every few seconds. Verify that rapid successive calls
+    # to record_entry_coint_pvalue only append one sample per min_sample_interval window,
+    # matching the interval gate inside the entry safety gate itself.
+    cfg = _config(
+        coint_stability_enabled=True,
+        coint_stability_window=2,
+        coint_stability_slope_max=0.010,
+        coint_stability_min_sample_interval_seconds=60.0,
+    )
+    pair = "AAA-USDT-SWAP/BBB-USDT-SWAP"
+    record_entry_coint_pvalue(pair, 0.010, 0.0, config=cfg)
+    # Rapid follow-up calls within the 60s window — must not append
+    record_entry_coint_pvalue(pair, 0.090, 10.0, config=cfg)
+    record_entry_coint_pvalue(pair, 0.090, 20.0, config=cfg)
+    record_entry_coint_pvalue(pair, 0.090, 30.0, config=cfg)
+    # Gate call at t=31 — buffer has 1 sample, should be insufficient_history (not blocked)
+    decision = _decision(config=cfg, now=31.0, metrics={**_good_metrics(), "p_value": 0.090})
+    assert "coint_stability_slope_high" not in decision.reasons
+    assert decision.component_scores["coint_stability_insufficient_history_count"] == 1.0

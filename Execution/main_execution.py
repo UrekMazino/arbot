@@ -96,7 +96,7 @@ from session_risk_circuit_breaker import (
     get_session_trades_count,
     get_session_run_id,
 )
-from entry_safety_gate import EntrySafetyGateConfig, record_entry_safety_pair_event
+from entry_safety_gate import EntrySafetyGateConfig, record_entry_coint_pvalue, record_entry_safety_pair_event
 from advanced_ml_runtime import (
     advanced_ml_config_snapshot,
     advanced_ml_runtime_mode,
@@ -3669,6 +3669,19 @@ if __name__ == "__main__":
                     latest_zscore = float(z_val)
                     break
             price_p, price_n = metrics.get("price_1"), metrics.get("price_2")
+
+            # Patch 7.1: pre-populate coint stability buffer every monitoring cycle
+            # (not just when a z-signal fires the entry gate). The interval gate inside
+            # record_entry_coint_pvalue ensures samples are spaced >= min_sample_interval_seconds
+            # regardless of how frequently this loop runs.
+            if is_manage_new_trades:
+                _monitor_p_value_raw = metrics.get("p_value")
+                if _monitor_p_value_raw is not None:
+                    record_entry_coint_pvalue(
+                        f"{signal_positive_ticker}/{signal_negative_ticker}",
+                        float(_monitor_p_value_raw),
+                        time.time(),
+                    )
 
             # 2a. ORDERBOOK DEAD CHECK: Switch if tickers are delisted/illiquid
             if metrics.get("orderbook_dead", False):

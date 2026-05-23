@@ -196,6 +196,36 @@ def clear_entry_safety_gate_state() -> None:
     _PAIR_COINT_PVALUE_HISTORY.clear()
 
 
+def record_entry_coint_pvalue(
+    pair: str,
+    p_value: float,
+    now: float,
+    config: "EntrySafetyGateConfig | None" = None,
+) -> None:
+    """Pre-populate the coint stability ring buffer from the monitoring loop.
+
+    Applies the same min_sample_interval gate as the entry safety gate so the
+    buffer contents are identical to what the gate would record. Call this every
+    monitoring cycle (when no position is open) to ensure the buffer is filled
+    by the time an entry signal fires, rather than relying on signal-triggered
+    gate calls to fill it.
+    """
+    config = config or EntrySafetyGateConfig.from_env()
+    if not config.coint_stability_enabled:
+        return
+    _pair_key = _normalize_pair(pair)
+    _history = _PAIR_COINT_PVALUE_HISTORY.setdefault(_pair_key, [])
+    _should_append = (
+        not _history
+        or now - _history[-1][0] >= float(config.coint_stability_min_sample_interval_seconds)
+    )
+    if _should_append:
+        _history.append((now, p_value))
+        _max_keep = config.coint_stability_window * 2
+        if len(_history) > _max_keep:
+            del _history[:-_max_keep]
+
+
 def _ols_slope(values: list[float]) -> float:
     n = len(values)
     if n < 2:
@@ -483,5 +513,6 @@ __all__ = [
     "EntrySafetyGateDecision",
     "clear_entry_safety_gate_state",
     "evaluate_entry_safety_gate",
+    "record_entry_coint_pvalue",
     "record_entry_safety_pair_event",
 ]

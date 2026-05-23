@@ -894,84 +894,6 @@ def _maybe_log_pnl_alert(total_pnl, pnl_pct, session_pnl, session_pnl_pct, equit
     )
 
 
-def _start_molt_monitor():
-    disable = str(os.getenv("STATBOT_MOLT_MONITOR", "")).strip().lower()
-    if disable in ("0", "false", "no", "off"):
-        logger.info("Molt monitor disabled via STATBOT_MOLT_MONITOR.")
-        return None
-    if os.getenv("STATBOT_MOLT_MONITOR_STARTED") == "1":
-        return None
-
-    monitor_script = Path(__file__).resolve().parent / "molt_monitor.py"
-    if not monitor_script.exists():
-        logger.warning("Molt monitor script missing: %s", monitor_script)
-        return None
-
-    env = os.environ.copy()
-    env["STATBOT_MOLT_MONITOR_STARTED"] = "1"
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-        )
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, str(monitor_script)],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
-    except Exception as exc:
-        logger.warning("Failed to start Molt monitor: %s", exc)
-        return None
-
-    os.environ["STATBOT_MOLT_MONITOR_STARTED"] = "1"
-    logger.info("Started Molt monitor (pid=%s).", proc.pid)
-    return proc
-
-
-def _start_command_listener():
-    disable = str(os.getenv("STATBOT_COMMAND_LISTENER", "")).strip().lower()
-    if disable in ("0", "false", "no", "off"):
-        logger.info("Command listener disabled via STATBOT_COMMAND_LISTENER.")
-        return None
-    if os.getenv("STATBOT_COMMAND_LISTENER_STARTED") == "1":
-        return None
-
-    listener_script = Path(__file__).resolve().parent / "command_listener.py"
-    if not listener_script.exists():
-        logger.warning("Command listener script missing: %s", listener_script)
-        return None
-
-    env = os.environ.copy()
-    env["STATBOT_COMMAND_LISTENER_STARTED"] = "1"
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-        )
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, str(listener_script)],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
-    except Exception as exc:
-        logger.warning("Failed to start command listener: %s", exc)
-        return None
-
-    os.environ["STATBOT_COMMAND_LISTENER_STARTED"] = "1"
-    logger.info("Started command listener (pid=%s).", proc.pid)
-    return proc
-
-
 def _run_report_generator():
     disable = str(os.getenv("STATBOT_REPORT_ENABLE", "1")).strip().lower()
     if disable in ("0", "false", "no", "off"):
@@ -3178,8 +3100,6 @@ def _calculate_cumulative_pnl(ticker_p, ticker_n, state, price_p=None, price_n=N
 if __name__ == "__main__":
     # Manager process to handle restarts (especially on Windows)
     if os.getenv("STATBOT_MANAGED") != "1":
-        monitor_proc = _start_molt_monitor()
-        command_proc = _start_command_listener()
         start_ts = os.getenv("STATBOT_START_TS")
         if not start_ts:
             start_ts = str(time.time())
@@ -3201,10 +3121,6 @@ if __name__ == "__main__":
                 ret = subprocess.call([sys.executable] + sys.argv, env=env)
             except KeyboardInterrupt:
                 # Handle Ctrl+C in the manager
-                if monitor_proc and monitor_proc.poll() is None:
-                    monitor_proc.terminate()
-                if command_proc and command_proc.poll() is None:
-                    command_proc.terminate()
                 _log_run_end("manual_stop", "Ended by user", exit_code=0)
                 save_status({"message": "Run ended by user"})
                 _run_report_generator()
@@ -3215,14 +3131,7 @@ if __name__ == "__main__":
                 print("\n--- Restarting StatBot for New Pair ---\n")
                 continue
             _run_report_generator()
-            if monitor_proc and monitor_proc.poll() is None:
-                monitor_proc.terminate()
-            if command_proc and command_proc.poll() is None:
-                command_proc.terminate()
             sys.exit(ret)
-
-    _start_molt_monitor()
-    _start_command_listener()
 
     # Wait for cointegrated pairs CSV if empty
     csv_path = Path(__file__).resolve().parent.parent / "Strategy" / "output" / "2_cointegrated_pairs.csv"

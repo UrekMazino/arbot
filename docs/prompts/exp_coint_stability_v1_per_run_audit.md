@@ -129,6 +129,15 @@ For each closed trade, report:
 | coint_stability_insufficient_history_count | (from entry_rejections.csv, this pair's rows) |
 | coint_stability_check_blocked_count | (from entry_rejections.csv, this pair's rows) |
 | gate_reached | yes / no (no = upstream gate blocked before safety gate) |
+| slope at entry | (from entry_rejections.csv final pre-entry row for this pair; negative = improving) |
+| slope_max threshold | 0.020 (frozen) |
+| delta_from_threshold | slope_max − slope_at_entry (positive = how far below threshold; negative = blocked) |
+| exit_category | `coint-failure` (cointegration_lost / coint_watch_timeout) / `normal` (trailing_stop / full_tp / other) |
+
+**Distance-from-threshold interpretation (record, do not conclude):**
+- Delta near 0 (e.g., < 0.005): filter was close to blocking — threshold tuning might have caught it.
+- Delta large (e.g., > 0.015): slope was far below threshold — no threshold tuning would have caught it; if exit was coint-failure, this is evidence against the premise.
+- T5 reference: slope −0.00449, delta = 0.020 − (−0.00449) = 0.02449 → far below threshold, coint-failure.
 
 **gate_status derivation:**
 - `not_reached`: upstream gate (strategy_gate or regime_gate) blocked before safety gate was evaluated — coint_stability counters will be absent or 0 in entry_rejections.csv for this pair
@@ -174,6 +183,26 @@ After each run, report:
   (Excludes `not_reached` trades — those are upstream blocks, not Patch 7 outcomes)
 
 **Why this matters:** The coint-failure rate effect can only appear in `evaluated` trades. If `evaluated / (evaluated + insufficient_history)` is low, the gate is functionally inactive on a large fraction of entries. At the 20-trade structural review, coint-failure rate must be split by gate status.
+
+### 4D — Running Slope-vs-Outcome Tally (Cumulative, Evaluated Trades Only)
+
+Maintain this table across all gate-evaluated trades in the window. Update each run. **Only include trades where the filter passed and the trade closed** (gate_status = `evaluated` AND `coint_stability_check_blocked_count = 0` AND trade was accepted). Insufficient-history, not-reached, and **blocked** trades do not belong here. Blocked entries go to the `coint_stability_slope_exceeded` count — a separate population. These two populations must never mix: 4D = passed-then-outcome; slope_exceeded = blocked-before-entry. Since blocked trades never become closed trades this separation is automatic in practice, but state it explicitly to prevent ambiguity if slope_exceeded starts counting.
+
+**Delta convention (slope_max − slope_at_entry):** large positive delta = slope far below threshold (filter was not close to catching it); small positive or negative delta = slope near or above threshold (near-miss or should have been caught). Cutoffs: delta < 0.005 → tunable; delta > 0.015 → premise question. A trade with slope above 0.020 gets blocked and never appears in this tally.
+
+| Trade # | Run | Pair | Slope at Entry | Delta from Threshold | Exit Category |
+|---|---|---|---|---|---|
+| T5 | run_111 | FIL/FLOKI | −0.00449 | +0.02449 | coint-failure |
+| T[N] | run_[X] | [pair] | [value] | [0.020 − slope] | coint-failure / normal |
+
+After each run, note:
+- Count of coint-failure trades: [N] / total evaluated: [N]
+- Whether coint-failures cluster at higher slopes than normal exits (eyeball check, no statistics)
+- Whether failure deltas are near-threshold (< 0.005 → tunable) or far-below (> 0.015 → premise question)
+
+Do not conclude from this table mid-window. Record and report.
+
+---
 
 ### 4C-TRIGGER — Gate-Inactivity Soft Trigger (Closed-Trade Based)
 
@@ -264,6 +293,13 @@ next step: [if count < 20: "run [N+1] with frozen configuration"; if count ≥ 2
 ```
 
 `trades_since_experiment_start` is the window-completion counter. `evaluated_trade_count` is the real experimental N — the number of trades on which Patch 7 could actually have acted. If `evaluated_trade_count` is tracking far below `trades_since_experiment_start`, the window is underpowered and the structural review must state this explicitly rather than treating 20 trades as the sample size.
+
+**slope_exceeded=0 resolution criterion (pre-committed):**
+If `coint_stability_slope_exceeded` remains 0 after 6 gate-evaluated trades:
+- Fire rate = 0/6 = 0%, below the 15% loosen-threshold.
+- This is not "inconclusive" — it is the pre-committed calibration trigger: slope_max 0.020 → 0.030.
+- The calibration adjustment is applied at the structural review (or noted as pending if fewer than 20 trades have closed).
+- Fire rate denominator = evaluated trades only. Insufficient-history and not-reached trades are excluded.
 
 No recommendations. No "next priority" lists. If trades_since_experiment_start is still below 20 and the gate-inactivity trigger has not fired, the next action is the next run with frozen configuration.
 

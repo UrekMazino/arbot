@@ -2424,22 +2424,22 @@ export default function AdminConsolePage() {
               subtitle={`${pairsHealth?.hospital?.length || 0} pairs on cooldown`}
             >
               <TableFrame>
-                <table>
+                <table className="w-full table-fixed">
                   <thead>
                     <tr>
-                      <th>Pair</th>
-                      <th>Reason</th>
-                      <th>Cooldown</th>
-                      <th>Remaining</th>
-                      <th>Status</th>
-                      <th>Visits</th>
+                      <th className="w-[22%]">Pair</th>
+                      <th className="w-[30%]">Reason</th>
+                      <th className="w-[12%]">Cooldown</th>
+                      <th className="w-[12%]">Remaining</th>
+                      <th className="w-[12%]">Status</th>
+                      <th className="w-[12%]">Visits</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pairsHealth?.hospital?.map((entry) => (
                       <tr key={entry.pair}>
                         <td className="font-mono text-xs">{entry.pair}</td>
-                        <td className="text-xs">{entry.reason}</td>
+                        <td className="whitespace-normal break-words text-xs">{entry.reason}</td>
                         <td className="text-xs">{entry.cooldown_seconds}s</td>
                         <td className="text-xs">
                           {entry.is_ready ? (
@@ -2477,21 +2477,21 @@ export default function AdminConsolePage() {
               subtitle={`${pairsHealth?.graveyard?.length || 0} permanently excluded pairs`}
             >
               <TableFrame>
-                <table>
+                <table className="w-full table-fixed">
                   <thead>
                     <tr>
-                      <th>Pair</th>
-                      <th>Reason</th>
-                      <th>TTL Days</th>
-                      <th>Added</th>
-                      <th>Action</th>
+                      <th className="w-[25%]">Pair</th>
+                      <th className="w-[40%]">Reason</th>
+                      <th className="w-[10%]">TTL Days</th>
+                      <th className="w-[12%]">Added</th>
+                      <th className="w-[13%]">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pairsHealth?.graveyard?.map((entry) => (
                       <tr key={entry.pair}>
                         <td className="font-mono text-xs">{entry.pair}</td>
-                        <td className="text-xs">{entry.reason}</td>
+                        <td className="whitespace-normal break-words text-xs">{entry.reason}</td>
                         <td className="text-xs">{entry.ttl_days ?? "Permanent"}</td>
                         <td className="text-xs">
                           {entry.added_at ? new Date(entry.added_at * 1000).toLocaleDateString() : "n/a"}
@@ -2529,22 +2529,22 @@ export default function AdminConsolePage() {
               subtitle={`${pairsHealth?.restricted_tickers?.length || 0} excluded tickers`}
             >
               <TableFrame>
-                <table>
+                <table className="w-full table-fixed">
                   <thead>
                     <tr>
-                      <th>Ticker</th>
-                      <th>Reason</th>
-                      <th>Detail</th>
-                      <th>Source</th>
-                      <th>Added</th>
+                      <th className="w-[20%]">Ticker</th>
+                      <th className="w-[22%]">Reason</th>
+                      <th className="w-[33%]">Detail</th>
+                      <th className="w-[12%]">Source</th>
+                      <th className="w-[13%]">Added</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pairsHealth?.restricted_tickers?.map((entry) => (
                       <tr key={entry.ticker}>
                         <td className="font-mono text-xs">{entry.ticker}</td>
-                        <td className="text-xs">{entry.reason}</td>
-                        <td className="text-xs">{entry.message || entry.code || "n/a"}</td>
+                        <td className="whitespace-normal break-words text-xs">{entry.reason}</td>
+                        <td className="whitespace-normal break-all text-xs">{entry.message || entry.code || "n/a"}</td>
                         <td className="text-xs">{entry.source}</td>
                         <td className="text-xs">
                           {entry.added_at ? new Date(entry.added_at * 1000).toLocaleDateString() : "n/a"}

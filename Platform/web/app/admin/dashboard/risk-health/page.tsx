@@ -256,19 +256,19 @@ function PairHealthTable({
         <EmptyState message="No pairs in this category." compact />
       ) : (
         <TableFrame compact maxHeightClass="max-h-60">
-          <table className="min-w-[560px] text-left text-sm">
+          <table className="w-full table-fixed text-left text-sm">
             <thead className="border-b border-gray-200 text-xs uppercase tracking-[0.12em] text-gray-500 dark:border-gray-800">
               <tr>
-                <th className="px-4 py-3">Pair</th>
-                <th className="px-4 py-3">Value</th>
-                <th className="px-4 py-3">Latest</th>
+                <th className="w-[30%] px-4 py-3">Pair</th>
+                <th className="w-[45%] px-4 py-3">Value</th>
+                <th className="w-[25%] px-4 py-3">Latest</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {rows.map((row, index) => (
                 <tr key={`${title}-${rowPair(row)}-${index}`} className="text-gray-700 dark:text-gray-300">
                   <td className="px-4 py-3 font-medium">{rowPair(row)}</td>
-                  <td className="px-4 py-3 font-mono">{formatUnknown(rowValue(row, valueKey))}</td>
+                  <td className="break-words px-4 py-3 font-mono">{formatUnknown(rowValue(row, valueKey))}</td>
                   <td className="px-4 py-3">{formatTimestamp(rowValue(row, "latest_timestamp"))}</td>
                 </tr>
               ))}

@@ -61,5 +61,12 @@
         "msg": "run_102 T1: unexplained -$0.226 on $200 notional (161% of position gain). Actual execution cost ~$0.366 vs standard estimate $0.14 (2.6x). Equity_delta MFE depressed by ~$0.167 vs position mark-to-market due to entry costs absorbed immediately in equity. Meme token bid-ask spread structurally incompatible with standard execution cost assumptions at this notional.",
         "ttl_days": null,
         "source": "runtime"
+    },
+    "FLOKI-USDT-SWAP": {
+        "reason": "high_execution_cost_meme_token",
+        "code": "",
+        "msg": "run_111 T5: unexplained -$0.093 on $200 notional. Same category as HMSTR (run_102, -$0.226). Meme token bid-ask spread produces execution costs materially above standard $0.14 estimate. Second occurrence of meme-token execution cost anomaly — permanently excluded.",
+        "ttl_days": null,
+        "source": "runtime"
     }
 }

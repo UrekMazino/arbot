@@ -141,6 +141,8 @@ def _build_trade_rows_from_events(rows: list[RunEvent]) -> list[dict]:
                 "full_tp_touched": _coerce_bool(payload.get("full_tp_touched")),
                 "guard_blocked_full_tp_count": _coerce_int(payload.get("guard_blocked_full_tp_count")),
                 "partial_exit_before_full_tp": _coerce_bool(payload.get("partial_exit_before_full_tp")),
+                "entry_coint_stability_slope": _coerce_float(payload.get("entry_coint_stability_slope")),
+                "entry_coint_stability_evaluated_count": _coerce_int(payload.get("entry_coint_stability_evaluated_count")),
             }
         )
     return trade_rows
@@ -188,6 +190,8 @@ def _build_trade_rows_from_models(trades: list[Trade], event_lookup: dict[tuple[
                 "full_tp_touched": _coerce_bool(payload.get("full_tp_touched")),
                 "guard_blocked_full_tp_count": _coerce_int(payload.get("guard_blocked_full_tp_count")),
                 "partial_exit_before_full_tp": _coerce_bool(payload.get("partial_exit_before_full_tp")),
+                "entry_coint_stability_slope": _coerce_float(payload.get("entry_coint_stability_slope")),
+                "entry_coint_stability_evaluated_count": _coerce_int(payload.get("entry_coint_stability_evaluated_count")),
             }
         )
     return trade_rows
@@ -1489,6 +1493,8 @@ def materialize_live_run_report(db: Session, run: Run) -> dict:
             "full_tp_touched",
             "guard_blocked_full_tp_count",
             "partial_exit_before_full_tp",
+            "entry_coint_stability_slope",
+            "entry_coint_stability_evaluated_count",
         ],
     )
     _write_csv(

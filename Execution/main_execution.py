@@ -145,6 +145,7 @@ from func_pair_state import (
     get_entry_z_score,
     get_entry_notional,
     get_entry_policy_snapshot,
+    get_entry_gate_components,
     get_entry_strategy,
     get_entry_regime,
     get_trade_mae_mfe_snapshot,
@@ -4680,6 +4681,7 @@ if __name__ == "__main__":
                         if equity_trusted and equity_usdt is not None:
                             set_entry_equity(equity_usdt)
                         entry_policy_snapshot = get_entry_policy_snapshot() or {}
+                        entry_gate_components = get_entry_gate_components()
                         entry_strategy = str(get_entry_strategy() or "").strip().upper() or (
                             str(getattr(last_strategy_decision, "active_strategy", "") or "").strip().upper() or None
                         )
@@ -4714,6 +4716,8 @@ if __name__ == "__main__":
                                 "min_persist_bars_used": entry_policy_snapshot.get("min_persist_bars"),
                                 "entry_notional_usdt": get_entry_notional(),
                                 "entry_ts": get_entry_time(),
+                                "entry_coint_stability_slope": entry_gate_components.get("coint_stability_slope"),
+                                "entry_coint_stability_evaluated_count": entry_gate_components.get("coint_stability_check_evaluated_count"),
                             },
                             severity="info",
                             logger=logger,
@@ -4794,6 +4798,7 @@ if __name__ == "__main__":
                 entry_strategy = str(get_entry_strategy() or "").strip().upper()
                 entry_regime = str(get_entry_regime() or "").strip().upper()
                 entry_policy_snapshot = get_entry_policy_snapshot() or {}
+                entry_gate_components = get_entry_gate_components()
                 trade_mae_mfe_snapshot = get_trade_mae_mfe_snapshot()
                 if not entry_strategy and last_strategy_decision is not None:
                     entry_strategy = str(
@@ -5391,6 +5396,8 @@ if __name__ == "__main__":
                             trade_mae_mfe_snapshot.get("partial_exit_before_full_tp")
                         ),
                         "entry_ts": entry_time_ts,
+                        "entry_coint_stability_slope": entry_gate_components.get("coint_stability_slope"),
+                        "entry_coint_stability_evaluated_count": entry_gate_components.get("coint_stability_check_evaluated_count"),
                         "ending_equity_usdt": alert_equity,
                         "session_pnl_usdt": alert_session_pnl,
                         "session_pnl_pct": alert_session_pnl_pct,

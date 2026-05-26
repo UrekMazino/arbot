@@ -1,4 +1,5 @@
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -526,3 +527,55 @@ def test_record_entry_coint_pvalue_respects_sample_interval():
     decision = _decision(config=cfg, now=31.0, metrics={**_good_metrics(), "p_value": 0.090})
     assert "coint_stability_slope_high" not in decision.reasons
     assert decision.component_scores["coint_stability_insufficient_history_count"] == 1.0
+
+
+# --- Patch 7 telemetry: entry slope persistence for accepted trades ---
+
+import func_pair_state as _fps  # noqa: E402
+
+
+def _with_tmp_pair_state(fn):
+    """Run fn with func_pair_state redirected to a temp file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        orig_state_dir = _fps._STATE_DIR
+        orig_state_file = _fps.STATE_FILE
+        orig_lock_file = _fps._STATE_LOCK_FILE
+        _fps._STATE_DIR = tmp_path
+        _fps.STATE_FILE = tmp_path / "pair_strategy_state.json"
+        _fps._STATE_LOCK_FILE = tmp_path / "pair_strategy_state.json.lock"
+        try:
+            fn()
+        finally:
+            _fps._STATE_DIR = orig_state_dir
+            _fps.STATE_FILE = orig_state_file
+            _fps._STATE_LOCK_FILE = orig_lock_file
+
+
+def test_entry_gate_components_persisted_and_retrieved():
+    # set_entry_trade_context stores entry_gate_components; get_entry_gate_components retrieves slope.
+    def _run():
+        from func_pair_state import set_entry_trade_context, get_entry_gate_components
+        gate_components = {
+            "coint_stability_slope": -0.00449,
+            "coint_stability_check_evaluated_count": 1.0,
+            "coint_stability_check_blocked_count": 0.0,
+            "coint_stability_insufficient_history_count": 0.0,
+        }
+        set_entry_trade_context("STATARB_MR", "RANGE", entry_gate_components=gate_components)
+        retrieved = get_entry_gate_components()
+        assert retrieved.get("coint_stability_slope") == -0.00449
+        assert retrieved.get("coint_stability_check_evaluated_count") == 1.0
+
+    _with_tmp_pair_state(_run)
+
+
+def test_entry_gate_components_absent_returns_empty_dict():
+    # get_entry_gate_components returns {} when no components were persisted (e.g., pre-patch trade).
+    def _run():
+        from func_pair_state import get_entry_gate_components
+        result = get_entry_gate_components()
+        assert result == {}
+        assert result.get("coint_stability_slope") is None
+
+    _with_tmp_pair_state(_run)

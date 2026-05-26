@@ -3629,13 +3629,16 @@ def manage_new_trades(
                     entry_regime,
                     policy_snapshot=entry_policy_snapshot,
                     entry_ts=entry_time,
+                    entry_gate_components=entry_gate_decision.component_scores,
                 )
+                _entry_slope = entry_gate_decision.component_scores.get("coint_stability_slope")
                 logger.info(
-                    "STRATEGY_TRADE_OPEN: strategy=%s regime=%s entry_z=%.4f size_mult=%.2f",
+                    "STRATEGY_TRADE_OPEN: strategy=%s regime=%s entry_z=%.4f size_mult=%.2f coint_stability_slope=%s",
                     entry_strategy,
                     entry_regime,
                     latest_zscore,
                     float(effective_size_multiplier),
+                    f"{_entry_slope:.6f}" if _entry_slope is not None else "unavailable",
                 )
                 logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
                 _apply_trade_manager_profile(entry_strategy)

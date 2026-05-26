@@ -1320,7 +1320,7 @@ def get_entry_notional():
     state = load_pair_state()
     return state.get("entry_notional")
 
-def set_entry_trade_context(strategy_name=None, regime_name=None, policy_snapshot=None, entry_ts=None):
+def set_entry_trade_context(strategy_name=None, regime_name=None, policy_snapshot=None, entry_ts=None, entry_gate_components=None):
     """Persist entry strategy/regime context for close-time attribution."""
     state = load_pair_state()
     strategy = str(strategy_name or "").strip().upper()
@@ -1331,6 +1331,10 @@ def set_entry_trade_context(strategy_name=None, regime_name=None, policy_snapsho
         state["entry_policy_snapshot"] = dict(policy_snapshot)
     elif not isinstance(state.get("entry_policy_snapshot"), dict):
         state["entry_policy_snapshot"] = {}
+    if isinstance(entry_gate_components, dict):
+        state["entry_gate_components"] = dict(entry_gate_components)
+    elif not isinstance(state.get("entry_gate_components"), dict):
+        state["entry_gate_components"] = {}
     try:
         if entry_ts is None:
             entry_ts = state.get("entry_time")
@@ -1355,6 +1359,14 @@ def get_entry_policy_snapshot():
     snapshot = state.get("entry_policy_snapshot")
     if isinstance(snapshot, dict):
         return dict(snapshot)
+    return {}
+
+def get_entry_gate_components():
+    """Get entry gate component scores persisted at open (includes coint_stability_slope)."""
+    state = load_pair_state()
+    components = state.get("entry_gate_components")
+    if isinstance(components, dict):
+        return dict(components)
     return {}
 
 def reset_trade_mae_mfe_tracking():

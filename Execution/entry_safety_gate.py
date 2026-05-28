@@ -496,6 +496,10 @@ def evaluate_entry_safety_gate(
         if _coint_slope_val is not None:
             components["coint_stability_slope"] = float(_coint_slope_val)
 
+    _hedge_ratio_val = _safe_float(metrics.get("hedge_ratio"), None)
+    if _hedge_ratio_val is not None:
+        components["hedge_ratio"] = float(_hedge_ratio_val)
+
     unique_reasons = tuple(sorted(set(reason for reason in reasons if reason)))
     passed = not unique_reasons
     return EntrySafetyGateDecision(

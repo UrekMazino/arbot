@@ -276,6 +276,11 @@ z_score_window = _env_int("STATBOT_Z_SCORE_WINDOW", 21, minimum=2)
 limit_order_basis = _env_flag("STATBOT_LIMIT_ORDER_BASIS", True)  # Place entries with limit orders when True.
 tradeable_capital_usdt = _env_float("STATBOT_TRADEABLE_CAPITAL_USDT", 2000.0, minimum=0.0)
 
+# BETA-AWARE SIZING (exp_beta_aware_sizing_v1)
+hedge_ratio_sizing_enabled = _env_flag("STATBOT_HEDGE_RATIO_SIZING_ENABLED", False)
+min_hedge_ratio = _env_float("STATBOT_MIN_HEDGE_RATIO", 0.20, minimum=0.01)
+max_hedge_ratio = _env_float("STATBOT_MAX_HEDGE_RATIO", 5.00, minimum=0.01)
+
 # SIGNAL GENERATION (Issue #11 fix: robust entry/exit logic with persistence requirement)
 ENTRY_Z = 2.0  # Require Z-score to reach ±2.0 (2 standard deviations) for entry
 ENTRY_Z_MAX = 3.0  # Maximum threshold - don't enter if too extreme (regime break)

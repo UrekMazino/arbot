@@ -26,6 +26,13 @@ from config_execution_api import (
     lock_on_pair,
     td_mode,
     z_score_window,
+    hedge_ratio_sizing_enabled,
+    min_hedge_ratio,
+    max_hedge_ratio,
+)
+from core.chart_audit.hedge_ratio_sizing_audit import (
+    gross_normalized_beta_sizing,
+    validate_hedge_ratio,
 )
 from cointegration_health import classify_cointegration_health
 
@@ -2767,7 +2774,7 @@ def manage_new_trades(
             capital_long,
             capital_short,
         )
-        
+
         # Set the remaining capital
         remaining_capital_long = capital_long
         remaining_capital_short = capital_short
@@ -3150,6 +3157,42 @@ def manage_new_trades(
             regime=regime_name,
         )
 
+        # β-aware sizing (exp_beta_aware_sizing_v1): applied after liquidity selection so the
+        # symmetric equal-notional target (initial_capital_usdt) is preserved for the liquidity
+        # ratio check, then split by β here. gross = 2 × initial_capital_usdt is conserved.
+        # inst_1 = signal_negative_ticker (leg1 = gross/(1+β))
+        # inst_2 = signal_positive_ticker (leg2 = gross×β/(1+β))
+        if hedge_ratio_sizing_enabled:
+            _raw_beta = float((metrics or {}).get("hedge_ratio", 0.0) or 0.0)
+            _beta_cfg = {"min_hedge_ratio": min_hedge_ratio, "max_hedge_ratio": max_hedge_ratio}
+            _beta_validation = validate_hedge_ratio(_raw_beta, _beta_cfg)
+            if _beta_validation.valid and _beta_validation.beta is not None:
+                _beta = _beta_validation.beta
+                _gross = initial_capital_usdt * 2
+                _leg_inst1 = _gross / (1.0 + _beta)
+                _leg_inst2 = _gross * _beta / (1.0 + _beta)
+                if signal_sign_positive:
+                    capital_long = _leg_inst2    # z>0: long=inst_2
+                    capital_short = _leg_inst1   # z>0: short=inst_1
+                else:
+                    capital_long = _leg_inst1    # z<0: long=inst_1
+                    capital_short = _leg_inst2   # z<0: short=inst_2
+                remaining_capital_long = capital_long
+                remaining_capital_short = capital_short
+                logger.info(
+                    "BETA_SIZING: beta=%.4f gross=%.2f capital_long=%.2f capital_short=%.2f side=%s",
+                    _beta, _gross, capital_long, capital_short,
+                    "positive_z" if signal_sign_positive else "negative_z",
+                )
+            else:
+                logger.info(
+                    "BETA_SIZING_INVALID: beta=%.4f reason=%s fallback=equal_notional",
+                    _raw_beta, _beta_validation.reason or "unknown",
+                )
+        else:
+            capital_long = initial_capital_usdt
+            capital_short = initial_capital_usdt
+
         try:
             pair_stats = get_pair_history_stats(signal_positive_ticker, signal_negative_ticker)
         except Exception as exc:
@@ -3282,14 +3325,14 @@ def manage_new_trades(
         preflight_long = preview_entry_details(
             long_ticker,
             "buy",
-            initial_capital_usdt,
+            capital_long,
             orderbook_payload=min_req_long.get("orderbook_payload"),
             instrument_info=min_req_long.get("instrument_info"),
         )
         preflight_short = preview_entry_details(
             short_ticker,
             "sell",
-            initial_capital_usdt,
+            capital_short,
             orderbook_payload=min_req_short.get("orderbook_payload"),
             instrument_info=min_req_short.get("instrument_info"),
         )
@@ -3420,7 +3463,7 @@ def manage_new_trades(
                 result_long = initialise_order_execution(
                     long_ticker,
                     "buy",
-                    initial_capital_usdt,
+                    capital_long,
                     orderbook_payload=long_payload,
                     instrument_info=long_info,
                 )
@@ -3433,7 +3476,7 @@ def manage_new_trades(
                         return kill_switch, signal_detected, trade_placed
                     order_status_long = "placed"
                     count_long = 1
-                    remaining_capital_long = remaining_capital_long - initial_capital_usdt
+                    remaining_capital_long = remaining_capital_long - capital_long
                     # Extract stop loss price from result if available
                     entry_price_long = result_long.get("entry_price", 0)
                     stop_price_long = result_long.get("stop_price", 0)
@@ -3442,7 +3485,7 @@ def manage_new_trades(
                         logger.info(
                             "Long entry: id=%s capital=%.2f entry_price=%.2f stop=%.2f distance=%.2f%% remaining=%.2f",
                             order_long_id,
-                            initial_capital_usdt,
+                            capital_long,
                             entry_price_long,
                             stop_price_long,
                             stop_distance_pct,
@@ -3454,7 +3497,7 @@ def manage_new_trades(
                             long_ticker,
                             order_long_id,
                             long_entry_price,
-                            initial_capital_usdt,
+                            capital_long,
                             remaining_capital_long,
                         )
                 else:
@@ -3509,7 +3552,7 @@ def manage_new_trades(
                 result_short = initialise_order_execution(
                     short_ticker,
                     "sell",
-                    initial_capital_usdt,
+                    capital_short,
                     orderbook_payload=short_payload,
                     instrument_info=short_info,
                 )
@@ -3522,7 +3565,7 @@ def manage_new_trades(
                         return kill_switch, signal_detected, trade_placed
                     order_status_short = "placed"
                     count_short = 1
-                    remaining_capital_short = remaining_capital_short - initial_capital_usdt
+                    remaining_capital_short = remaining_capital_short - capital_short
                     # Extract stop loss price from result if available
                     entry_price_short = result_short.get("entry_price", 0)
                     stop_price_short = result_short.get("stop_price", 0)
@@ -3531,7 +3574,7 @@ def manage_new_trades(
                         logger.info(
                             "Short entry: id=%s capital=%.2f entry_price=%.2f stop=%.2f distance=%.2f%% remaining=%.2f",
                             order_short_id,
-                            initial_capital_usdt,
+                            capital_short,
                             entry_price_short,
                             stop_price_short,
                             stop_distance_pct,
@@ -3543,7 +3586,7 @@ def manage_new_trades(
                             short_ticker,
                             order_short_id,
                             short_entry_price,
-                            initial_capital_usdt,
+                            capital_short,
                             remaining_capital_short,
                         )
                 else:
@@ -3642,8 +3685,8 @@ def manage_new_trades(
                 )
                 logger.info(f"📍 Entry Z-score recorded: {latest_zscore:.4f}")
                 _apply_trade_manager_profile(entry_strategy)
-                _open_trade_manager(latest_zscore, position_size=initial_capital_usdt * 2, entry_time=entry_time)
-                set_entry_notional(initial_capital_usdt * 2)
+                _open_trade_manager(latest_zscore, position_size=capital_long + capital_short, entry_time=entry_time)
+                set_entry_notional(capital_long + capital_short)
 
                 # Clear persistence history now that position is open
                 clear_persistence_history()

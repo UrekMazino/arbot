@@ -1,6 +1,7 @@
 Current status:
-- Controlled test mode. Experiment group: exp_coint_stability_v1.
-- Tradeable capital: 200 USDT.
+- Controlled test mode. Experiment group: exp_beta_aware_sizing_v1 (started 2026-05-28).
+- Tradeable capital: 200 USDT gross per trade (β-split across legs, not equal-notional).
+- Beta-aware sizing ACTIVE: STATBOT_HEDGE_RATIO_SIZING_ENABLED=true. Option C: gross-normalized-beta. gross=$200, leg1=gross/(1+β), leg2=gross×β/(1+β). β from entry cointegration metrics["hedge_ratio"]. Bounds: min=0.20, max=5.00. Fallback: equal-notional if β invalid.
 - Entry Safety Gate enabled.
 - Entry gate max_break_risk: 0.12.
 - Full TP guard multiplier: 0.50 (Patch 5, retained).
@@ -16,36 +17,30 @@ Current status:
 - Hard-exit intent persisted across flatten retry cycles. Patch 6, active run 99+.
 - ETHFI-USDT-SWAP permanently graveyarded (repeated_pair_losses, Patch 5).
 - HMSTR-USDT-SWAP permanently graveyarded (high_execution_cost_meme_token, 2026-05-23).
+- FLOKI-USDT-SWAP permanently graveyarded (high_execution_cost_meme_token, 2026-05-25).
 - TEST1234 permanently blocked.
 - Startup pair safety validation implemented.
-- Cointegration stability entry filter active (Patch 7 + 7.1). Window=5 evaluations, slope_max=0.020, sample interval=60s. Rejects pairs whose p-value trend is deteriorating at entry.
-- Patch 7.1 (2026-05-24): monitoring-loop buffer pre-population. Buffer now fills from every monitoring cycle (when no position open), not only on z-signal gate calls. Fixes buffer starvation on pairs with sparse z-crossings. record_entry_coint_pvalue() called in main loop; same pair key and interval gate as safety gate.
+- Cointegration stability entry filter active (Patch 7 + 7.1). Window=5 evaluations, slope_max=0.020, sample interval=60s.
+- hedge_ratio now logged in entry_gate_component_scores (Day 1 telemetry for exp_beta_aware_sizing_v1).
 
-Experiment state:
-- experiment_group: exp_coint_stability_v1 (reset 2026-05-23 after structural review)
-- trades_since_experiment_start: 4 (T1-T4, context only — excluded from gate-effectiveness analysis)
-- calibration_window_start: Patch 7.1 applied 2026-05-24. Effective calibration window restarts now.
-- T1-T4 excluded from gate-effectiveness analysis: evaluated_trade_count was 1/4 (gate non-functional under Patch 7 without 7.1). Their PnL is real and stays in the equity record.
-- action_threshold: 20 closed trades in the Patch 7.1 calibration window before any further config changes
-- primary_diagnostic: coint_stability gate fire rate = coint_stability_check_blocked_count / coint_stability_check_evaluated_count (target 15%–60% for calibration to be in measurable band)
-- calibration_rule: if fire rate <15% after 20 trades → loosen slope_max to 0.030; if >60% → tighten to 0.012. Apply after full window only.
-- success_criteria: coint-failure rate ≤25% over 20 trades (baseline 36.8%); coint-exit losses ≤$1.50
-- first_run_validation: on first gate-reaching trade under 7.1, confirm evaluated_count ≥ 1 (not insufficient_history). If still insufficient_history, 7.1 failed silently — stop and debug before collecting more trades.
+Experiment state (exp_beta_aware_sizing_v1):
+- experiment_group: exp_beta_aware_sizing_v1 (reset 2026-05-28 after exp_coint_stability_v1 structural review + counterfactual study)
+- trades_since_experiment_start: 0
+- action_threshold: 20 closed trades before structural review
+- primary_diagnostic: $/σ sign stability across trades (should be positive for all normal-exit trades), gross conserved at $200 per trade
+- success_criteria: $/σ sign-flip rate ≤ 10% over 20 normal-exit trades; cumulative PnL improvement vs equal-notional baseline
+- sizing_mode: gross_normalized_beta (Option C confirmed via retroactive counterfactual — docs/audits/counterfactual_exp_coint_stability_v1.md)
 
-Per-hypothesis confidence (carried from exp_guard050_ethfi_excluded_v1 structural review):
-- confidence_coint_fragility_as_dominant_problem: HIGH
-- confidence_ethfi_toxicity: HIGH
-- confidence_trend_regime_mr_block_value: HIGH
-- confidence_notional_neutrality: HIGH
-- confidence_break_risk_threshold_correctness: MEDIUM
-- confidence_guard_mechanism: LOW (both Patch-5 mechanisms inert in 20-trade window)
-- confidence_profit_lock_band_mechanism: MEDIUM (mechanism confirmed operational; floor-reduction benefit unconfirmed)
+exp_coint_stability_v1 final record (for reference):
+- Trades: 14 (T1-T14). Patch 7.1 calibration window: T5-T14 (10 trades). Early review triggered at T14.
+- Verdict: 10A CONFIRMED (sizing mismatch); 10B NEGATIVE (coint filter premise wrong). Decision: exp_beta_aware_sizing_v1.
+- Cumulative PnL (T1-T14): -$4.240. Win rate (T5-T14): 1/10 = 10%.
 
 Current goal:
-- Run exp_coint_stability_v1.
-- Collect minimum 20 closed trades.
-- Monitor gate fire rate vs evaluated count (not vs total entries).
-- Do not draw conclusions or apply further changes before the 20-trade threshold.
+- Run exp_beta_aware_sizing_v1 with beta-aware sizing live.
+- Verify hedge_ratio logged in entry_gate_component_scores on Day 1 trade.
+- Verify BETA_SIZING log line shows expected leg1/leg2 split on each entry.
+- Collect minimum 20 closed trades before structural review.
 
 Do not do yet:
 - Do not scale notional.

@@ -86,3 +86,18 @@ Patch 7.1 — Monitoring-Loop Buffer Population for Coint Stability Gate (2026-0
 - Tests: test_record_entry_coint_pvalue_enables_gate_evaluation (buffer pre-populated → evaluated_count=1 on first gate call), test_record_entry_coint_pvalue_respects_sample_interval (rapid calls don't bypass 60s interval gate).
 - Calibration window restarted at T=0 after T4. Prior T1–T4 trades discarded for gate-effectiveness purposes (evaluated_trade_count was 1/4).
 - Trade counter: 4 closed trades in exp_coint_stability_v1 window (not reset — used as context, not experiment N).
+
+Patch 7.2 — entry_coint_stability_slope exposed in trade_closes.csv (2026-05-27):
+- Patch 7.1 logged slope to bot log only. Patch 7.2 adds it to the trade_close event payload so it appears in trade_closes.csv.
+- Files: main_execution.py (attach entry_gate_components to trade_close payload), report generator (consume new field).
+
+Beta-Aware Sizing — exp_beta_aware_sizing_v1 (2026-05-28):
+- Type: Architecture patch
+- Evidence: exp_coint_stability_v1 structural review (2026-05-28) confirmed sizing mismatch (Verdict 10A CONFIRMED). OLS hedge ratio β is computed at every entry by evaluate_cointegration() and stored in metrics["hedge_ratio"], but func_trade_management.py sizes both legs at equal dollar notional regardless of β. Retroactive counterfactual on T5–T14: β range [0.471, 1.433] (wide), cumulative δ (PnL_β − PnL_equal) = +$0.988. Option C (gross-normalized-beta) confirmed via Input 2 (wide β distribution). See docs/audits/counterfactual_exp_coint_stability_v1.md.
+- Decision: Option C — gross-normalized-beta sizing. Gross conserved at $200 total. Leg sizes: leg1 = gross/(1+β), leg2 = gross×β/(1+β). inst_1 = signal_negative_ticker, inst_2 = signal_positive_ticker.
+- Implementation: β-sizing applied AFTER liquidity selection (initial_capital_usdt = selected_target_usdt). gross = initial_capital_usdt × 2. β taken from metrics["hedge_ratio"]. Validated with min=0.20, max=5.00 bounds. If invalid β: fallback to equal-notional. Both preflight and actual order calls use the β-sized capital per leg. remaining_capital_long/short updated to β-sized values.
+- hedge_ratio added to entry_gate_component_scores unconditionally (Day 1 telemetry).
+- New config: STATBOT_HEDGE_RATIO_SIZING_ENABLED=true, STATBOT_MIN_HEDGE_RATIO=0.20, STATBOT_MAX_HEDGE_RATIO=5.00.
+- Files: Execution/config_execution_api.py (3 new vars), Execution/entry_safety_gate.py (hedge_ratio in component_scores), Execution/func_trade_management.py (β-sizing block + order loop), Execution/tests/test_beta_sizing.py (8 new tests).
+- Tests: 8 new tests (β>1 gross conservation, β<1 leg sizes, β=1 equal-notional, boundary values, out-of-bounds rejection).
+- Experiment: exp_beta_aware_sizing_v1, trade counter reset to 0. No new trades under equal-notional sizing.

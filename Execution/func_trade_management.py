@@ -1,5 +1,11 @@
 import os
+import sys
+from pathlib import Path
 from scipy.stats import false_discovery_control
+
+_ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
 
 from config_execution_api import (
     account_session,

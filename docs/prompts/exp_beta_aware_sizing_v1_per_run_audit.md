@@ -323,6 +323,20 @@ If language resembles the above, flag it and rewrite.
 
 ---
 
+## Section 8A — Configuration-Citation Discipline (Audit Hygiene)
+
+When the audit cites a configuration value or constraint, it MUST enumerate **all** the gates/filters in code that affect the same variable — not just the one being directly referenced. The visible setting may not be the binding setting.
+
+- A config value that looks like the operating envelope may be loosened by a tighter upstream filter (or tightened by one). Verify against code, then state which constraint actually binds.
+- Cite the code location of each constraint (`file.py:line`), not just the env var name.
+- If a value is a default/fallback, say so, and identify what the binding constraint is in normal operation.
+
+**Why:** 2026-05-29, the "where did STATBOT_MIN/MAX_HEDGE_RATIO=[0.20, 5.00] come from?" question. The visible sizing-fallback bound [0.20, 5.00] is NOT the binding constraint — the upstream pair-discovery filter STATBOT_STRATEGY_MIN/MAX_HEDGE_RATIO=[0.3, 3.0] (`Strategy/func_cointegration.py:1720`) truncates observable β first, making the sizing bound nearly inert. An audit citing only the sizing bound would misstate the range β-sizing is actually tested across. This is the same class of discipline as "verify load-bearing constants against code, not against derivation" (Patch 5 process note, DECISION_LOG.md) — applied to the *completeness* of the constraint set, not just the correctness of a single number.
+
+If the audit cites a setting without enumerating the other gates on the same variable, flag it and rewrite.
+
+---
+
 ## Section 9 — Permitted Observations
 
 The audit MAY contain:
@@ -338,7 +352,8 @@ The audit MAY contain:
 
 ---
 
-*Template version: exp_beta_aware_sizing_v1 v1.2, created 2026-05-28.*
+*Template version: exp_beta_aware_sizing_v1 v1.3, created 2026-05-28.*
+*v1.3 changes: added Section 8A (Configuration-Citation Discipline) — audits must enumerate all code-level gates affecting a cited config variable, not just the visible setting. Triggered by the [0.3, 3.0] discovery filter vs [0.20, 5.00] sizing-bound finding (2026-05-29).*
 *v1.1 changes: $/σ exclusion rule tightened to MFE > 0; success criterion expanded to multi-part with null-result caveat; β-distribution structural-review comparison note added to 3E; post-restart check added to 3A.*
 *v1.2 changes: 3D table adds real_costs and edge_clears_costs columns. real_costs = position_pnl − equity_change. edge_clears_costs tracks whether the correctly-sized captured edge exceeds actual execution costs — the viability signal that sign alone cannot provide. Rationale: T2 (LTC/KSM) demonstrated a positive-sign, correctly-sized position (+$0.146) converted to a loss by 1.8× cost overrun ($0.251 real vs $0.14 estimated). Sign tracks β-sizing correctness; edge_clears_costs tracks strategy viability once sizing is fixed.*
 *Primary diagnostic: $/σ sign stability — sign-flip rate ≤ 10% AND aggregate $/σ > 0 over 20 normal-exit trades with MFE > 0.*

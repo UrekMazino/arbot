@@ -101,3 +101,15 @@ Beta-Aware Sizing — exp_beta_aware_sizing_v1 (2026-05-28):
 - Files: Execution/config_execution_api.py (3 new vars), Execution/entry_safety_gate.py (hedge_ratio in component_scores), Execution/func_trade_management.py (β-sizing block + order loop), Execution/tests/test_beta_sizing.py (8 new tests).
 - Tests: 8 new tests (β>1 gross conservation, β<1 leg sizes, β=1 equal-notional, boundary values, out-of-bounds rejection).
 - Experiment: exp_beta_aware_sizing_v1, trade counter reset to 0. No new trades under equal-notional sizing.
+
+Operational Finding — Run 128 sustained-API-outage flatten loop (2026-05-28):
+- Type: Operational gap (no code bug, but aggregate behavior unacceptable).
+- Occurrence: Second occurrence of run-98-class sustained API outage (first: run 98, ~4m18s; second: run 128, ~77 minutes).
+- What happened: OKX fetch-all-open-orders API began timing out at 18:10 UTC. Bot could not verify account exposure was zero, correctly deferred pair switch (fail-closed), and triggered emergency flatten to clear any potential open position. Flatten routine needed the same timed-out API. Retry cycles 1–14 fired over 77 minutes (5.5 min/cycle average — Patch 6 backoff working as designed, capped at 300s), each failing identically. Manual stop required at 19:35 UTC.
+- Backoff confirmed working: 14 cycles × ~5.5 min/cycle ≈ 77 min, consistent with 300s ceiling applied from cycle 4 onward. Backoff slowed retries correctly — it just had no terminal state.
+- No position open: run 128 closed with 0 trades, starting equity = ending equity = $2,653.76. Emergency flatten was precautionary under untrusted account state, not due to a real open position.
+- Gap identified: Patch 6 exponential backoff was designed for transient outages (API recovers within minutes). It has no terminal state for sustained outages — after N failed cycles at the 300s ceiling, the correct action is to alert and halt cleanly rather than loop indefinitely. This requires manual intervention today.
+- This confirms the deferred item: Patch 6 item 5 (alert/kill-switch after N consecutive flatten failures) was scoped and explicitly deferred at implementation time ("needs design"). Run 128 is the second occurrence confirming the need.
+- Elevated priority: Patch 6 item 5 elevated from "deferred, needs design" to NEXT OPERATIONAL PRIORITY. Must be implemented before any move toward live trading.
+- Experiment impact: 0 trades entered in run 128. No experiment data. Counter stays at 2/20. Run classified as operational event, not experimental event.
+- Phase 1 note: ACT/NOT had 19 entry signals (Z +2.0–+2.8) blocked by advanced_ml_break_risk_high (break_risk=0.150 > cap=0.120) and liquidity_at_floor (NOT depth ~$39–46 USDT, forcing 5× downsize). Both gates correct. Not-enough-signal run: this is a "gate correctly refused thin/high-break-risk pairs" run, not a "no signal" run. Thin pair access is a pair-universe-quality observation for structural review.

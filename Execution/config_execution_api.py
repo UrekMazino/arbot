@@ -278,6 +278,10 @@ tradeable_capital_usdt = _env_float("STATBOT_TRADEABLE_CAPITAL_USDT", 2000.0, mi
 
 # BETA-AWARE SIZING (exp_beta_aware_sizing_v1)
 hedge_ratio_sizing_enabled = _env_flag("STATBOT_HEDGE_RATIO_SIZING_ENABLED", False)
+# Sizing fallback bounds only: if entry β falls outside, sizing reverts to equal-notional.
+# NOT the binding constraint on observable β — pairs are admitted upstream by the tighter
+# STATBOT_STRATEGY_MIN/MAX_HEDGE_RATIO=[0.3, 3.0] discovery filter (Strategy/func_cointegration.py),
+# so β rarely approaches [0.20, 5.00]. These values are conventional [1/N, N], not data-derived.
 min_hedge_ratio = _env_float("STATBOT_MIN_HEDGE_RATIO", 0.20, minimum=0.01)
 max_hedge_ratio = _env_float("STATBOT_MAX_HEDGE_RATIO", 5.00, minimum=0.01)
 

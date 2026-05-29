@@ -98,10 +98,17 @@ A success on H1 with a null on H2 is a *clean, valuable result*: it converts "th
 
 ## 6. Decision tree — pre-committed next experiment per branch
 
+> **EMPIRICAL UPDATE (2026-05-29, post Query 1 + Query 2; N=2 clean eligible — DIRECTIONAL, branches below remain the pre-committed structure):**
+> The zero-cost PnL-vs-z diagnostic (analysis_spec_pnl_vs_z_decoupling_v1) moved the branch likelihoods without changing the committed criteria:
+> - **Branch 1 (exit redesign / Item 14) is now LESS likely the next lever.** Both clean β-sized eligible trades (T2b, T5b) have `pnl_at_mean (z≈0) ≈ +$0.052 < costs ($0.10–$0.25)` — the *thesis-exit* edge did not clear costs. T5's apparent edge (+$0.249) lived at a +2.16σ overshoot (anti-thesis momentum, where the strategy signals the opposite trade), not at the mean. **Zero trades classified EXIT-TOO-LATE; kill-condition 3 fired directionally.** The leak is *not* "held past a profitable mean"; the mean was never profitable enough. Item 14 "widen/redesign the exit zone" is **not indicated on the clean data.** Do not enter Branch 1 on N=2 — but its prior MEDIUM+ confidence is downgraded pending more eligible trades.
+> - **Branch 2 is the leading direction — but the sub-lever is UNDETERMINED.** "pnl_at_mean < costs" has two readings the clean data cannot yet separate: **cost-too-high** (→ §7 cost levers: maker 2b, spread-gating 2a) vs **edge-too-thin** (+$0.052 mean-reversion capture at $200 may be structurally small on this universe; *no cost reduction saves a $0.05 edge* → this is a signal-quality / negative-result reading, NOT a cost-lever problem). Both T2b and T5b cluster at ≈+$0.052 (suspicious on N=2 — coincidence or a capture ceiling). **The §7 cost diagnostic (residual vs effective half-spread) is the discriminator and is hereby promoted from prep to critical path** (see §7 banner).
+> - **Coint-failure mechanism: β-drift RULED OUT** (rolling β stable ±1.6% over T3b/T4b holds — robust positive measurement → re-hedging is NOT a lever). **Mean-shift is the leading surviving hypothesis by elimination** (dollars decoupled + β stable), **but attribution is UNVERIFIED** — the bar-close z reconstruction could not reproduce live intrabar z, so the price-vs-mean % is unreliable and not reported as fact. Honest status: *not β-drift; mean-shift consistent with evidence; microstructure/execution-noise on the holds not excluded; n=2 cannot establish it as the dominant universe failure mode* — that is Query 3's job. Lever mapping holds: mean-shift → post-entry/structural (exit-on-dollar-divergence, hold-time cap, stability-screened universe); **refuted-lever guardrail intact — no entry-slope/level revival.**
+> - **Convergent through-line (HYPOTHESIS, N=2-clean):** every clean signal points away from entry-time and exit-zone-geometry fixes, toward **hold-window behavior + universe selection**. Recorded as hypothesis-converging, explicitly N-flagged — this is exactly the "coherent narrative at low N" shape the research paper warns about, so it does not harden into a finding until Query 3 / more eligible trades.
+
 Read H1 and H2 at the §4 trigger, then:
 
 **Branch 1 — H1 success AND H2 success (you have a strategy).**
-Next experiment: **exit redesign (Item 14).** full_tp has captured *zero* exits in the Patch 7.1 window; MFE peaks at overshoot extrema *outside* the |z|<0.35 zone; the only win (T12) came from an incidental regime_break at overshoot, not designed capture. Exit-capture is miscalibrated on two axes (floor **and** zone). Deferred until now for the right reason — exit redesign is only testable once the `$/σ`-eligible population is clear of pairs no exit could save. *Confidence to enter:* MEDIUM+ on both H1 and H2.
+Next experiment: **exit redesign (Item 14).** full_tp has captured *zero* exits in the Patch 7.1 window; MFE peaks at overshoot extrema *outside* the |z|<0.35 zone; the only win (T12) came from an incidental regime_break at overshoot, not designed capture. Exit-capture is miscalibrated on two axes (floor **and** zone). Deferred until now for the right reason — exit redesign is only testable once the `$/σ`-eligible population is clear of pairs no exit could save. *Confidence to enter:* MEDIUM+ on both H1 and H2. **[2026-05-29 DOWNGRADE: see §6 empirical-update banner — clean data shows the thesis-mean edge below costs and zero EXIT-TOO-LATE trades; Item 14 no longer the presumptive next lever. Re-confirm only if later eligible trades show `pnl_at_mean ≥ costs` with the exit leaking it.]**
 
 **Branch 2 — H1 success BUT H2 null (cost/universe binds). [my current base case — held as hypothesis]**
 Two handles, run **one at a time**:
@@ -117,6 +124,11 @@ The sizing-mismatch hypothesis was incomplete. Re-open the `$/σ`-instability dr
 ---
 
 ## 7. Cost diagnostic spec (refined)
+
+> **CRITICAL-PATH PROMOTION (2026-05-29, post Query 1+2):** This diagnostic was prep; it is now **the analysis that resolves which Branch-2 sub-lever you are in** — and, just as importantly, whether you are in a cost problem at all. Query 1 established that the clean-trade thesis edge (`pnl_at_mean ≈ +$0.052`) sits below costs, but "edge < cost" has two readings (§6 banner): **cost-too-high** (cost levers help) vs **edge-too-thin** (no cost reduction saves a ~$0.05 edge → negative-result territory). This diagnostic is the discriminator:
+> - If costs **cluster structurally** by spread category and the gap to a tight-spread subset's costs is enough that `pnl_at_mean` would clear them → **cost-too-high → Branch 2 cost levers (maker §8, spread-gating).**
+> - If costs are **near-model and roughly flat** across the universe while `pnl_at_mean` stays ≈$0.05 → **edge-too-thin → no cost lever closes the gap; this is the §5 negative-result bar**, not a cost intervention. Notional is not a rescue (edge and cost scale together).
+> Run this **before** authorizing any Branch-2b maker build — it determines whether a maker build is even the right move or whether the honest finding is negative. Feed it the per-trade `pnl_at_mean` and `real_costs` columns Query 1 already produced.
 
 **Prior result:** the T5–T14 residual-vs-**orderbook-depth** plot returned "pair-specific bias, NOT liquidity-tier-correlated" (T9 LINEA: $522 thin-by-depth leg, **positive** +$0.073 residual — a counterexample that kills a smooth depth gradient).
 
@@ -196,6 +208,6 @@ No notional change; no Advanced ML live; no router activation; no z exit-thresho
 
 ---
 
-*Template version: exp_beta_aware_sizing_v1 structural-review template v1.1 (DRAFT, pre-data; §4 gate locked + E4 kill-criterion added; §5 negative-bar approved verbatim).*
+*Template version: exp_beta_aware_sizing_v1 structural-review template v1.2 (DRAFT, pre-trigger; §4 gate locked + E4 added; §5 negative-bar approved verbatim; §6/§7 updated post Query 1+2 — Branch-1/Item-14 downgraded, §7 cost diagnostic promoted to critical path, mean-shift recorded as leading-by-elimination/attribution-unverified, all N=2-clean directional).*
 *Drafted: 2026-05-29 at T3. To be executed at the §4 review trigger.*
 *Inputs: per-run audit (runs 125–129, T1–T3); structural_review_exp_coint_stability_v1.md; project_experiment_state.md; OKXSTATBOT_CURRENT_STATE/ROADMAP/DECISION_LOG; code trace (taker confirmation + limit_order_basis) from code assistant, 2026-05-29.*

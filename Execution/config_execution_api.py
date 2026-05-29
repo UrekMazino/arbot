@@ -273,7 +273,12 @@ z_score_window = _env_int("STATBOT_Z_SCORE_WINDOW", 21, minimum=2)
                      # - Used only for entry timing (not sole cointegration validation)
                      # - Cointegration validated separately on sufficient window
                      # - Regime filter or other validation exists
-limit_order_basis = _env_flag("STATBOT_LIMIT_ORDER_BASIS", True)  # Place entries with limit orders when True.
+# MISNOMER (verified 2026-05-29, see DECISION_LOG trap entry): does NOT set entry order type.
+# Entries are ALWAYS market/taker — initialise_order_execution (func_trade_management.py:3469/3558)
+# passes no limit_offset, so func_execution_calls.py:733 selects "market". No postOnly anywhere.
+# This flag only gates entry-LOOP semantics: capital-injection sizing (:2900), fill logging (:3642),
+# and kill-switch timing (:3712). A maker conversion is new code, not a flip of this flag.
+limit_order_basis = _env_flag("STATBOT_LIMIT_ORDER_BASIS", True)
 tradeable_capital_usdt = _env_float("STATBOT_TRADEABLE_CAPITAL_USDT", 2000.0, minimum=0.0)
 
 # BETA-AWARE SIZING (exp_beta_aware_sizing_v1)

@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–132 (T1–T6) — 2026-05-28 → 2026-05-29
+## Runs 125–135 (T1–T8) — 2026-05-28 → 2026-05-30
 
 ---
 
@@ -986,3 +986,73 @@ next: run_133+ (already started), frozen config
 - Refuted-lever guardrail unchanged; no entry-slope revival.
 
 *This correction postdates the T6 audit body and supersedes its directional edge-too-thin lean. β-sizing (H1) verdict is unaffected — sizing works (3/3 eligible $/σ-positive). The correction is only to which Branch-2 sub-lever the H2-null implies: undetermined, pending query 3.*
+
+---
+---
+
+# Runs 134–135 (2026-05-30) — T7 SOL/CRV + T8 BCH/ETC  ← BOTH eligible; the fork picture SHIFTS
+
+**Headline: `pnl_at_mean > cost` is now 2/5 eligible (T7, T8), up from 0/3.** Two new eligible trades both cleared costs at the thesis mean — the in-zone edge is NOT uniformly thin; it is **pair-dependent**. This further weakens the (already-retracted) edge-too-thin near-verdict and sharpens the SUBSET-VIABLE-shaped read.
+
+## β-Sizing (both)
+- T7 SOL/CRV: β=0.8865 → leg1 SOL 200/(1.8865)=106.02 ✓, leg2 CRV 93.98 ✓, gross 200. side=negative_z.
+- T8 BCH/ETC: β=0.8633 → leg1 BCH(short) 200/(1.8633)=107.34 ✓, leg2 ETC(long) 92.66 ✓, gross 200. side=positive_z (long ETC, short BCH).
+- **β-sizing now 8/8 mechanically exact, 0 fallbacks.** Both near-unity (β<1.0: 6/8; materially non-unity: 5/8).
+
+## T7 — SOL/CRV (run 134): FIRST eligible WIN
+
+| Field | T7 |
+|---|---|
+| Side / entry_z → exit_z | long SOL short CRV / **−2.784** (deepest entry yet) → −0.342 |
+| Δz | 2.442 |
+| Exit / hold | normal / **1.1 min** (fastest) |
+| MFE / z_at_MFE | +$0.230 / **−0.342 (the zone edge)** |
+| gross position_pnl | **+$0.230** (= MFE; exited AT its peak) |
+| real_costs | $0.215 |
+| Net PnL | **+$0.0153 — WIN** |
+| guard blocks | **0** (in-zone PnL above floor → full_tp fired) |
+| $/σ | +0.230/2.442 = **+$0.094/σ** (highest yet), POSITIVE |
+| pnl_at_mean > cost? | **YES** (+$0.230 at z=−0.34 zone edge > $0.215) |
+
+**Why T7 won where T5/T6 didn't:** deeper entry (z=−2.78 vs −2.06) → bigger dollar reversion; the spread reverted *fast* (1.1 min) and the exit caught it **at the zone edge (z=−0.34) with the edge intact (+$0.230 > floor $0.12)** → guard passed, full_tp fired, edge cleared costs. It did NOT overshoot. (Only 1 snapshot due to the 1.1-min hold; close data is authoritative.)
+
+## T8 — BCH/ETC (run 135): edge CLEARED at the mean, but the exit LEAKED it
+
+| Field | T8 |
+|---|---|
+| Side / entry_z → exit_z | long ETC short BCH / +2.174 → −0.119 |
+| Δz | 2.293 |
+| Exit / hold | normal / 9.6 min |
+| MFE / z_at_MFE | +$0.282 (snapshot) / −0.60 (mild overshoot) |
+| **pnl_at_mean (z≈0)** | **+$0.169 (at z=−0.051)** |
+| gross position_pnl | +$0.124 |
+| real_costs | $0.159 |
+| Net PnL | −$0.035 (small loss) |
+| guard blocks | 24 |
+| $/σ | +0.124/2.293 = **+$0.054/σ**, POSITIVE |
+| pnl_at_mean > cost? | **YES** (+$0.169 > $0.159) — but realized exit (+$0.124) gave it back |
+
+**T8 is a genuine EXIT-TOO-LATE case** (distinct from T5/T6): the thesis-mean edge **did clear costs** (+$0.169 at z=−0.05 > $0.159), but the position held past the mean into a mild overshoot (z=−0.60, +$0.282) and the exit fired late at z=−0.12 (+$0.124), giving back the cleared edge to a net loss. **A mean-disciplined exit here would have netted a win.** (Mechanical bucket reads ZONE-NARROW off the *first* zone-entry +$0.127<cost, but the deeper mean-crossing +$0.169>cost is the truer read — exit-capture, not thin edge.)
+
+## Cross-trade update (after T8) — the fork is now genuinely two-sided and pair-dependent
+
+```
+trades: 8 (T1–T8). $/σ eligible: 5 (T2, T5, T6, T7, T8) — ALL $/σ-positive, sign-flip 0/5 = 0%; pooled +$0.044/σ
+edge_clears_costs (realized): 1/5 (T7 win) — up from 0/3
+pnl_at_mean > cost: 2/5 (T7 +0.230>0.215, T8 +0.169>0.159) — up from 0/3  ← THE FORK UPDATE
+  vs T2 (+0.052<0.251), T5 (+0.052<0.100), T6 (+0.026<0.194) — pnl_at_mean < cost
+coint-failure: 3/8 = 37.5% (T1,T3,T4) — DOWN 75→60→50→37.5%, now BELOW the 40% baseline
+beta: range [0.378,1.495]; 8/8 exact; 0 fallbacks
+cumulative PnL: −$1.765 (T7 +0.0153, T8 −0.035); win rate 1/8
+trades_remaining: 12 (to 20); ≥3 more eligible to the ≥8 gate
+```
+
+**What T7/T8 establish (held at N=5 eligible — directional):**
+1. **In-zone edge is PAIR-DEPENDENT, not uniformly thin.** BCH/ETC and SOL/CRV cleared at the mean (+$0.169, +$0.230); AVAX/DOT, SOL/AVAX, LTC/KSM didn't (+$0.026–0.052). The dollar-spread traversed inside the zone differs by pair (volatility-to-spread structure) — confirming the §3.1 caveat with live data. **This is the SUBSET-VIABLE shape materializing.**
+2. **Edge-too-thin is NOT a universal verdict** — 2/5 eligible cleared the thesis-mean edge. The last-turn lean is further weakened (it was already retracted as a near-verdict).
+3. **On edge-bearing pairs, exit-capture matters again.** T7 captured the edge (exited at zone edge → win); T8 leaked it (held past the mean → loss). So **exit-redesign / Item 14 REOPENS for the edge-bearing subset** (distinct from edge-too-thin pairs where no exit helps). The N=3 retraction of "T5=exit-capture" stands (T5's edge was genuinely thin); T8 is a real exit-capture case.
+4. **E4 trending strongly favorable** (37.5%, below the 40% baseline) — universe fragility looking less like the binding problem. Still not evaluable (<10 closed).
+
+**This is exactly what query 3 was built to resolve** (the joint, pair-resolved distribution): which pairs carry in-zone edge that clears cost, and whether exit-capture recovers the leak on those. The live data is now *showing* the subset structure query 3 would map at scale — which strengthens the query-3 case but on its own merits (pair-dependent viability is real), not on the edge-too-thin lean (now clearly not universal).
+
+*Audit covers: run_134 (T7 SOL/CRV, WIN) + run_135 (T8 BCH/ETC). Run 136 running. β-sizing 8/8 exact. H1: 5/5 eligible $/σ-positive, sign-flip 0%. Fork: pnl_at_mean>cost 2/5 — pair-dependent, SUBSET-VIABLE-shaped, exit-capture reopens for edge-bearing subset. E4: WATCH (3/8=37.5%, not evaluable).*

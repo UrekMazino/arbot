@@ -966,3 +966,23 @@ next: run_133+ (already started), frozen config
 
 *Audit covers: run_132_20260529_175721 (T6 SOL/AVAX). Run 133 already started.*
 *β-sizing: PASS (β=0.9107, gross to the cent, 0 fallbacks; 6/6 exact). Reconciliation: PASS. $/σ: INCLUDED +$0.020 POSITIVE (3/3 eligible positive). pnl_at_mean > cost: NO (3/3). E4: WATCH (3/6=50%, not evaluable).*
+
+---
+---
+
+# Premise-Check Correction (2026-05-29) — recorded so a killed premise isn't silently rebuilt
+
+**Context:** the T6 reads above (Section 7) leaned the H2-null toward edge-too-thin partly on an implicit "the eligible set is the liquid-major cost floor, and still doesn't clear" structural argument. A read-only premise-check on the 19 reliable trades' `real_cost` **refuted that premise.** Recorded here per the decision-log principle that a disproven argument must be preserved, not quietly dropped.
+
+**What the premise-check found (cost ranks over 19 reliable trades):**
+- The 3 eligible trades rank **#3 ($0.100 AVAX/DOT), #15 ($0.194 SOL/AVAX), #17 ($0.251 LTC/KSM)** — they **span the distribution**, two in the expensive half; T2b is 3rd-priciest overall. **The eligible set is NOT the cost floor.**
+- Cheapest trade overall: **T9c LINEA/ZRO $0.067 — a thin-leg pair, not a pure-major** (Item-12 counterexample re-confirmed). 2nd-priciest: FIL/ICP $0.395 (thin-alt, not meme). **Cost is pair-specific, NOT liquidity-tier-ordered.**
+- Within-category spread: **pure-major $0.10–$0.19 (~2×, tight); has-thin-leg $0.067–$0.395 (~6×, uninformative).**
+
+**Correction to the T6 Section-7 framing:**
+- The **edge-too-thin lean is RETRACTED as a near-verdict** — its clean argument (eligible = cost floor) is false.
+- What survives is **weaker and two-sided:** the cheapest *observed* cost ($0.067) still exceeds the ~$0.03 in-zone edge (suggestive of edge-too-thin), BUT eligible costs span 2.5× so there is real headroom (cost-too-high not dead). **The fork is genuinely unresolvable from N=3.**
+- Consequence: **§7-as-specified (residual vs effective half-spread) is data-blocked** — half-spread is in no telemetry (depth-only in liquidity_checks.csv; no orderbook snapshot; OHLC klines lack bid/ask). The fork now routes to the **query-3 joint (in-zone-edge, cost) distribution at scale** (`docs/prompts/query3_output_spec_universe_scale_joint_distribution_v1.md`), which §3.1 resolves cleanly only on the pure-major subset (where category predicts cost) — itself a SUBSET-VIABLE-shaped outcome.
+- Refuted-lever guardrail unchanged; no entry-slope revival.
+
+*This correction postdates the T6 audit body and supersedes its directional edge-too-thin lean. β-sizing (H1) verdict is unaffected — sizing works (3/3 eligible $/σ-positive). The correction is only to which Branch-2 sub-lever the H2-null implies: undetermined, pending query 3.*

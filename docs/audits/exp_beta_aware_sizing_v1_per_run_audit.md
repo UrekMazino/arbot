@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–135 (T1–T8) — 2026-05-28 → 2026-05-30
+## Runs 125–136 (T1–T9) — 2026-05-28 → 2026-05-30
 
 ---
 
@@ -1056,3 +1056,93 @@ trades_remaining: 12 (to 20); ≥3 more eligible to the ≥8 gate
 **This is exactly what query 3 was built to resolve** (the joint, pair-resolved distribution): which pairs carry in-zone edge that clears cost, and whether exit-capture recovers the leak on those. The live data is now *showing* the subset structure query 3 would map at scale — which strengthens the query-3 case but on its own merits (pair-dependent viability is real), not on the edge-too-thin lean (now clearly not universal).
 
 *Audit covers: run_134 (T7 SOL/CRV, WIN) + run_135 (T8 BCH/ETC). Run 136 running. β-sizing 8/8 exact. H1: 5/5 eligible $/σ-positive, sign-flip 0%. Fork: pnl_at_mean>cost 2/5 — pair-dependent, SUBSET-VIABLE-shaped, exit-capture reopens for edge-bearing subset. E4: WATCH (3/8=37.5%, not evaluable).*
+
+---
+---
+
+# Run 136 (2026-05-30) — T9 AVAX/CRV  ← COINT-FAILURE (β-sized DECOUPLED, clean)
+
+## Section 1 — Run Summary
+- Accepted trades: 1 (AVAX/CRV). Closed: 1 (T9). Run end: `RUN_END reason=max_session_trades`.
+- Session PnL: −$0.1074 (equity 2653.06 → 2652.95).
+- Exit_reason: `cointegration_watch_timeout` → **T9 is excluded from $/σ (Rule v1.2)**; routed to the coint-failure tracker.
+- **Entry regime: `RISK_OFF`** — the shadow regime router did not block (regime router is in SHADOW mode per CURRENT_STATE; gate observes but does not enforce). RISK_OFF started ~6.5 min pre-entry and flipped back to RANGE ~15 min mid-hold (REGIME_CHANGE 06:12 local: RISK_OFF→RANGE, hold=1308s).
+- Circuit breaker: not tripped.
+
+## Section 2 — Per-Trade Telemetry
+
+| Field | T9 (run_136) |
+|---|---|
+| Pair | AVAX-USDT-SWAP/CRV-USDT-SWAP |
+| Side / entry_z → exit_z | long_positive_short_negative (long CRV, short AVAX) / **+2.205 → −0.498** |
+| Δz | 2.703 (favorable reversion through 0 to mild overshoot) |
+| Exit / hold | **cointegration_watch_timeout** / 25.7 min |
+| MFE / z_at_MFE | +$0.161 (equity) / +$0.174 (snapshot, at z=−1.27) — overshoot side, past zone |
+| **pnl_at_mean (z≈0)** | **−$0.015** (at z=−0.0006) — NEGATIVE despite favorable z-reversion |
+| pnl_at_zone_entry | −$0.007 (first |z|<0.35 at z=+0.091) |
+| gross position_pnl | +$0.006 (essentially zero) |
+| Net PnL | −$0.1074 |
+| Entry regime | **RISK_OFF** (shadow router didn't block) |
+
+## Section 3 — β-Sizing Mechanical Verification
+
+```
+BETA_SIZING: beta=0.7649 gross=200.00 capital_long=86.68 capital_short=113.32 side=positive_z
+```
+- leg2 (long CRV, inst_2/positive) = 200×0.7649/1.7649 = **86.68** ✓
+- leg1 (short AVAX, inst_1/negative) = 200/1.7649 = **113.32** ✓
+- gross 200.00 ✓; no fallback.
+- **β-sizing now 9/9 mechanically exact, 0 fallbacks.**
+- β range unchanged [0.378, 1.495]; β<1.0: 7/9; materially non-unity: 6/9 (T6/T7/T8 near-unity).
+
+## Section 3C — Classification A (coint-failure decoupling, |Δz|≥0.5 precondition applied)
+
+**T9 = DECOUPLED (clean β-sized).** |Δz|=2.703 ✓ (precondition met); z reverted from +2.20 favorably through 0 into mild overshoot (z=−1.57 at MFE) and back to z=−0.50 at exit — *materially toward and through the zone*; **pnl_at_mean = −$0.015 ≤ 0** at z=−0.0006. The dollar position did not track the favorable z-reversion at the mean — same signature as T3b, T4b.
+
+**β-sized coint-failure tally (Classification A):**
+| Trade | Run | Pair | Class | pnl_at_mean | β-drift status (Q2) |
+|---|---|---|---|---|---|
+| T1b | r125 | JUP/YGG | TRACKED-THEN-BROKE | +0.102 | (not tested; thin-pair cost case) |
+| T3b | r129 | BNB/LINK | **DECOUPLED** | −0.036 | β stable (Q2) |
+| T4b | r130 | DOGE/AAVE | **DECOUPLED** | −0.007 | β stable (Q2) |
+| **T9** | **r136** | **AVAX/CRV** | **DECOUPLED** | **−0.015** | not tested (n=3 now consistent with mean-shift) |
+
+**3/4 clean β-sized coint-failures are DECOUPLED** (up from 2/3) — the mean-shift signature accumulates, β-drift remains ruled out (Q2 robust on T3b/T4b). T9 is a new clean data point consistent with the mean-shift mechanism. Refuted-lever guardrail intact (no entry-slope revival): T9 entered with `entry_coint_stability_slope=+0.000826`, well below the 0.020 threshold — yet another benign-slope coint-failure (the pattern from T1/T3/T4 continues).
+
+## Section 4 — Reconciliation
+- position_pnl +$0.006 (gross, near zero); equity_change −$0.107; difference −$0.113 ≈ fees $0.10 + slippage $0.04 + unexplained +$0.027 → real_costs **$0.113** (textbook). basis pre_close_equity_delta ✓; pass_fail PASS.
+
+## Section 5 — RISK_OFF Entry Observation (deferred-item linkage)
+
+T9 entered with `regime=RISK_OFF` and the shadow regime router did not block. This is documented shadow-mode behavior, but it is a **vector for coint-failure risk** worth noting alongside the existing deferred T3 item ("pre-entry regime-flip detection"): T3 flipped INTO RISK_OFF ~50s post-entry; T9 entered DURING RISK_OFF (started ~6.5 min before entry, flipped back to RANGE ~15 min mid-hold, then coint failed). Two distinct sub-cases of the same broader pattern (high-vol-regime entries → coint-failure risk). The deferred item should now cover both: (a) imminent-flip detection at entry (T3 case), and (b) entry-in-RISK_OFF blocking via shadow-router activation (T9 case). NOT actioned mid-window (frozen variable / shadow); flagged for the structural-review.
+
+## Section 6 — Counter Update (after T9)
+
+```
+trades_since_experiment_start: 9 (T1–T9)
+$/σ eligible: 5 (T2, T5, T6, T7, T8) — UNCHANGED (T9 excluded as coint-failure)
+sign-flip rate: 0/5 = 0%; aggregate $/σ +$0.044/σ (unchanged); H1 still rock-solid
+pnl_at_mean > cost: 2/5 (unchanged — T9 not in population)
+coint-failure: 4/9 = 44.4% (T1, T3, T4, T9) — trajectory 75→60→50→37.5→44.4
+  Reversed slightly above the 40% baseline; back in 40–50% band.
+β: range [0.378, 1.495]; 9/9 mechanically exact; 0 fallbacks
+cumulative PnL (window): −$1.872 (T9 −$0.107)
+win rate: 1/9
+trades_remaining: 11 (to 20); eligible: ≥3 more to the ≥8 gate
+next: run_137+, frozen config
+```
+
+## Section 7 — E4 Read (now ONE trade from evaluability) and other notes
+
+**E4 trajectory wobbled.** 37.5% → 44.4% — T9's coint-failure brought it back above the 40% baseline. The strongly-favorable narrative from last turn **softens, but does not reverse the direction**: it's still well below the >60% halt line and within the 45–60% review band's lower edge.
+
+**One closed trade away from evaluability** (T10 = 10 closed → E4 becomes evaluable). Pre-committed posture per template §4 / E4 calibration note:
+- T10 normal exit → 4/10 = 40% (at baseline, **not in halt band**, watch continues).
+- T10 coint-failure → 5/10 = 50% (in 45–60% **review band, NOT halt**; flag for structural-review).
+- For E4 to **fire (>60%)** in any near-term scenario, the next ≥2 trades would need to be coint-failures back-to-back. Plausible but not the base case given the recent trajectory.
+
+So E4 is approaching evaluability with the picture in the favorable-but-not-resolved zone. No action this turn — pre-committed criteria hold.
+
+**Other observations:** β-sizing remains flawless (9/9). H1 unchanged. Fork unchanged (T9 not in $/σ population). The DECOUPLED signature on clean β-sized coint-failures now at 3/4 — strengthens the mean-shift mechanism's empirical support without graduating it from "leading surviving hypothesis by elimination" (per Q2 framing, still requires Q3 for universe-rate / dominance).
+
+*Audit covers: run_136_20260530_042557 (T9 AVAX/CRV, coint_watch_timeout, β-sized DECOUPLED). β-sizing: 9/9 exact. Coint-failure 4/9=44.4%, one trade from E4 evaluability. Mean-shift mechanism: 3/4 clean DECOUPLED. RISK_OFF shadow entry flagged for structural-review deferred items. H1 / Fork: unchanged (T9 not eligible).*

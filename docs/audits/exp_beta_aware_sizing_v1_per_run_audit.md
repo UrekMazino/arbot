@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–129 (T1–T3) — 2026-05-28 → 2026-05-29
+## Runs 125–130 (T1–T4) — 2026-05-28 → 2026-05-29
 
 ---
 
@@ -472,3 +472,164 @@ Coint-failure rate 2/3 in-window is roughly consistent with the 30–40% baselin
 *Audit covers: run_129_20260528_204234 (T3 BNB/LINK). Runs 127–128 produced 0 experiment trades.*
 *Template: exp_beta_aware_sizing_v1_per_run_audit.md v1.2 ($/σ inclusion rule tightened).*
 *β-sizing mechanical verification: PASS. hedge_ratio in component_scores: PASS. Reconciliation: PASS (cleanest of experiment).*
+
+---
+---
+
+# Run 130 (2026-05-29) — T4 DOGE/AAVE
+
+## Experiment State Block
+
+```
+experiment_group: exp_beta_aware_sizing_v1
+runs_since_experiment_start: run_125, run_126, run_129, run_130
+trades_since_experiment_start_after_this_run: 4 (T1 JUP/YGG, T2 LTC/KSM, T3 BNB/LINK, T4 DOGE/AAVE)
+trades_remaining_to_action_threshold: 16 (to 20 total); $/σ-eligible remaining: ≥7 (only T2 eligible so far)
+patches_active: 4.1, 5, 6, 7, 7.1, 7.2, Beta-Aware Sizing
+sizing_mode: gross_normalized_beta (Option C) — STATBOT_HEDGE_RATIO_SIZING_ENABLED=true
+run_end: RUN_END reason=max_session_trades (limit=1) — one trade per session.
+```
+
+---
+
+## Section 1 — Run Summary (Run 130)
+
+- Duration: ~13h (04:32:00–05:51:28 UTC span shown is local→UTC; entry 05:40 / exit 05:51 UTC are the trade window). Long watch, single accepted trade.
+- Accepted trades: 1 (DOGE/AAVE). Closed experiment trades: 1 (T4).
+- Session PnL: −$0.2528 (equity 2653.49 → 2653.24).
+- Wins: 0, Losses: 1, Win rate: 0%.
+- Gate maintenance-positive: **Patch 4.1 TREND block fired correctly** — ASTER/SOL blocked by `statarb_mr_trend_regime_block` (+ advanced_ml_break_risk_high) at 13:16 local, ~24 min before the DOGE/AAVE entry. The block is working in production.
+- Circuit breaker: not tripped.
+- Run end: `RUN_END reason=max_session_trades detail=limit=1 closed=1`.
+
+---
+
+## Section 2 — Per-Trade Telemetry
+
+| Field | T4 (run_130) |
+|---|---|
+| Pair | DOGE-USDT-SWAP/AAVE-USDT-SWAP |
+| Side | long_negative_short_positive (long DOGE, short AAVE; BUY_SPREAD, oversold) |
+| Entry regime | RANGE |
+| Entry z | −2.2015 |
+| Exit z | −0.0974 |
+| Δz (abs) | 2.104 (favorable reversion, all the way into the exit zone) |
+| Exit reason | **cointegration_lost** |
+| Hold (min) | 10.4 |
+| MFE | −$0.103 (never crossed zero) |
+| MAE | −$0.226 |
+| position_pnl (gross) | **−$0.110** (negative before costs) |
+| Net PnL (equity) | −$0.2528 |
+| full_tp_touched / guard blocks | True / **23** (guard correctly blocked — max in-zone PnL −$0.103, always negative) |
+| Coint at close | lost |
+| Outcome | Loss — **coint-failure class** |
+
+**Key observation (3rd time in 4 trades):** unrealized PnL negative at all 11 snapshots (−0.067 → −0.007) while z reverted −2.20 → −0.10 *into* the |z|<0.35 exit zone. full_tp was touched but the guard blocked 23× because PnL was never positive. Spread reverted in z-space; dollar position never tracked it. Coint deterioration signature, identical to T1 and T3.
+
+---
+
+## Section 3 — β-Sizing Mechanical Verification (T4)
+
+### 3A — BETA_SIZING Log Line
+
+**T4 (DOGE/AAVE) — entry 13:40:55 local / 05:40:55 UTC** (BETA_SIZING immediately preceding STRATEGY_TRADE_OPEN):
+
+```
+BETA_SIZING: beta=0.7605 gross=200.00 capital_long=113.61 capital_short=86.39 side=negative_z
+```
+
+| Field | Value |
+|---|---|
+| beta | 0.7605 (within [0.3, 3.0] discovery envelope; fallback bound [0.20, 5.00] not approached) |
+| gross | 200.00 |
+| capital_long | 113.61 (DOGE, inst_1 / negative ticker — long) |
+| capital_short | 86.39 (AAVE, inst_2 / positive ticker — short) |
+| side | negative_z (entry_z = −2.20 → long inst_1/DOGE, short inst_2/AAVE) |
+| leg1_expected (long DOGE) = 200/(1+0.7605) | 200/1.7605 = **113.60** → matches 113.61 ✓ |
+| leg2_expected (short AAVE) = 200×0.7605/(1+0.7605) | 152.10/1.7605 = **86.40** → matches 86.39 ✓ |
+| gross_check: 113.61 + 86.39 | **200.00** ✓ |
+| fallback_used | no |
+
+Pre-trade notional check confirms execution: `long=113.16 short=86.41 total=199.56` → DOGE 1.14 ct @ 0.099261 (cap 113.61), AAVE 10.70 ct @ 80.7534 (cap 86.39). β-sizing verified to the cent.
+
+### 3B — hedge_ratio in entry_gate_component_scores
+
+DOGE/AAVE was the **accepted** trade, so its safety-gate evaluation was a PASS and does not appear as an `ENTRY_SAFETY_GATE_BLOCKED` row. The authoritative entry β is the BETA_SIZING line (0.7605), sourced from `metrics["hedge_ratio"]` at the entry instant.
+
+**Telemetry-hygiene note (verified, NOT a discrepancy):** a quick whole-log scan surfaced `hedge_ratio: 1.1149` — but those rows are **ASTER/SOL** (a different pair, blocked at 13:16, 24 min pre-entry), not DOGE/AAVE. There is no β staleness/discrepancy at T4. (Flagged here only because the mismatched grep could otherwise be misread — Section 8A discipline: confirm the row's pair before asserting.)
+
+### 3C — $/σ Classification (T4)
+
+**T4 is EXCLUDED from the $/σ table under Rule v1.2** — fails (a): exit_reason = `cointegration_lost` (coint-failure category). Also fails (b): MFE = −$0.103 < 0. Recorded in the coint-failure tracker.
+
+### 3E — β Distribution Tracker (cumulative)
+
+| Trade # | Run | Pair | β at entry | In [0.3,3.0] envelope? | Fallback? |
+|---|---|---|---|---|---|
+| T1 | run_125 | JUP/YGG | 1.4946 | yes | no |
+| T2 | run_126 | LTC/KSM | 0.6335 | yes | no |
+| T3 | run_129 | BNB/LINK | 0.3776 | yes | no |
+| T4 | run_130 | DOGE/AAVE | **0.7605** | yes | no |
+
+**After T4:**
+- β range: **[0.378, 1.495]** (unchanged; T4's 0.76 sits inside the existing range).
+- Trades with β < 1.0: **3/4** (T2, T3, T4).
+- Trades materially non-unity (outside [0.8, 1.2]): **4/4**.
+- Fallback activations: 0. β-sizing mechanically flawless across all four trades.
+
+---
+
+## Section 4 — Reconciliation Telemetry (T4)
+
+- position_pnl: **−$0.110** (gross, NEGATIVE)
+- equity_change: −$0.253
+- difference: −$0.143 | fees: $0.10 | slippage: $0.04 | funding: $0.00 | unexplained: **−$0.0025**
+- basis: pre_close_equity_delta ✓
+- unexplained_pct: 1.77% | large_delta_warning: False | large_unexplained_warning: False
+- pass_fail: **PASS**
+
+**Costs textbook again: ~$0.14 (1.0× model), unexplained only −$0.0025** — ties T3 as the cleanest reconciliation tier of the experiment. The loss is NOT a cost overrun; the gross position lost −$0.110 while z reverted favorably. Pure coint deterioration. DOGE and AAVE are liquid majors — no thin-pair cost flag. (Cumulative pattern: coint-failures on *liquid* pairs reconcile cleanly with normal costs — the loss is the relationship breaking, not execution.)
+
+---
+
+## Section 5 — Coint Stability Gate Status (T4, Maintenance)
+
+- T4: entry_coint_stability_slope = **−0.000579**, evaluated_count = **1**. Gate reached and evaluated; slope flat/slightly-improving, far below 0.020 threshold — gate passed.
+- Coint failure was **post-entry, not predictable from the entry slope** (slope was negative = p-values improving at entry, i.e., cointegration *strengthening* — yet it failed). This is now the **third** coint-failure (T1, T3, T4) that entered with a passing/benign slope and failed mid-hold. Consistent with exp_coint_stability_v1's premise-NEGATIVE verdict: entry-time coint metrics do not predict post-entry collapse. Maintenance telemetry only.
+
+---
+
+## Section 6 — Cumulative Counter Update (after T4)
+
+```
+trades_since_experiment_start: 4 (T1 JUP/YGG, T2 LTC/KSM, T3 BNB/LINK, T4 DOGE/AAVE)
+$/σ computable population: 1 (T2 only) — T1, T3, T4 all excluded as coint-failures (Rule v1.2)
+sign_positive: 1/1 | sign_flip_rate: 0/1 = 0% (target ≤10%)
+cumulative_aggregate_sigma: +$0.064/σ (positive; unchanged — T4 not in population)
+coint-failure count (experiment window): 3/4 = 75% (T1 coint_lost, T3 watch_timeout, T4 coint_lost)
+beta_range_observed: [0.378, 1.495]
+beta_fallback_activations: 0
+cumulative PnL (experiment window): −$1.587 (T1 −$0.962, T2 −$0.105, T3 −$0.267, T4 −$0.253)
+win rate (experiment window): 0/4 = 0%
+trades_remaining_to_action_threshold: 16 (to 20 total); ≥7 more $/σ-eligible needed
+next step: run_131+ with frozen configuration
+```
+
+---
+
+## Section 7 — E4 Early-Warning (NOT yet firing — flagged per template)
+
+**Coint-failure rate is now 3/4 = 75% in-window.** The template's **E4 kill-criterion** (>60% coint-failure over **≥10 closed trades** → halt sizing test) is **not yet evaluable** — only 4 closed trades, below the ≥10 minimum. We are in **watch**, not fire.
+
+But the trajectory is the exact scenario E4 was written to catch:
+- 3 of 4 trades never reached the $/σ-eligible population. After 4 trades, eligible N is still **1**. At this rate, ≥8 eligible would require ~30+ total trades.
+- Current 75% is above the >60% halt line AND above the established baseline band (prior windows: 55.6% → 36.8% → 40.0%, which had been drifting *down*). If this rate holds, E4 fires at trade 10.
+- **Pre-committed posture (per E4 calibration note):** at 4 trades this is "watch, do not halt." At ≥10 closed, if coint-failure rate is still >60%, halt and address coint-fragility (exit-speed / universe) before continuing the sizing test. Operator should be aware the experiment may resolve via E4 (universe-too-fragile) before H1/H2 become readable.
+
+**This is the dilution problem the eligible-count gate + E4 were designed for, now materializing.** β-sizing remains mechanically flawless (4/4 exact, 0 fallbacks); the binding constraint on the experiment is coint-fragility of the universe, not sizing — exactly the Branch-2/Section-7 hypothesis surfacing in the collection data.
+
+---
+
+*Audit covers: run_130_20260529_043200 (T4 DOGE/AAVE).*
+*Template: exp_beta_aware_sizing_v1_per_run_audit.md v1.2.*
+*β-sizing mechanical verification: PASS (β=0.7605, gross conserved to the cent, 0 fallbacks). Reconciliation: PASS (textbook 1.0× costs). $/σ: excluded (coint-failure). E4: WATCH (3/4=75%, below ≥10-trade evaluability floor).*

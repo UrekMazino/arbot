@@ -57,10 +57,8 @@ Coint-failure exits go to the **coint-failure tracker**, never the `$/σ` table 
 
 ## 4. Review trigger and early-resolution criteria
 
-**Primary gate (roadmap):** 20 closed trades.
-
-**PROPOSED additional gate — REQUIRES OPERATOR SIGN-OFF:** trigger structural review at **≥ 8 `$/σ`-eligible (normal-exit) trades**, whichever discipline you prefer as the binding count.
-*Rationale:* coint-failures are running ~2/3 and are excluded from the `$/σ` population. At that rate, 20 *total* trades may yield only ~6–7 eligible trades — thin for reading a sign-flip rate. Counting by eligible-trade progress (not total) measures progress toward the actual diagnostic and prevents the counter from overstating how close the experiment is to answerable. This mirrors the established early-resolution pattern (exp_coint_stability fired early at T11/T14). **Decision needed: adopt the eligible-count gate as the binding trigger, keep 20-total, or require both.**
+**Review trigger (LOCKED — operator sign-off 2026-05-29): `≥ 20 closed trades` AND `≥ 8 $/σ-eligible (normal-exit) trades`, whichever is later.**
+*Rationale:* coint-failures are running ~2/3 and are excluded from the `$/σ` population, so 20 *total* trades may yield only ~6–7 eligible — below the k≥5–8 that E1/E3 and the H1 sign-flip read require. Counting by eligible-trade progress prevents concluding on too-thin an eligible population. The `≥20 total` floor is retained in the AND so a fragility signal that shows up only in total-trade count (see E4) is not skipped by an eligible-only gate. The two gates pair: eligible-count protects the `$/σ` read; total-count + E4 protect against a universe too fragile to test. Mirrors the established early-resolution pattern (exp_coint_stability fired early at T11/T14).
 
 **Early-resolution criteria (each pre-commits an action; mirrors the exp_coint_stability discipline):**
 
@@ -69,6 +67,9 @@ Coint-failure exits go to the **coint-failure tracker**, never the `$/σ` table 
 | **E1 — sizing-confirmed-positive** | First k≥5 eligible trades all positive `$/σ`, clear magnitude (\|$/σ\| > $0.005), 0 sign flips | H1 answered early (success). Proceed to H2 read; do not keep collecting solely for H1. |
 | **E2 — sizing-negative** | ≥2 sign flips among eligible trades | H1 incomplete — sizing mismatch was not the (whole) `$/σ` driver. Stop; open Branch 3 (§6). Substantive negative result. |
 | **E3 — cost-domination confirmed** | `edge_clears_costs = 0/k` over k≥5 eligible trades **with** positive `$/σ` | H1 success + H2 fail confirmed early. Begin Branch-2 prep (§7, §8) before reaching 20; the binding constraint is cost/universe, not sizing. |
+| **E4 — universe-too-fragile (KILL-CRITERION, not a branch)** | coint-failure rate **> 60%** over **≥ 10 closed trades**. Denominator is **total closed trades, NOT eligible** — coint-failures are definitionally excluded from the eligible population, so an eligible-denominator rate is structurally ~0 and could never fire. | **Halt the sizing test.** The binding problem is coint-fragility of the *universe*, not sizing — too few trades will ever reach the eligible population to fairly test H1. Address exit-speed (coint-watch recalibration) or universe quality first, regardless of H1/H2 progress. Coint-failure has no tunable entry-knob (entry-slope refuted), so this is a committed *halt*, not a tuning action — the answer to "is the largest loss source being ignored?" |
+
+**E4 calibration note (the trap to avoid).** The established coint-failure baseline is *already* high and has been **drifting down**, not up: 55.6% (raw 9-trade) → 36.8% (exp_guard050, 19) → 40.0% (exp_coint_stability, 10). A threshold near the top of that band would risk a **false halt on ordinary small-window variance** — and a false halt is itself a reframe risk (halting a fine test, then narrating fragility that wasn't there). So E4 fires **only on a clear breach (> 60% over ≥10 closed)**. The 45–60% band is **elevated-but-plausibly-baseline → review, do not halt**: note it, check whether it reflects drift above the pair universe's own prior windows rather than a level, and carry to the structural review as a flag. The honest signal is *drift above prior windows*, not the absolute level; the >60% line is the defensible auto-halt floor, the 45–60% review band catches the softer case without over-triggering.
 
 ---
 
@@ -111,7 +112,7 @@ Two handles, run **one at a time**:
 **Branch 3 — H1 null (signs stay mixed).**
 The sizing-mismatch hypothesis was incomplete. Re-open the `$/σ`-instability drivers: path-dependency (T11-class z-reversion-then-re-expansion), measurement error on near-breakeven trades (cost-model ±$0.05–$0.07 can exceed the quantity measured), or a residual sizing/exec defect. Substantive negative result; do **not** advance to exit redesign or cost levers until the `$/σ` instrument itself is trusted.
 
-**Coint-failure (the largest single loss source) is deliberately not a branch.** The entry lever is refuted. The only remaining handles are exit-*speed* (recalibrate the coint-watch confirmation-count / loss-threshold to cut failing trades faster — lower-risk) and the research-phase pre-entry regime-flip detector (T3 deferred item). Both compete with exit redesign for the *experiment-after-next* slot; neither is ready to be the current variable. Named here so it is not mistaken for ignored — it is the biggest number but the hardest clean lever.
+**Coint-failure (the largest single loss source) is deliberately not a branch.** The entry lever is refuted. The only remaining handles are exit-*speed* (recalibrate the coint-watch confirmation-count / loss-threshold to cut failing trades faster — lower-risk) and the research-phase pre-entry regime-flip detector (T3 deferred item). Both compete with exit redesign for the *experiment-after-next* slot; neither is ready to be the current variable. It is the biggest number but has no tunable knob — so it is handled not as a branch but as the **E4 kill-criterion (§4)**: if the universe is too coint-fragile to ever reach a testable eligible population, the committed action is to *halt* the sizing test and address exit-speed/universe first, regardless of H1/H2 progress. That is the answer to "is it being ignored?" — a committed halt-trigger, not a silent demotion.
 
 ---
 
@@ -179,13 +180,13 @@ No notional change; no Advanced ML live; no router activation; no z exit-thresho
 ## 11. Action items by owner
 
 **Operator (decisions):**
-- [ ] §4 — adopt eligible-count early gate, keep 20-total, or require both.
-- [ ] §8 — choose maker design fork (pure vs fallback) *if* Branch 2 is reached.
-- [ ] §5 — approve the negative-result-bar wording.
+- [x] §4 — **DECIDED: require both** (≥20 total AND ≥8 eligible, whichever is later); E4 kill-criterion added (>60% coint-failure over ≥10 closed, total-closed denominator).
+- [ ] §8 — choose maker design fork (pure vs fallback) *if* Branch 2 is reached. *(Operator lean: fallback — legging risk on a paired entry is the worse hazard; accept muddier attribution. Deferred to if/when Branch 2.)*
+- [x] §5 — **APPROVED verbatim**; anti-reframe clause ("must not be reframed into 'needs one more patch' without new evidence clearing this bar") retained as the load-bearing lock.
 
 **Code assistant (code + data):**
 - [ ] §7 — compute residual vs effective half-spread (+ secondary impact proxy), tag pairs by structure; confirm `liquidity_checks.csv` spread availability first.
-- [ ] §11 — log the `limit_order_basis` trap in DECISION_LOG.md (Section-8A class) and correct the misleading comment at `config_execution_api.py:276`.
+- [x] §11 — `limit_order_basis` trap logged in DECISION_LOG.md (Section-8A class) and comment corrected at `config_execution_api.py:276` (verified comment-only; no behavior change; run 130 not restarted).
 - [ ] §10 — implement Patch 6 item 5.
 - [ ] (if Branch 2b authorized) implement maker entry path with the agreed design.
 
@@ -195,6 +196,6 @@ No notional change; no Advanced ML live; no router activation; no z exit-thresho
 
 ---
 
-*Template version: exp_beta_aware_sizing_v1 structural-review template v1.0 (DRAFT, pre-data).*
+*Template version: exp_beta_aware_sizing_v1 structural-review template v1.1 (DRAFT, pre-data; §4 gate locked + E4 kill-criterion added; §5 negative-bar approved verbatim).*
 *Drafted: 2026-05-29 at T3. To be executed at the §4 review trigger.*
 *Inputs: per-run audit (runs 125–129, T1–T3); structural_review_exp_coint_stability_v1.md; project_experiment_state.md; OKXSTATBOT_CURRENT_STATE/ROADMAP/DECISION_LOG; code trace (taker confirmation + limit_order_basis) from code assistant, 2026-05-29.*

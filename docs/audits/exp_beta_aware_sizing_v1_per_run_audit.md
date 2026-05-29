@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–130 (T1–T4) — 2026-05-28 → 2026-05-29
+## Runs 125–131 (T1–T5) — 2026-05-28 → 2026-05-29
 
 ---
 
@@ -633,3 +633,250 @@ But the trajectory is the exact scenario E4 was written to catch:
 *Audit covers: run_130_20260529_043200 (T4 DOGE/AAVE).*
 *Template: exp_beta_aware_sizing_v1_per_run_audit.md v1.2.*
 *β-sizing mechanical verification: PASS (β=0.7605, gross conserved to the cent, 0 fallbacks). Reconciliation: PASS (textbook 1.0× costs). $/σ: excluded (coint-failure). E4: WATCH (3/4=75%, below ≥10-trade evaluability floor).*
+
+---
+---
+
+# Run 131 (2026-05-29) — T5 AVAX/DOT  ← 2nd $/σ-ELIGIBLE trade
+
+## Experiment State Block
+
+```
+experiment_group: exp_beta_aware_sizing_v1
+runs_since_experiment_start: run_125, 126, 129, 130, 131
+trades_since_experiment_start_after_this_run: 5 (T1 JUP/YGG, T2 LTC/KSM, T3 BNB/LINK, T4 DOGE/AAVE, T5 AVAX/DOT)
+$/σ-eligible trades: 2 (T2, T5)
+trades_remaining_to_action_threshold: 15 (to 20 total); ≥6 more $/σ-eligible needed
+patches_active: 4.1, 5, 6, 7, 7.1, 7.2, Beta-Aware Sizing
+run_end: RUN_END reason=max_session_trades (limit=1).
+```
+
+---
+
+## Section 1 — Run Summary (Run 131)
+
+- Accepted trades: 1 (AVAX/DOT). Closed experiment trades: 1 (T5).
+- Session PnL: −$0.0303 (equity 2653.24 → 2653.21).
+- Wins: 0, Losses: 1 (net), but **gross position_pnl POSITIVE** (+$0.069) — strategy worked; costs converted to a small net loss.
+- Circuit breaker: not tripped.
+- Run end: `RUN_END reason=max_session_trades`.
+
+---
+
+## Section 2 — Per-Trade Telemetry
+
+| Field | T5 (run_131) |
+|---|---|
+| Pair | AVAX-USDT-SWAP/DOT-USDT-SWAP |
+| Side | long_negative_short_positive (long AVAX, short DOT; BUY_SPREAD, oversold) |
+| Entry regime | RANGE |
+| Entry z | −2.1569 |
+| Exit z | +1.8450 (reverted through 0 and overshot) |
+| Δz (abs) | **4.002** (large favorable traversal) |
+| Exit reason | **normal** (mechanism: `trade_manager_pnl_profit_lock`) |
+| Hold (min) | 30.4 |
+| MFE | **+$0.187** (equity-delta) / +$0.25 peak (position-snapshot) — **POSITIVE** |
+| MAE | −$0.138 |
+| position_pnl (gross) | **+$0.069** (POSITIVE) |
+| Net PnL (equity) | −$0.0303 |
+| full_tp_touched / guard blocks | True / **65** |
+| Outcome | Net loss, but **$/σ-eligible and sign-positive** |
+
+**Trajectory:** unrealized PnL was positive at nearly every snapshot (one −$0.023 dip early), rose with z as the spread reverted −2.16 → 0 → +2.46, peaking ~+$0.25 (z≈2.16). The position **tracked the favorable z-move correctly** — β-sizing aligned signal and position. It then gave back to +$0.069 gross at the profit-lock exit (z=+1.845), and costs took it to −$0.030 net.
+
+---
+
+## Section 3 — β-Sizing Mechanical Verification (T5)
+
+### 3A — BETA_SIZING Log Line
+
+**T5 (AVAX/DOT) — entry 17:26:46 local / 09:26:47 UTC:**
+
+```
+BETA_SIZING: beta=0.6594 gross=200.00 capital_long=120.52 capital_short=79.48 side=negative_z
+```
+
+| Field | Value |
+|---|---|
+| beta | 0.6594 (inside [0.3, 3.0] envelope) |
+| leg1 (long AVAX, inst_1/neg) = 200/(1+0.6594) | 200/1.6594 = **120.53** → matches 120.52 ✓ |
+| leg2 (short DOT, inst_2/pos) = 200×0.6594/(1+0.6594) | 131.88/1.6594 = **79.47** → matches 79.48 ✓ |
+| gross_check: 120.52 + 79.48 | **200.00** ✓ |
+| fallback_used | no |
+
+**β-sizing is now 5/5 mechanically exact, 0 fallbacks.**
+
+### 3C — $/σ Classification (T5) — ELIGIBLE
+
+T5 passes ALL THREE Rule v1.2 conditions: (a) exit_reason = normal/profit_lock ✓; (b) MFE = +$0.187 > 0 ✓; (c) |Δz| = 4.002 ≥ 0.5 ✓. **INCLUDED in the $/σ table.**
+
+| Field | Value |
+|---|---|
+| entry_z → exit_z | −2.1569 → +1.8450 |
+| Δz (abs) | 4.002 |
+| position_pnl (gross) | +$0.069 |
+| **$/σ = position_pnl / Δz** | +0.069 / 4.002 = **+$0.017/σ** |
+| Sign | **POSITIVE** ✓ |
+
+The dollar position tracked the spread in the correct direction across a 4σ favorable move. β-sizing aligned signal and position — second confirmation of H1.
+
+### 3D — Running $/σ Sign Stability Table
+
+| Trade # | Run | Pair | β | Δz | position_pnl | real_costs | edge_clears_costs | $/σ | Sign |
+|---|---|---|---|---|---|---|---|---|---|
+| T2 | run_126 | LTC/KSM | 0.6335 | 2.270 | +$0.146 | $0.251 | no | +$0.064 | **+** |
+| T5 | run_131 | AVAX/DOT | 0.6594 | 4.002 | +$0.069 | $0.100 | no | +$0.017 | **+** |
+
+**After 5 trades (2 eligible):**
+- Sign-positive: **2/2** | Sign-negative: 0 | **Sign-flip rate: 0/2 = 0%** (target ≤10%)
+- Aggregate $/σ (pooled = Σpnl/Σ|Δz|): (0.146+0.069)/(2.270+4.002) = **+$0.034/σ** (positive ✓)
+- **edge_clears_costs = yes: 0/2** — both eligible trades had positive, correctly-sized $/σ but the captured edge did NOT clear real costs.
+
+### 3E — β Distribution Tracker (cumulative)
+
+| Trade # | Run | Pair | β | In [0.3,3.0]? | Fallback? |
+|---|---|---|---|---|---|
+| T1 | run_125 | JUP/YGG | 1.4946 | yes | no |
+| T2 | run_126 | LTC/KSM | 0.6335 | yes | no |
+| T3 | run_129 | BNB/LINK | 0.3776 | yes | no |
+| T4 | run_130 | DOGE/AAVE | 0.7605 | yes | no |
+| T5 | run_131 | AVAX/DOT | 0.6594 | yes | no |
+
+β range [0.378, 1.495] unchanged; β<1.0: 4/5; non-unity: 5/5; fallback: 0.
+
+---
+
+## Section 4 — Reconciliation Telemetry (T5)
+
+- position_pnl: **+$0.069** (gross, POSITIVE)
+- equity_change: −$0.0303
+- difference: −$0.0996 | fees: $0.10 | slippage: $0.04 | funding: $0.00 | unexplained: **+$0.040** (positive residual — actual costs < model; 8th positive-residual occurrence on a liquid pair)
+- basis: pre_close_equity_delta ✓ | large_delta_warning: False | large_unexplained_warning: False | pass_fail: **PASS**
+- Real costs ≈ $0.0996 (~$0.10). Gross edge +$0.069 < costs → **edge_clears_costs = NO**.
+
+---
+
+## Section 5 — Coint Stability Gate Status (T5, Maintenance)
+
+- entry_coint_stability_slope = −0.000061, evaluated_count = 1. Gate passed. T5 is a **normal exit** (not a coint-failure) — cointegration held through the hold. Maintenance telemetry only.
+
+---
+
+## Section 6 — Cumulative Counter Update (after T5)
+
+```
+trades_since_experiment_start: 5 (T1, T2, T3, T4, T5)
+$/σ computable population: 2 (T2, T5) — T1, T3, T4 excluded as coint-failures
+sign_positive: 2/2 | sign_flip_rate: 0/2 = 0% (target ≤10%)
+aggregate $/σ (pooled): +$0.034/σ (positive)
+edge_clears_costs: 0/2 (both positive $/σ, neither cleared costs at realized exit)
+coint-failure count (window): 3/5 = 60% (T1, T3, T4) — down from 3/4=75% after T5 normal exit
+beta_range_observed: [0.378, 1.495]; fallback activations: 0
+cumulative PnL (experiment window): −$1.617 (T1 −0.962, T2 −0.105, T3 −0.267, T4 −0.253, T5 −0.030)
+win rate (experiment window): 0/5 = 0%
+trades_remaining_to_action_threshold: 15 (to 20 total); ≥6 more $/σ-eligible
+next step: run_132+ (already started) with frozen configuration
+```
+
+---
+
+## Section 7 — Reads from T5 (the richest trade so far)
+
+**1. H1 (sizing alignment) — strengthening. 2/2 eligible trades sign-positive, sign-flip rate 0%.** β-sizing tracked a 4σ favorable move with positive PnL throughout. The architecture patch is doing exactly what it was built to do.
+
+**2. H2 (edge clears costs) — the bifurcation concept is right; the T5 ASSIGNMENT below is RETRACTED.** edge_clears_costs is 0/2 at the realized exit. The split into *pure-cost* vs *exit-capture* is the correct frame:
+   - **Pure cost problem** (the edge never exceeds costs) — vs —
+   - **Exit-capture problem** (the edge exists at MFE but the exit leaks it).
+
+   > **RETRACTION (Query 1 PnL-vs-z diagnostic, 2026-05-29 — see Cross-Trade Diagnostic section below):** I assigned T5 to "exit-capture / Item 14 exhibit." That was wrong — it rested on **MFE, a hindsight peak that sat at a +2.16σ overshoot (anti-thesis momentum), not a thesis-capturable quantity.** The disambiguating number is **PnL at the z≈0 mean-crossing: +$0.052 < costs $0.10.** The thesis edge never cleared costs; the only above-cost profit lived in opposite-side overshoot. T5 does **not** support exit redesign / Item 14. See the cross-trade diagnostic for the corrected classification.
+
+**3. Profit-lock fired for the first time in the experiment.** Exit = `trade_manager_pnl_profit_lock`: `pnl=0.0693 ≤ floor=0.120 (MFE=0.1865, giveback=0.50)`. The mechanism the exp_guard050 review found *never activated* (0 activations) **did activate here** and captured +$0.069 gross. But the **profit-lock floor ($0.120) sits below the cost-clearing level (~$0.10 net needs >~$0.14 gross at realized giveback)** — so even a mechanically-successful profit-lock exit netted a loss. Calibration finding: the floor/giveback is tuned below cost-clearance. (Frozen variable — observation only, not a mid-window change.)
+
+**4. Coint-failure rate eased to 3/5 = 60%** (from 3/4=75%) — T5's normal exit pulled it to the E4 boundary. **E4 still not evaluable** (needs ≥10 closed; we're at 5). At exactly 60% it sits on the line between the >60% halt and the 45–60% review band — trending down, watch continues.
+
+**Net read (n=2 eligible — directional only):** β-sizing works. The binding constraint is not sizing; it is the combination of (a) coint-fragility removing 3/5 trades from the eligible population and (b) on the trades that *do* work, exit-capture + costs preventing the realized edge from clearing costs even though the peak edge does. This is sharpening toward a **Branch-1-and-2 blend**: exit redesign (Item 14) is now supported by direct evidence (T5 MFE > costs, leaked at exit), not just deferred reasoning — but it remains gated behind the eligible-population growing and E4 not firing.
+
+---
+
+*Audit covers: run_131_20260529_135131 (T5 AVAX/DOT). Run 132 already started.*
+*Template: exp_beta_aware_sizing_v1_per_run_audit.md v1.2.*
+*β-sizing: PASS (β=0.6594, gross to the cent, 0 fallbacks; 5/5 exact). Reconciliation: PASS (+$0.040 positive residual). $/σ: INCLUDED, +$0.017/σ POSITIVE (2/2 eligible positive). E4: WATCH (3/5=60%, not yet evaluable).*
+
+---
+---
+
+# Cross-Trade Diagnostic — Query 1 (PnL-vs-z), 2026-05-29
+
+**Read-only / diagnostics-only.** Per `analysis_spec_pnl_vs_z_decoupling_v1`. Reads dollar (unrealized, mark-to-market) PnL as a function of z across each trade's per-cycle snapshot series (`position_snapshots.csv`). One primitive answers two questions: the **H2 bifurcation** (working trades) and the **mean-shift/decoupling** test (coint-failures). Zero new data. Live collection (run 132+) untouched.
+
+**Preconditions (confirmed):** snapshot source = `Reports/v1/run_*/position_snapshots.csv` (`current_z`, `unrealized_pnl_usdt`); coverage complete for all 19 in-scope trades. **T8c excluded** (recon `basis=position_pnl`, cost-unreliable). real_costs = `trade_pnl − equity_change` from reconciliation.
+
+**Sizing confound (stated):** exp_coint_stability_v1 trades (T1c–T14c) ran **equal-notional** (β computed, not applied) — their dollar magnitudes are sizing-confounded; usable for MFE-in-z *location*, not for clean decoupling. **Clean evidence = β-sized current trades** (T1b–T5b). Query 2 (kline recompute) resolves the confound for the decoupled set.
+
+## RULE PROMOTED — Classification A |Δz| precondition
+A trade is eligible for the decoupled/tracked test **only if |Δz| ≥ 0.5** (same floor Rule v1.2 uses for $/σ). Below that, z did not revert, so there is nothing to decouple *from* — a DECOUPLED label would be a measurement artifact. **This drops T2c (|Δz|=0.08) and T5c (|Δz|=0.10) from Class A** (both were spuriously DECOUPLED on a stuck z). Applies to this run and all future Query-1 passes.
+
+## Per-trade table (snapshot-derived; gross mark-to-market vs real_costs)
+
+| Trade | Sizing | Exit | \|Δz\| | cost | pnl@mean (z) | mfe (z) | pnl@exit | Class |
+|---|---|---|---|---|---|---|---|---|
+| T1c LINK/SUI | eq | coint_wt | 3.45 | 0.122 | +0.039 (+0.03) | +0.193 (+1.15) | +0.174 | A:TRACKED |
+| T4c BCH/CRCL | eq | coint_lost | 3.78 | 0.144 | −0.064 (−0.03) | +0.136 (−2.89) | +0.095 | A:DECOUPLED |
+| T6c DOGE/SUI | eq | coint_lost | 0.54 | 0.111 | +0.047 (−0.71) | +0.047 (−0.71) | −0.577 | A:TRACKED |
+| T11c CRV/IOTA | eq | coint_wt | 2.42 | 0.100 | −0.076 (0.00) | +0.077 (−1.77) | −0.299 | A:DECOUPLED |
+| T14c SOL/ALGO | eq | coint_lost | 1.80 | 0.123 | −0.335 (+0.20) | +0.062 (+1.27) | −0.380 | A:DECOUPLED |
+| T1b JUP/YGG | **β** | coint_lost | 1.22 | 0.534 | +0.102 (−0.21) | +0.102 (−0.33) | −0.328 | A:TRACKED (thin-pair cost) |
+| **T3b BNB/LINK** | **β** | coint_wt | 1.54 | 0.130 | −0.036 (+0.58) | −0.026 (+1.46) | −0.036 | **A:DECOUPLED (clean)** |
+| **T4b DOGE/AAVE** | **β** | coint_lost | 2.10 | 0.143 | −0.007 (−0.10) | −0.007 (−0.10) | −0.007 | **A:DECOUPLED (clean)** |
+| T2c, T5c | eq | coint_lost | 0.08, 0.10 | — | — | — | — | EXCLUDED (\|Δz\|<0.5) |
+| — eligible normal exits — | | | | | | | | |
+| T3c ETH/AVAX | eq | normal | 1.39 | 0.108 | +0.119 (−1.44) | +0.119 (−1.44) | +0.119 | B:ZONE-NARROW |
+| T7c BTC/HBAR | eq | normal | 4.39 | 0.100 | +0.078 (+0.05) | +0.218 (+2.50) | +0.099 | B:ZONE-NARROW |
+| T9c LINEA/ZRO | eq | normal | 2.98 | 0.067 | +0.114 (−0.47) | +0.114 (−0.47) | +0.114 | B:ZONE-NARROW |
+| T10c FIL/ICP | eq | normal | 4.12 | 0.395 | +0.019 (+0.15) | +0.337 (−2.06) | +0.337 | B:PURE-COST |
+| T12c SOL/BTC | eq | normal | 4.14 | 0.117 | +0.102 (−0.03) | +0.241 (−2.21) | +0.241 | B:CAPTURED (the win) |
+| T13c BNB/COMP | eq | normal | 4.37 | 0.113 | −0.201 (−0.05) | +0.023 (+1.15) | −0.274 | B:PURE-COST |
+| **T2b LTC/KSM** | **β** | normal | 2.27 | 0.251 | +0.052 (+0.12) | +0.144 (−0.13) | +0.144 | **B:PURE-COST (clean)** |
+| **T5b AVAX/DOT** | **β** | normal/plock | 4.00 | 0.100 | **+0.052 (−0.10)** | +0.249 (**+2.16**) | +0.221 | **B:ZONE-NARROW (clean)** |
+| T8c SOL/AVAX | eq | normal | 1.90 | — | +0.127 | +0.235 (+1.43) | +0.096 | B:cost-unreliable |
+
+## Reads (framing)
+
+**H1 (sizing alignment):** unchanged, strengthening — separate track. Not a Query-1 question.
+
+**Classification B (H2):** **exit-redesign / Item 14 is NOT indicated on the clean data.** Both β-sized eligible trades have **pnl_at_mean below costs** (T2b +0.052 vs 0.251; T5b +0.052 vs 0.100). Zero trades anywhere classified EXIT-TOO-LATE. Kill condition 3 fires **directionally (N=2 clean)**: the leak is not "held past a profitable mean" — the mean was never profitable enough to clear costs. → **Points toward Branch 2, sub-lever UNDETERMINED:**
+   - *cost-too-high* (→ maker 2b / spread-gating 2a) **vs** *edge-too-thin* (mean-reversion capture at $200 on this universe is structurally ~$0.05 — no cost lever closes a $0.05 gap → §5 negative-result territory).
+   - The clean data cannot yet separate these. **The §7 cost diagnostic (residual vs effective half-spread) is the discriminator** — promoted from prep to critical path. Do NOT assert "Branch 2 = cost/universe" flatly.
+   - Note the suspiciously tight clustering: both clean eligible trades sit at **pnl_at_mean ≈ +$0.052**. At N=2 this may be coincidence or may indicate a mean-reversion-capture ceiling on this universe. Flag, do not over-read.
+
+**Classification A (mean-shift):** **not killed.** 2/3 clean β-sized coint-failures (T3b, T4b) are DECOUPLED — z reverted materially favorably (1.54σ, 2.10σ) while dollar PnL stayed ≤0 throughout. On β-sized trades this is **not** a sizing artifact. (T1b TRACKED-THEN-BROKE, and separately a thin-pair cost case — out of the decoupled set.) **Query 2 decomposes the *mechanism* (mean-shift vs β-drift) on these two holds — it cannot establish a rate (that is Query 3).** Refuted-lever guardrail intact: no entry-slope/level revival.
+
+**Directional through-line (HYPOTHESIS, N-flagged):** every clean signal now points the same way — *away from entry-time and exit-geometry fixes, toward hold-window behavior and universe selection.* H1: sizing solved. Class B: leak is not exit-timing. Class A: failures are relationship instability *during the hold*, invisible at entry. The remaining leverage — if any exists — looks like it lives in hold-window monitoring and universe quality. Stated **as a converging hypothesis at N=2-clean, not a finding** (this is exactly the low-N "coherent through-line" shape the research paper warns about — so it is labeled, not concluded).
+
+## Two tracked columns — ADD to future per-run Section 3D
+For every $/σ-eligible trade going forward, record both: **`mfe > costs?`** AND **`pnl_at_mean > costs?`**. The second is the thesis-relevant one (the first is hindsight-peak). Current clean eligible: T2b (no / no), T5b (yes / **no**).
+
+*Query 1 covers the full closed-trade union (exp_coint_stability_v1 T1c–T14c equal-notional + exp_beta_aware_sizing_v1 T1b–T5b β-sized). N-discipline: clean (β-sized) eligible N=2, clean coint-failures N=3 — directional only. Query 3 (scale) gated on operator.*
+
+---
+
+## Query 2 — mean-shift vs β-drift decomposition (DECOUPLED set: T3b, T4b)
+
+**Method:** pulled 1m klines (OKX history-candles, via `retroactive_beta.py` machinery) over each hold window + 200-bar pre-entry context; recomputed rolling OLS β (log-price, window matching live) at entry and exit; reconstructed the log-spread and its rolling z. N=2 holds — **mechanism on these two, not a rate** (rate is Query 3).
+
+**Robust result — β-drift RULED OUT (both holds):**
+
+| Trade | rolling β entry | rolling β exit | drift |
+|---|---|---|---|
+| T3b BNB/LINK | 0.398 | 0.391 | **−1.6%** |
+| T4b DOGE/AAVE | 0.755 | 0.760 | **+0.6%** |
+
+Entry β reproduced the logged values (0.378 / 0.760); β barely moved over the ~11-min holds. β is a 200-bar OLS, robust to intrabar timing → this conclusion is solid. **Dynamic re-hedging / β-stability-screen is NOT the indicated lever.**
+
+**Caveat (stated):** the bar-close z reconstruction did **not** faithfully reproduce the live *intrabar* z — T3b exit z +0.96 vs logged +0.58; T4b entry z **sign-flipped** (+1.24 vs logged −2.20), a leg-order/intrabar-timing artifact. So the direct price-vs-mean attribution % is **not reliable** and is not reported as fact.
+
+**Mechanism by elimination (robust):** Query 1 established dollar decoupling (PnL ≤0 while z reverted, β-sized). Query 2 shows β was stable. Therefore, had price *truly* reverted toward the entry-window level with stable β, the β-correct position **would have profited** — it did not. So the z-reversion was the **rolling mean drifting toward price (mean-shift)**, not price returning. Mean-shift is implicated by elimination; T3b's direct attribution leaned the same way (imprecise).
+
+**Lever mapping (spec §4, refuted-lever guardrail intact):** mean-shift + stable β → **post-entry/structural** levers: exit-speed on dollar-divergence (bail when dollars are red while z reverts, before `watch_timeout`), hold-time cap, historically-stability-screened universe (connects to research-paper §9.5 dynamic-coint-monitoring). **NOT** re-hedge (β stable), **NOT** entry-slope/level (refuted, exp_coint_stability_v1 Verdict 10B).
+
+*Query 2: β-drift ruled out (robust, N=2); mean-shift implicated by elimination; price-vs-mean % unreliable (z-reconstruction caveat). Feeds structural-review Branch framing — strategist to fold.*

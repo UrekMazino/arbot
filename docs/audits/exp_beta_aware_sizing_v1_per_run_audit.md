@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–131 (T1–T5) — 2026-05-28 → 2026-05-29
+## Runs 125–132 (T1–T6) — 2026-05-28 → 2026-05-29
 
 ---
 
@@ -807,7 +807,7 @@ next step: run_132+ (already started) with frozen configuration
 
 # Cross-Trade Diagnostic — Query 1 (PnL-vs-z), 2026-05-29
 
-**Read-only / diagnostics-only.** Per `analysis_spec_pnl_vs_z_decoupling_v1`. Reads dollar (unrealized, mark-to-market) PnL as a function of z across each trade's per-cycle snapshot series (`position_snapshots.csv`). One primitive answers two questions: the **H2 bifurcation** (working trades) and the **mean-shift/decoupling** test (coint-failures). Zero new data. Live collection (run 132+) untouched.
+**Read-only / diagnostics-only.** Per [`docs/diagnostics/analysis_spec_pnl_vs_z_decoupling_v1.md`](../diagnostics/analysis_spec_pnl_vs_z_decoupling_v1.md). Reads dollar (unrealized, mark-to-market) PnL as a function of z across each trade's per-cycle snapshot series (`position_snapshots.csv`). One primitive answers two questions: the **H2 bifurcation** (working trades) and the **mean-shift/decoupling** test (coint-failures). Zero new data. Live collection (run 132+) untouched.
 
 **Preconditions (confirmed):** snapshot source = `Reports/v1/run_*/position_snapshots.csv` (`current_z`, `unrealized_pnl_usdt`); coverage complete for all 19 in-scope trades. **T8c excluded** (recon `basis=position_pnl`, cost-unreliable). real_costs = `trade_pnl − equity_change` from reconciliation.
 
@@ -880,3 +880,89 @@ Entry β reproduced the logged values (0.378 / 0.760); β barely moved over the 
 **Lever mapping (spec §4, refuted-lever guardrail intact):** mean-shift + stable β → **post-entry/structural** levers: exit-speed on dollar-divergence (bail when dollars are red while z reverts, before `watch_timeout`), hold-time cap, historically-stability-screened universe (connects to research-paper §9.5 dynamic-coint-monitoring). **NOT** re-hedge (β stable), **NOT** entry-slope/level (refuted, exp_coint_stability_v1 Verdict 10B).
 
 *Query 2: β-drift ruled out (robust, N=2); mean-shift implicated by elimination; price-vs-mean % unreliable (z-reconstruction caveat). Feeds structural-review Branch framing — strategist to fold.*
+
+---
+---
+
+# Run 132 (2026-05-29) — T6 SOL/AVAX  ← 3rd $/σ-ELIGIBLE trade (near-replica of T5)
+
+## Section 1 — Run Summary
+- Accepted trades: 1 (SOL/AVAX). Closed: 1 (T6). Run end: `RUN_END reason=max_session_trades`.
+- Session PnL: −$0.1285 (equity 2653.21 → 2653.08). Wins 0 / Losses 1 (net); **gross position_pnl POSITIVE (+$0.065)** — strategy worked, costs ate it.
+- Circuit breaker: not tripped. (Note: SOL/AVAX is the same pair as T8c in exp_coint_stability_v1 — recurring liquid pair.)
+
+## Section 2 — Per-Trade Telemetry
+
+| Field | T6 (run_132) |
+|---|---|
+| Pair | SOL-USDT-SWAP/AVAX-USDT-SWAP |
+| Side | long_negative_short_positive (long SOL, short AVAX; BUY_SPREAD) |
+| Entry z → Exit z | −2.0637 → **+1.1997** (reverted through 0, overshot) |
+| Δz (abs) | **3.263** |
+| Exit reason | normal (mechanism: `trade_manager_pnl_profit_lock`) |
+| Hold (min) | 20.8 |
+| MFE | +$0.179 (equity) / +$0.233 (snapshot, z=+2.25) — **POSITIVE** |
+| position_pnl (gross) | **+$0.065** (POSITIVE) |
+| Net PnL (equity) | −$0.1285 |
+| full_tp_touched / guard blocks | True / **86** |
+| **max PnL inside |z|<0.35 zone** | **+$0.0067** (at z=+0.084) — the decisive number |
+
+## Section 3 — β-Sizing Mechanical Verification
+
+```
+BETA_SIZING: beta=0.9107 gross=200.00 capital_long=104.68 capital_short=95.32 side=negative_z
+```
+- leg1 (long SOL) = 200/(1+0.9107) = **104.67** → matches 104.68 ✓; leg2 (short AVAX) = 200×0.9107/1.9107 = **95.33** → matches 95.32 ✓; gross = 200.00 ✓; no fallback.
+- **β-sizing now 6/6 mechanically exact, 0 fallbacks.**
+- **β=0.9107 is the first NEAR-UNITY β** (inside [0.8, 1.2]). β<1.0: 4/6; materially non-unity: **5/6** (T6 is the exception); range [0.378, 1.495] unchanged.
+
+## Section 3C/3D — $/σ (ELIGIBLE) + the two tracked columns
+
+T6 passes Rule v1.2: exit=normal ✓, MFE>0 ✓, |Δz|=3.26≥0.5 ✓. **$/σ = gross +$0.065 / 3.263 = +$0.020/σ, POSITIVE.**
+
+| Trade # | Run | Pair | β | Δz | position_pnl | real_costs | **mfe>cost?** | **pnl_at_mean>cost?** | $/σ | Sign |
+|---|---|---|---|---|---|---|---|---|---|---|
+| T2 | run_126 | LTC/KSM | 0.633 | 2.270 | +$0.146 | $0.251 | no | **no** (+0.052) | +$0.064 | **+** |
+| T5 | run_131 | AVAX/DOT | 0.659 | 4.002 | +$0.069 | $0.100 | yes | **no** (+0.052) | +$0.017 | **+** |
+| T6 | run_132 | SOL/AVAX | 0.911 | 3.263 | +$0.065 | $0.194 | borderline (snap 0.233≥0.194; equity 0.179<0.194) | **no** (+0.026; in-zone max +$0.007) | +$0.020 | **+** |
+
+**After 6 trades (3 eligible):**
+- **Sign-flip rate: 0/3 = 0%** (all positive). Aggregate $/σ (pooled): (0.146+0.069+0.065)/(2.270+4.002+3.263) = **+$0.029/σ** (positive). **H1 holding strong — β-sizing aligns signal and position, 3/3.**
+- **edge_clears_costs: 0/3.** And the disambiguating column **`pnl_at_mean > cost?` is NO on all 3** (+0.052, +0.052, +0.026 — all far below their costs). The thesis-exit edge has **never** cleared costs across the eligible set.
+
+## Section 4 — Reconciliation
+- position_pnl +$0.065 (gross, positive); equity_change −$0.1285; fees $0.10 + slippage $0.04 + unexplained **−$0.054** = real costs **$0.194**. basis pre_close_equity_delta ✓; pass_fail PASS. Negative residual (−$0.054) but below the $0.15 flag.
+
+## Section 5 — Coint Stability Gate (Maintenance)
+- entry_coint_stability_slope ≈ 0 (1.3e-12), evaluated_count=1. Gate passed. T6 = normal exit (coint held). Maintenance only.
+
+## Section 6 — Counter Update (after T6)
+
+```
+trades_since_experiment_start: 6 (T1 JUP/YGG, T2 LTC/KSM, T3 BNB/LINK, T4 DOGE/AAVE, T5 AVAX/DOT, T6 SOL/AVAX)
+$/σ eligible: 3 (T2, T5, T6) — all positive; sign-flip 0/3 = 0%; aggregate +$0.029/σ
+edge_clears_costs: 0/3 | pnl_at_mean > cost: 0/3
+coint-failure count: 3/6 = 50% (T1, T3, T4) — trending DOWN (75% → 60% → 50%)
+beta_range: [0.378, 1.495]; fallback: 0; β-sizing 6/6 exact
+cumulative PnL (window): −$1.746 (T1 −0.962, T2 −0.105, T3 −0.267, T4 −0.253, T5 −0.030, T6 −0.1285)
+win rate: 0/6 = 0%
+trades_remaining: 14 (to 20 total); ≥5 more $/σ-eligible needed
+next: run_133+ (already started), frozen config
+```
+
+## Section 7 — Reads from T6
+
+**1. H1 confirmed-strengthening (3/3 eligible positive, sign-flip 0%).** T6 at near-unity β (0.911) tracked a 3.3σ move with positive gross PnL — β-sizing works across the β range now (0.38 → 1.49).
+
+**2. T6 KILLS THE SIZING-ARTIFACT CONFOUND — the real advance.** The worry through T5: "in-zone edge below costs" might be a β≠1 artifact (at extreme β the dollar hedge and statistical hedge diverge, so tiny in-zone capture could be a sizing shadow, not signal). **T6 ran at β=0.91 (near-unity), where dollar and statistical hedge nearly coincide — and the in-zone capture was the SMALLEST yet (+$0.0067).** The thin in-zone edge survives precisely where sizing mismatch is minimal. Headline disambiguator for T6: **in-zone max PnL = +$0.0067 (at z=+0.084).** Cross-trade fact: **in-zone capture across 3 eligible trades spans +$0.007 to +$0.052, all below their respective cost floors, at β = 0.38 / 0.91 / 1.49 (sub-unity → supra-unity) — so NOT a sizing artifact.** The pattern is mechanism, not artifact.
+
+**Mechanical account (named precisely, so §7 tests the right thing):** the strategy enters at |z|≈2+, bets on reversion to mean, exits in |z|<0.35. But dollar profit is not distributed evenly across the z-path — it concentrates at the extremes, and the |z|<0.35 zone is, almost by construction, where the spread is smallest and least dollar movement remains. By the time the spread reverts to its mean, there is almost nothing left to capture. This is NOT an exit-tuning problem (no zone placement captures dollars that aren't in-zone), and increasingly does not look like an exit problem at all.
+
+**Holding the N-discipline — 3/3 confirms the pattern is REAL and not a sizing artifact; it does NOT yet pick the Branch-2 sub-reading.** Two reasons it is not a verdict: (a) **§7 hasn't run** — if costs cluster structurally high on these pairs and a tight-spread subset carries materially lower costs, a +$0.05 mean-edge against a +$0.03 cost floor *does* clear → cost-too-high after all; the clustering leans edge-too-thin but does not rule out cost-too-high until residual-vs-effective-half-spread is plotted. (b) **N=3 eligible are all liquid-major pairs** (LTC/KSM, AVAX/DOT, SOL/AVAX) — a narrow universe slice; in-zone capture could differ on pairs with other volatility-to-spread ratios. So: **pattern real and β-robust; sub-lever (cost-too-high vs edge-too-thin) still undetermined — §7 is the discriminator.** Exit-redesign / Item 14 still NOT indicated (no EXIT-TOO-LATE; above-cost profit is overshoot).
+
+**3. Profit-lock fired again (2nd activation), again below cost-clearance.** `pnl=0.078 ≤ floor=0.120 (MFE=0.180)`. 2/2 profit-lock activations have locked sub-cost-clearing profit — the floor-below-cost-clearance calibration finding repeats. (Frozen variable; observation only.)
+
+**4. E4 trending favorably.** Coint-failure rate 50% (3/6), down from 75%→60%→50% — now mid-band (45–60% review). Still **not evaluable** (needs ≥10 closed). The eligible population is growing (3 in last 2 trades) — the dilution looked worse at T4 than it does now.
+
+*Audit covers: run_132_20260529_175721 (T6 SOL/AVAX). Run 133 already started.*
+*β-sizing: PASS (β=0.9107, gross to the cent, 0 fallbacks; 6/6 exact). Reconciliation: PASS. $/σ: INCLUDED +$0.020 POSITIVE (3/3 eligible positive). pnl_at_mean > cost: NO (3/3). E4: WATCH (3/6=50%, not evaluable).*

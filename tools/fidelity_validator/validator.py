@@ -88,9 +88,20 @@ class State:
         self.lock = asyncio.Lock()
 
 
+def _run_number(path_str):
+    """Extract integer run number from a 'run_<N>_<YYYYMMDD>_<HHMMSS>' path."""
+    name = Path(path_str).name
+    m = re.match(r"run_(\d+)_", name)
+    return int(m.group(1)) if m else -1
+
+
 def find_latest_run_dir():
-    runs = sorted(glob.glob(str(LOGS_DIR / "run_*")))
-    return Path(runs[-1]) if runs else None
+    """Sort by numeric run number, then by mtime as tiebreaker (highest = latest)."""
+    runs = glob.glob(str(LOGS_DIR / "run_*"))
+    if not runs:
+        return None
+    runs.sort(key=lambda p: (_run_number(p), os.path.getmtime(p)))
+    return Path(runs[-1])
 
 
 def find_latest_log(run_dir):

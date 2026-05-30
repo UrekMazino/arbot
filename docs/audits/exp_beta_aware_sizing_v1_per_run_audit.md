@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–139 (T1–T12) — 2026-05-28 → 2026-05-30
+## Runs 125–140 (T1–T13) — 2026-05-28 → 2026-05-30
 
 ---
 
@@ -1300,3 +1300,99 @@ next: run_140+, frozen config
 **Drawdown stretch (−$1.813 over 3 trades) reframed:** all 3 losses are explainable mechanistically (T10 adverse-fast normal exit; T11 coint-failure on a re-selected unstable pair; T12 coint-failure on a RISK_OFF entry with elevated costs). None contradict the fork picture from T7/T8. But it's the worst 3-trade stretch in the experiment, and cumulative PnL is now −$3.685 — worth keeping eyes on whether this is mean-reverting noise or a regime shift.
 
 *Audit covers: run_137 (T10 AVAX/ETC adverse-normal), run_138 (T11 AVAX/ETC coint_lost DECOUPLED), run_139 (T12 ARB/OP coint_lost TRACKED-borderline, RISK_OFF entry, RECON FAIL). β-sizing: 12/12 exact. E4 evaluable (6/12=50%, REVIEW band, NOT halt). 4 new structural-review items: RISK_OFF-entry vector (2 cases now), pair-re-selection cooldown (T10/T11 same pair), recon-fail on RISK_OFF entry (T12), adverse-normal exit shape (T10). H1 / Fork: unchanged. Cumulative −$3.685.*
+
+---
+---
+
+# Run 140 (2026-05-30) — T13 BTC/DOGE  ← 4th loss in a row; **highest β observed**; β-sized DECOUPLED on supra-unity β; validator's anchor trade
+
+**Headlines:** Coint-failure (cointegration_lost). **β=1.8414 — highest β in the experiment** (above T1's 1.4946; β range now extends to [0.378, 1.841]). Deep entry (z=+2.668, same depth class as T7's −2.78), but unlike T7 this was a coint-failure. **MFE never positive throughout 38-min hold** despite a 9σ total z-traversal. **Coint-failure rate now 7/13 = 53.8%** (up from 50%, into the upper part of the 45–60% review band — NOT halt, but the trajectory matters). 4 losses in a row (T10–T13, −$2.144 over 4 trades). Cumulative now −$4.016. **T13 is also the trade the §5 validator ran against — its 28-tick comparison series established the terminal finding** that retired the shadow-simulation build.
+
+## β-Sizing
+
+```
+BETA_SIZING: beta=1.8414 gross=200.00 capital_long=129.61 capital_short=70.39 side=positive_z
+```
+- leg2 (long BTC, inst_2/positive) = 200×1.8414/(1+1.8414) = 368.28/2.8414 = **129.61** ✓
+- leg1 (short DOGE, inst_1/negative) = 200/2.8414 = **70.39** ✓
+- gross 200.00 ✓; no fallback. **β-sizing 13/13 mechanically exact, 0 fallbacks.**
+- **β=1.8414 = highest β in the experiment.** Supra-unity / asymmetric leg weighting (1.84:1 BTC:DOGE notional). The DECOUPLED outcome on this β is structurally important — confirms mean-shift mechanism extends across the full observed β range (0.378 → 1.841), not concentrated in sub-unity territory.
+
+## T13 — BTC/DOGE Per-Trade Telemetry
+
+| Field | T13 |
+|---|---|
+| Side / entry_z → exit_z | long_pos_short_neg (long BTC, short DOGE) / +2.668 → +0.490 |
+| Δz (abs) | 2.18 (precondition met for Class A) |
+| **z-traversal range** | **+2.616 (MAE) → −2.994 (MFE) → exit +0.490** (~9σ total absolute) |
+| Exit / hold | **cointegration_lost** / 38.2 min (longest coint-failure hold yet) |
+| MFE / z_at_MFE | **−$0.022 (NEVER positive)** / z=**−2.994** (far overshoot) |
+| MAE | −$0.274 at z=+2.616 (near entry) |
+| **max in-zone PnL** | **−$0.086 at z=−0.265** (in-zone PnL was NEGATIVE throughout the 92 guard evaluations) |
+| gross position_pnl | −$0.197 |
+| real_costs | $0.134 (textbook; unexplained +$0.006) |
+| Net PnL | **−$0.331** |
+| Snapshot count | 38 (long hold, full data) |
+| full_tp guard blocks | **92** (highest yet — guard correctly refused to fire on always-negative in-zone PnL) |
+| entry_coint_stability slope/evaluated | None / 0 (insufficient_history — gate didn't evaluate) |
+
+**The shape:** entered at z=+2.668. z moved adversely to +2.616 first (MAE at -$0.274). Then z reverted aggressively — through 0, through the |z|<0.35 zone (in-zone first at 05:29:46, 3 min in), past zero to z=−2.994 (a 5.66σ excursion!). MFE there was still only −$0.022. Then z came back up to +0.49 where it exited via cointegration_watch_timeout. **Total absolute z-distance traveled ~9σ; net dollar PnL never positive.**
+
+## Classification A — DECOUPLED (on supra-unity β; mean-shift on the upper side of β)
+
+Apply |Δz|≥0.5 precondition: 2.18 ≥ 0.5 ✓. z reverted favorably (entered and passed through the zone). **pnl_at_mean ≤ 0:** max in-zone PnL was **−$0.086** (definitively negative throughout the zone). **A:DECOUPLED.**
+
+**Why this matters:** β=1.8414 means the dollar weight is **heavily on the long-BTC leg** (129.61 vs 70.39). The position should profit when BTC rises relative to DOGE (spread fall). Looking at actual movement (validator captured the marks): exit BTC=73569 (vs entry 73556 → BTC +0.017%), exit DOGE=0.10130 (vs entry 0.100989 → DOGE +0.31%). BOTH legs rose, but DOGE rose **18× faster in percentage terms.** Long BTC PnL = +$0.022; short DOGE PnL = -$0.217; net = -$0.20 ✓. **The "spread" in dollar terms went the wrong way — DOGE outpaced BTC dramatically — even as z statistically "reverted" toward 0.** That's mean-shift in cleanest form: z-reversion driven by the rolling mean catching up, not by price reversion to the entry level.
+
+**Clean β-sized Class A tally now: 5/7 DECOUPLED** (T3b, T4b, T9, T11, T13; T1b TRACKED thin-pair, T12 borderline TRACKED). Mean-shift signature is **now demonstrated across β range 0.378 → 1.841 — the entire observed β distribution.** Q2's β-drift-ruled-out conclusion holds; the universe's coint-failure mechanism is mean-shift independently of where β sits in the distribution.
+
+## Reconciliation
+
+- position_pnl (gross): −$0.197 | equity_change: −$0.331 | diff (real_costs): $0.134 | fees $0.10 + slippage $0.04 + unexplained +$0.006 = textbook 0.96× model. basis pre_close_equity_delta ✓ | pass_fail: **PASS.** Clean reconciliation despite the large adverse trade — confirms the loss is from the position itself, not execution overrun.
+
+## Validator Anchor — T13 served the §5 terminal finding
+
+T13 is the trade the §5 Path-1 validator ran against (subscribed mid-trade, captured 28 ticks of WS-mark vs recorded-`upl` comparison). All 28 ticks were **outside $0.01** (median |diff| ~$0.13, range $0.091–$0.176, structural ~5.9 bps offset on BTC). This established the terminal finding that retired the shadow-simulation query-3 build. Evidence preserved at `docs/audits/fidelity_validator_run_140_terminal_finding_evidence.csv`. **T13's substantive outcome (coint-failure DECOUPLED on supra-unity β) and its validator role (anchor trade for the gate's terminal finding) are independent observations on the same trade — both worth recording.**
+
+## Cumulative Update (after T13)
+
+```
+trades: 13. $/σ eligible: 5 unchanged (T13 is coint-failure, not eligible)
+sign-flip: 0/5 = 0%; aggregate $/σ +$0.044/σ; H1 still rock-solid (no new eligible data)
+pnl_at_mean > cost: 2/5 unchanged; fork unchanged
+coint-failure: 7/13 = 53.8% (T1, T3, T4, T9, T11, T12, T13) — UP from 50%, into upper part of 45–60% review band
+  trajectory: 75→60→50→37.5→44.4→50→53.8 (last 3 trades all coint-failures — directional uptick)
+β range: [0.378, 1.841] (extended from 1.495 to 1.841); 13/13 exact; 0 fallbacks
+recon FAIL count: 1 (T12 only; T13 reconciliation textbook)
+adverse-normal bucket: 1 (T10 only)
+cumulative PnL: −$4.016 (T13 −$0.331; 4 losses in a row: T10−T13 = −$2.144)
+win rate: 1/13 = 7.7%
+trades_remaining: 7 (to 20); eligible: ≥3 more needed for the ≥8 gate
+next: run_141+, frozen config
+```
+
+## E4 Read — UP but still in review band; trajectory direction matters
+
+**Coint-failure rate now 53.8% (7/13).** This is up from 50% (6/12) → still below the >60% halt line, BUT in the **upper part of the 45–60% review band**, and the last 3 trades (T11, T12, T13) were ALL coint-failures, dragging the rate up. Pre-committed E4 calibration:
+
+- **Not yet halt** (>60% is the line; we're at 53.8%).
+- Still within the historical band [36.8, 55.6] — barely (53.8 < 55.6).
+- **Trajectory has reversed direction:** 37.5% → 44.4% → 50% → 53.8% over last 4 closed trades. The strongly-favorable framing from after T9 (37.5%) has fully reversed.
+- **For halt at T14:** need 9/14 = 64.3% → next trade must be coint-failure AND we'd be at 8/14 = 57.1% (still below 60%); only at T15 with 9/15 = 60% does it hit the line; T15 coint-failure plus prior pattern would push to >60%.
+- **Pre-committed action:** continue to flag for structural-review; no halt yet. But the trajectory is the structural review's main question now, not whether 50–55% is "noise."
+
+**Honest read:** the E4 calibration's halt line is well-placed — it would have falsely halted at 50% on prior turn's wobble. Now at 53.8% with a 3-coint streak, the band's purpose is being tested: is this still "elevated-but-plausibly-baseline" or is it the start of a real regime shift? Pre-commit is unambiguous (no halt), but the structural review will need to weigh whether the universe entered a higher-coint-failure regime around T9 onward.
+
+## Strategic Read (held at N — directional, not verdict)
+
+**Fork unchanged.** T13 is coint-failure, doesn't enter the $/σ population. H1 and pnl_at_mean>cost both unmoved from the T7/T8 state.
+
+**Mean-shift mechanism is now broad-spectrum.** 5/7 clean β-sized coint-failures DECOUPLED, **across β from 0.378 to 1.841** (the full observed range). β-drift is ruled out at every β level we've seen. Refuted-lever guardrail intact: T13 had insufficient_history on the entry slope gate (didn't evaluate) — not a slope-predicted failure.
+
+**RISK_OFF-entry vector unchanged** (T13 was RANGE, not RISK_OFF). Still 2/2 RISK_OFF entries → coint-failure (T9, T12). T13 broadens the coint-failure landscape but doesn't add to the RISK_OFF vector specifically.
+
+**Drawdown 4 in a row, cumulative −$4.016, 1 win in 13.** Honestly: this experiment continues to lean toward the §5 negative-result reading — sizing works (H1 holds), edge has cleared costs on 1 of 5 eligible (T7, the deepest entry), and the universe's coint-fragility appears to be trending up rather than down. The RISK_OFF lever is the most credible thing that could change the picture, but it's still n=2 and there's no live test of it. The fork is still genuinely unresolved on its own data — but the *background* keeps pointing more clearly at "viable subset narrow or absent."
+
+**Query-3 redirect implication:** T13 reinforces why redirecting the fork resolution to real eligible trades was right. The validator's terminal finding came from THIS trade, and at the same time T13 produced a non-eligible coint-failure that doesn't move the fork data. The structural review will read the fork off real eligible trades (currently 5; 3 more to the ≥8 gate); with coint-failures now running 3-in-a-row, the eligible accumulation rate has slowed sharply. The structural review may arrive at the 20-trade gate with fewer than 8 eligibles — exactly the case the spec's negative-result-bar wording was designed to honor.
+
+*Audit covers: run_140_20260530_132503 (T13 BTC/DOGE coint_lost DECOUPLED β=1.8414; also: validator anchor trade for §5 terminal finding). β-sizing: 13/13 exact. E4: 7/13=53.8%, UP into upper review band but NOT halt (trajectory reversed favorable-to-elevated over last 4 trades). Mean-shift confirmed across full β range [0.378, 1.841]. RECON: textbook PASS. H1 / Fork: unchanged (T13 not eligible). Cumulative −$4.016, win rate 1/13. Query-3 redirect (commit ca1999a) recorded.*

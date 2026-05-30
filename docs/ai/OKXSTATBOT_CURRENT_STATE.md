@@ -24,9 +24,10 @@ Current status:
 - Cointegration stability entry filter active (Patch 7 + 7.1). Window=5 evaluations, slope_max=0.020, sample interval=60s.
 - hedge_ratio now logged in entry_gate_component_scores (Day 1 telemetry for exp_beta_aware_sizing_v1).
 
-Experiment state (exp_beta_aware_sizing_v1):
-- experiment_group: exp_beta_aware_sizing_v1 (reset 2026-05-28 after exp_coint_stability_v1 structural review + counterfactual study)
-- trades_since_experiment_start: 15 (+T15 SOL/LINK r142) — **E4 HALT FIRED; sizing collection paused pending structural review**
+Experiment state (exp_beta_aware_sizing_v1 — **CLOSED 2026-05-31 via structural review Branch A; B1 authorized as next work**):
+- experiment_group: exp_beta_aware_sizing_v1 (reset 2026-05-28; **CLOSED 2026-05-31** after E4 halt at T15 + structural review (`docs/audits/structural_review_exp_beta_aware_sizing_v1.md`) Branch A acceptance)
+- **STRUCTURAL REVIEW VERDICT (2026-05-31): Branch A accepted.** Finding: *sizing solved (H1 = CLEAN SUCCESS, settled), no robust demonstration of capturable edge above costs at $200 notional on this universe at the current cost-model precision (every clearance within ±$0.06 noise band including the win; 0/6 ROBUST-PASS; 2/6 ROBUST-FAIL even under generous), dominant loss mode entry-unpredictable mean-shift (β-independent, 6/9 clean coint-failures DECOUPLED), universe coint-fragile (E4 halt fired mechanically per pre-commit).* The cost diagnostic was AMBIGUOUS-at-N on the mechanism (edge-thin vs cost-high not isolated at N=6 / ±$0.06); the convergent stack carried the bottom-line antecedent for §5. **Decisions locked:** B1 (no-notional observation mode) authorized as next active work; B2/C trading paths declined; next strategic direction deferred until B1 data exists.
+- trades_since_experiment_start: 15 (final; +T15 SOL/LINK r142 — E4 HALT FIRED; structural review CLOSED experiment)
 - $/σ sign-flip rate: 0/5 = 0% (eligible = T2, T5, T6, T7, T8; all positive. T1, T3, T4, T9, T11, T12, T13, T14, T15 excluded as coint-failures; T10 excluded as adverse-normal MFE<0) — **H1 = CLEAN SUCCESS, 5/5 positive, 0 sign flips, settled finding**
 - aggregate $/σ (pooled): +$0.044/σ unchanged (H1 rock-solid 5/5)
 - coint-failure count (window): **9/15 = 60.0%** (T1, T3, T4, T9, T11, T12, T13, T14, T15) — trajectory 75→60→50→37.5→44.4→50→53.8→57.1→**60.0** (last 5 trades all coint-failures; **AT E4 HALT LINE**)
@@ -41,8 +42,8 @@ Experiment state (exp_beta_aware_sizing_v1):
 - recon FAIL (β-sizing window): 1 (T12 ARB/OP, unexplained −$0.196, RISK_OFF entry).
 - pair-re-selection: T11 entered AVAX/ETC ~35 min after T10 lost on same pair (opposite side, also lost). New structural-review deferred item (recently-failed-pair cooldown).
 - adverse-normal exits: 1 (T10) — neither $/σ-eligible nor coint-failure. New shape; mechanism in coarse "normal" exit label may be a stop-tier; flag if recurs.
-- action_threshold: 20 closed trades before structural review — **SUPERSEDED by E4 HALT at T15** (experiment-level kill-criterion fires regardless of 20-trade gate)
-- trades_remaining: 5 (to 20 total) — but **HALT supersedes**; sizing collection paused; structural review is now the next action
+- action_threshold: 20 closed trades before structural review — **SUPERSEDED by E4 HALT at T15**; structural review COMPLETED 2026-05-31, Branch A accepted, experiment CLOSED
+- trades_remaining: N/A (experiment closed at T15 via Branch A); no further trades under exp_beta_aware_sizing_v1
 - primary_diagnostic: $/σ sign stability across trades (should be positive for all normal-exit trades), gross conserved at $200 per trade
 - $/σ INCLUSION RULE v1.2 (tightened, T3 run 129): compute $/σ only if exit_reason ∈ {normal, trailing_stop, profit_lock} AND MFE>0 AND |Δz|≥0.5. Coint-failure exits (cointegration_lost, cointegration_watch_timeout) go to the coint-failure tracker, NOT the $/σ table — regardless of z reversion. Mechanical, no per-trade judgment.
 - success_criteria: $/σ sign-flip rate ≤ 10% over 20 normal-exit trades; cumulative PnL improvement vs equal-notional baseline
@@ -72,10 +73,9 @@ exp_coint_stability_v1 final record (for reference):
 - Cumulative PnL (T1-T14): -$4.240. Win rate (T5-T14): 1/10 = 10%.
 
 Current goal:
-- Run exp_beta_aware_sizing_v1 with beta-aware sizing live.
-- Verify hedge_ratio logged in entry_gate_component_scores on Day 1 trade.
-- Verify BETA_SIZING log line shows expected leg1/leg2 split on each entry.
-- Collect minimum 20 closed trades before structural review.
+- **exp_beta_aware_sizing_v1 CLOSED 2026-05-31** (Branch A accepted, structural review verdict; H1 settled clean; cost-clearance bottom-line antecedent met; experiment retired).
+- **B1 — No-notional observation mode (AUTHORIZED, next active work).** Scope: read-only subscriber on the existing monitoring loop that records the post-entry-candidate coint-failure rate (without trading, without computing PnL — marking-fidelity wall does not apply because no PnL is being computed, only whether the cointegration test fails post-entry-candidate). Tests: (a) does eligibility return after halt (TEMPORAL vs STRUCTURAL fragility discriminator per template v1.5 §4 pre-load); (b) does coint-failure rate condition on entry regime (RISK_OFF-entry vector hypothesis at N without trading). Pattern precedent: `tools/fidelity_validator/` (read-only sidecar). Implementation NOT yet started — separate scoped engineering task with design + tests + deploy.
+- Next strategic direction (different universe / different hold horizon / different strategy class) DEFERRED until B1 data exists.
 
 Do not do yet:
 - Do not scale notional.

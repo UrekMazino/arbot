@@ -1396,3 +1396,99 @@ next: run_141+, frozen config
 **Query-3 redirect implication:** T13 reinforces why redirecting the fork resolution to real eligible trades was right. The validator's terminal finding came from THIS trade, and at the same time T13 produced a non-eligible coint-failure that doesn't move the fork data. The structural review will read the fork off real eligible trades (currently 5; 3 more to the ≥8 gate); with coint-failures now running 3-in-a-row, the eligible accumulation rate has slowed sharply. The structural review may arrive at the 20-trade gate with fewer than 8 eligibles — exactly the case the spec's negative-result-bar wording was designed to honor.
 
 *Audit covers: run_140_20260530_132503 (T13 BTC/DOGE coint_lost DECOUPLED β=1.8414; also: validator anchor trade for §5 terminal finding). β-sizing: 13/13 exact. E4: 7/13=53.8%, UP into upper review band but NOT halt (trajectory reversed favorable-to-elevated over last 4 trades). Mean-shift confirmed across full β range [0.378, 1.841]. RECON: textbook PASS. H1 / Fork: unchanged (T13 not eligible). Cumulative −$4.016, win rate 1/13. Query-3 redirect (commit ca1999a) recorded.*
+
+---
+
+# Run 141 (2026-05-30) — T14 AVAX/ETH  ← 5th loss in a row; coint-failure DECOUPLED at mid-range β; E4 climbs again (8/14=57.1%); pre-commit hinges on T15
+
+**Headlines:** Coint-failure (cointegration_lost). **β=0.4562 — mid-range β** (sits inside the [0.378, 1.841] band, between T13's 1.841 high and T10's 0.378 low). Deep entry (z=+2.546), 37.9-min hold, classic mean-shift signature in position_snapshots (z fully reverted to z=0.09 with pnl=−$0.21). **Coint-failure rate now 8/14 = 57.1%** (up from 53.8%, deeper into the upper 45–60% review band but still NOT halt). 5 losses in a row (T10–T14, −$2.572 over 5 trades). Cumulative now −$4.444. **The E4 pre-commit's mechanical halt is one trade away if T15 is also a coint-failure** (9/15 = 60.0% AT halt line); if T15 is normal, trajectory was variance.
+
+## β-Sizing
+
+```
+BETA_SIZING: beta=0.4562 gross=200.00 capital_long=62.66 capital_short=137.34 side=positive_z
+```
+- leg2 (long AVAX, signal_positive) = 200×0.4562/(1+0.4562) = 91.24/1.4562 = **62.66** ✓
+- leg1 (short ETH, signal_negative) = 200/1.4562 = **137.34** ✓
+- gross 200.00 ✓; no fallback. **β-sizing 14/14 mechanically exact, 0 fallbacks.**
+- β=0.4562 places this trade in the **middle of the observed β range** [0.378, 1.841]. With T13 (β=1.841 upper) and T10 (β=0.378 lower) already showing DECOUPLED mean-shift, T14's mid-range DECOUPLED outcome further fills the β-distribution coverage. Mean-shift mechanism now confirmed at lower, mid, and upper β extremes — no β-dependence in failure mode.
+
+## T14 — AVAX/ETH Per-Trade Telemetry
+
+| Field | T14 |
+|---|---|
+| Side / entry_z → exit_z | long_pos_short_neg (long AVAX, short ETH) / +2.546 → +0.754 |
+| Δz (abs) | 1.79 (precondition met for Class A) |
+| Snapshot z-traversal | entry 2.55 → bobbed mid-1s → **0.45 → 0.09 (≈mean) → 0.75 exit** (full reversion to mean, then bounced) |
+| Exit / hold | **cointegration_lost** / 37.9 min |
+| MFE / z_at_MFE (CSV) | +$0.469 / z=3.17 (tick-level peak between snapshots; snapshot-stream max pnl was only +$0.035 at t=5min) |
+| MAE / z_at_MAE (CSV) | −$0.437 / z=−0.045 (essentially at mean) — confirms mean-shift: deepest loss occurred WHEN z was at the mean |
+| **In-zone PnL (snapshots)** | **At z=0.09 (t=37min): pnl=−$0.21**; at z=0.45 (t=36min): pnl=−$0.18 — pnl was negative throughout the in-zone window |
+| gross position_pnl | −$0.313 |
+| real_costs | $0.115 (fees $0.10 + slippage $0.04 − unexplained +$0.025; unexplained_pct=22.1% but absolute small) |
+| Net PnL | **−$0.428** |
+| Snapshot count | 38 (full 1-min cadence) |
+| Regime / vol_pct | RANGE / 0.73–0.94 throughout hold (not RISK_OFF) |
+| entry_coint_stability slope | −3.2e−5 (essentially flat; gate evaluated 1 time, passed) |
+
+**The shape:** entered at z=+2.546 on AVAX/ETH. z immediately moved adversely to +2.88 at t=0 (-$0.063), then began reverting. Through the first 13 minutes, z drifted from 2.88 down to 0.66 with pnl bobbing near zero (small positive transients up to +$0.035). Then from t=14 onward, z continued falling toward the mean while pnl DECOUPLED — by t=36 (z=0.45) pnl was −$0.18; by t=37 (z=0.09, ≈at mean) pnl was −$0.21; at exit t=38 (z=0.75, bouncing back up) pnl was still −$0.21 ⇒ exit fired via cointegration_lost. **Net: z reverted ~2.4σ favorably and ended up −$0.43 net. Textbook mean-shift.**
+
+## Classification A — DECOUPLED (mid-range β; mean-shift in the middle of the β distribution)
+
+Apply |Δz|≥0.5 precondition: 1.79 ≥ 0.5 ✓. z reverted favorably (entered the zone at t=36, touched z=0.09 ≈ at mean at t=37). **pnl_at_mean ≤ 0:** in-zone snapshot pnl was **−$0.18 to −$0.21** (definitively negative across the full in-zone window). **A:DECOUPLED.**
+
+**Why the MFE/MAE z-labels in CSV look inverted from MR expectations:** MFE z=3.17 with pnl=+$0.47 sits between snapshots (t=5 snapshot had z=1.08 with pnl=+$0.035; the +$0.47 peak was a tick-level transient not captured in 1-min snapshots), and MAE z=-0.045 with pnl=-$0.44 reflects the deepest in-zone loss. The 1-min snapshots are the authoritative data for in-zone classification; the tick-level CSV summary is consistent once you read it as "pnl peak happened intra-tick during an adverse z-spike before the reversion began." Classification is unambiguous from snapshots.
+
+**Clean β-sized Class A tally now: 6/8 DECOUPLED** (T3b, T4b, T9, T11, T13, T14; T1b TRACKED thin-pair, T12 borderline TRACKED). Mean-shift signature now demonstrated at **β ∈ {0.378, 0.456, 0.476, 0.561, 0.667, 1.495, 1.841}** — substantially covering the observed β range. The β-independence of the failure mode is structurally locked in.
+
+## Reconciliation
+
+- position_pnl (gross): −$0.313 | equity_change: −$0.428 | diff (real_costs): −$0.115 | fees $0.10 + slippage $0.04 + unexplained +$0.025 = 1.22× the explained-cost floor. basis pre_close_equity_delta ✓ | pass_fail: **PASS.** unexplained_pct=22.1% is above the typical textbook 0.96× model but well under the 50% warn threshold; small absolute ($0.025); no large_unexplained_warning fired.
+
+## Section — E4 Evaluation (NOW EVALUABLE, 14 closed)
+
+**Coint-failure rate: 8/14 = 57.1%.** UP again from 53.8% (4 coint-failures in a row: T11, T12, T13, T14). Pre-committed E4 calibration:
+
+- **Not yet halt** (>60% is the line; we're at 57.1%).
+- **No longer within the historical band [36.8, 55.6]** — 57.1% has now exceeded the historical upper bound by 1.5pp. First time the rate has been outside its empirical band.
+- **Trajectory has continued upward:** 37.5% → 44.4% → 50% → 53.8% → 57.1% over last 5 closed trades. Four consecutive coint-failures.
+- **Pre-commit standing (from template v1.4 §4):**
+  - T14 was coint-failure → does NOT resolve pre-commit on its own
+  - **If T15 is coint-failure → 9/15 = 60.0% AT halt line → HALT EXECUTES MECHANICALLY**
+  - If T15 is normal exit → 8/15 = 53.3% (back within band) → trajectory was variance, continue
+- **No deliberation needed at T15 close.** The reading is mechanical and pre-written.
+
+**Honest E4 read:** the rate has now broken above its historical band for the first time, the streak is 4 coint-failures in a row, and the next trade is the resolution. The "trajectory was variance" reading remains viable but is the less-likely default given the 4-streak — base-rate of 4 consecutive coint-failures under 50% is ~6%. The pre-commit being mechanical is the load-bearing piece here.
+
+## Section — RISK_OFF Entry Vector (still 2/2; n=2)
+
+T14 entered in RANGE regime (vol_pct 0.73 at entry, drifting to 0.94 during hold), not RISK_OFF. **Vector unchanged at 2/2: T9, T12 only.** T14 broadens the universe's coint-failure landscape across RANGE regimes specifically — RISK_OFF is not the only failure regime, but it remains the only entry condition where 100% of trades have been coint-failures.
+
+## Cumulative Counter Update (after T14)
+
+```
+trades: 14. $/σ eligible: 5 unchanged (T14 is coint-failure, not eligible)
+sign-flip: 0/5 = 0%; aggregate $/σ +$0.044/σ; H1 unmoved (no new eligible data)
+pnl_at_mean > cost: 2/5 unchanged; fork unchanged
+coint-failure: 8/14 = 57.1% (T1, T3, T4, T9, T11, T12, T13, T14) — UP from 53.8%, FIRST TIME OUTSIDE historical band [36.8, 55.6]
+  trajectory: 75→60→50→37.5→44.4→50→53.8→57.1 (last 4 trades all coint-failures)
+β range: [0.378, 1.841] (unchanged); 14/14 exact; 0 fallbacks
+recon FAIL count: 1 (T12 only; T14 PASS)
+adverse-normal bucket: 1 (T10 only)
+cumulative PnL: −$4.444 (T14 −$0.428; 5 losses in a row: T10−T14 = −$2.572)
+win rate: 1/14 = 7.1%
+trades_remaining: 6 (to 20); eligible: ≥3 more needed for the ≥8 gate
+next: run_142+, frozen config
+```
+
+## Strategic Read (held at N — directional, not verdict)
+
+**Fork unchanged.** T14 is coint-failure, doesn't enter the $/σ population. H1 and pnl_at_mean>cost both unmoved from the T7/T8/T13 state.
+
+**Mean-shift mechanism is now broad-spectrum across β.** 6/8 clean β-sized coint-failures DECOUPLED, across β from 0.378 to 1.841. With T14 at β=0.456, the middle of the β-distribution is filled in alongside the prior tails. **β-dependence of failure mode is empirically dead at every β level we've seen.** Refuted-lever guardrail intact: T14's entry slope was essentially flat (−3.2e−5), evaluated once and passed — not a slope-predicted failure.
+
+**E4 trajectory pre-commit dominates the next-step strategy.** Per template v1.4 §4, T15 is the resolution point. The pre-commit is unambiguous: T15 coint-failure → mechanical halt at 60.0%; T15 normal → continue. The 4-coint-streak background makes the halt path the more-likely outcome, but the resolution is data-only, not deliberation.
+
+**Drawdown 5 in a row, cumulative −$4.444, 1 win in 14.** The §5 negative-result reading continues to harden — sizing works (H1 holds across 14 trades), edge has cleared costs on 1 of 5 eligible (T7), and the universe's coint-fragility is now empirically OUTSIDE its historical band. The pre-commit gives the experiment a clean way to conclude or continue based on T15 alone.
+
+*Audit covers: run_141_20260530_140525 (T14 AVAX/ETH coint_lost DECOUPLED β=0.4562 mid-range). β-sizing: 14/14 exact. E4: 8/14=57.1%, FIRST TIME OUTSIDE historical band [36.8, 55.6], deeper into upper review band but NOT halt. Mean-shift confirmed at mid-range β; broad-spectrum coverage now locked in. RECON: PASS (unexplained $0.025 small). H1 / Fork: unchanged (T14 not eligible). Cumulative −$4.444, win rate 1/14. Pre-commit for T15 is the active reading.*

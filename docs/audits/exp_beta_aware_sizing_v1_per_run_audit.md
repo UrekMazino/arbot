@@ -1492,3 +1492,139 @@ next: run_142+, frozen config
 **Drawdown 5 in a row, cumulative −$4.444, 1 win in 14.** The §5 negative-result reading continues to harden — sizing works (H1 holds across 14 trades), edge has cleared costs on 1 of 5 eligible (T7), and the universe's coint-fragility is now empirically OUTSIDE its historical band. The pre-commit gives the experiment a clean way to conclude or continue based on T15 alone.
 
 *Audit covers: run_141_20260530_140525 (T14 AVAX/ETH coint_lost DECOUPLED β=0.4562 mid-range). β-sizing: 14/14 exact. E4: 8/14=57.1%, FIRST TIME OUTSIDE historical band [36.8, 55.6], deeper into upper review band but NOT halt. Mean-shift confirmed at mid-range β; broad-spectrum coverage now locked in. RECON: PASS (unexplained $0.025 small). H1 / Fork: unchanged (T14 not eligible). Cumulative −$4.444, win rate 1/14. Pre-commit for T15 is the active reading.*
+
+---
+
+# Run 142 (2026-05-30) — T15 SOL/LINK  ← **E4 HALT FIRES — pre-commit executes mechanically (9/15 = 60.0% AT halt line, 5 consecutive coint-failures T11–T15)**; T15 classified TRACKED-THEN-BROKE (not DECOUPLED), edge briefly cleared at mean (+$0.102) but below cost ($0.14)
+
+**Headlines:** Coint-failure (cointegration_watch_timeout). **β=0.6499 — mid-range** (joins T14's 0.4562 in the middle of the [0.378, 1.841] distribution). 20.3-min hold (shorter than T13's 38, T14's 38). Entry z=+2.184, exit z=+0.599, Δz=−1.585. **Critically: T15 is TRACKED-THEN-BROKE, NOT DECOUPLED** — snapshots show z reverted all the way to z=0.09 at t=5 min with pnl=**+$0.102** (positive, edge briefly tracked the mean), then z bounced back to 2.03 (t=11) and pnl went negative, then drifted to exit at z=0.60 with pnl=−$0.016. **Coint-failure rate now 9/15 = 60.0% — AT the E4 halt line.** **The pre-commit (template v1.4 §4) fires mechanically: HALT EXECUTES.** 6 losses in a row T10–T15 = −$2.780. Cumulative −$4.652.
+
+## β-Sizing
+
+```
+BETA_SIZING: beta=0.6499 gross=200.00 capital_long=78.78 capital_short=121.22 side=positive_z
+```
+- leg2 (long LINK, signal_positive) = 200×0.6499/(1+0.6499) = 129.98/1.6499 = **$78.78** ✓
+- leg1 (short SOL, signal_negative) = 200/1.6499 = **$121.22** ✓
+- gross 200.00 ✓; no fallback. **β-sizing 15/15 mechanically exact, 0 fallbacks.**
+- β=0.6499 = mid-range; with T14's 0.4562 also mid-range, the recent coint-failure cluster spans β ∈ {0.456, 0.476, 0.650, 1.841} across T11–T14–T15 (T12 0.655, T13 1.841, T14 0.456, T15 0.650).
+
+## T15 — SOL/LINK Per-Trade Telemetry
+
+| Field | T15 |
+|---|---|
+| Side / entry_z → exit_z | long_pos_short_neg (long LINK, short SOL) / +2.184 → +0.599 |
+| Δz (abs) | 1.585 (precondition met for Class A) |
+| **Snapshot z-traversal** | entry 2.18 → reverted to **0.09 (≈mean) at t=5min with pnl=+$0.102 POSITIVE** → re-expanded to z=2.03 at t=11min with pnl=−$0.091 → drifted to z=0.21 at t=17min with pnl=$0.000 → exit z=0.60 |
+| Exit / hold | **cointegration_watch_timeout** / 20.3 min |
+| MFE / z_at_MFE (CSV) | +$0.010 / z=2.20 (CSV tick-level peak from sub-snapshot data; snapshot-stream peak was +$0.102 at z=0.09, well above CSV — see anomaly note below) |
+| MAE / z_at_MAE (CSV) | −$0.214 / z=−0.10 (past mean during a reversion overshoot before snapshot t=11's bounce; the deepest pnl loss occurred at the mean-overshoot trough) |
+| **In-zone PnL (snapshots)** | **At z=0.09 (t=5): pnl=+$0.102 POSITIVE** — peak in-zone snapshot; below cost-clearance threshold (~$0.14) but positive |
+| gross position_pnl | −$0.110 |
+| real_costs | $0.098 (fees $0.10 + slippage $0.04 − unexplained +$0.042; unexplained_pct=43.0%, highest in window but under 50% warn threshold) |
+| Net PnL | **−$0.208** |
+| Snapshot count | 20 (full 1-min cadence; trade exit at t=20) |
+| Regime | RANGE throughout (not RISK_OFF) |
+| entry_coint_stability slope | −4.9e−7 (essentially flat; evaluated 1 time, passed) |
+
+**The shape (different from prior coint-failures):** T15's spread DID briefly converge to the mean (z=0.09 at t=5) with a small positive pnl (+$0.102). Then z bounced back up toward entry (z=2.03 at t=11), pnl went negative (−$0.091), and the coint-watch-timeout fired as the relationship failed to stably re-converge. This is **NOT the mean-shift pattern** from T13/T14 — the rolling mean didn't drift away; the spread oscillated. The cointegration_watch_timeout (rather than cointegration_lost) reflects this: relationship is weak/oscillating, not broken.
+
+## Classification A — TRACKED-THEN-BROKE (NOT DECOUPLED; first TRACKED-THEN-BROKE since T12)
+
+Apply |Δz|≥0.5 precondition: 1.585 ≥ 0.5 ✓. z reverted favorably (touched z=0.09 at the mean). **pnl_at_mean > 0:** snapshot at t=5 (z=0.09) shows pnl=**+$0.102** (positive). **A:TRACKED-THEN-BROKE.** 
+
+Important wrinkle: **edge at mean was POSITIVE but BELOW COST** ($0.102 < $0.14 textbook). So T15 demonstrates the in-zone edge of this pair on this entry, but the edge was insufficient to clear costs at the moment z touched the mean. Then the position couldn't hold and broke before any exit signal could fire (full_tp guard floor is $0.12 effective — $0.018 above the $0.102 in-zone peak; profit-lock floor is $0.170 — $0.068 above). The position was **structurally trapped between in-zone peak ($0.102) and exit-floor ($0.12)** — a familiar pattern from T7/T9 of the prior experiment, now appearing in this one as well.
+
+**Clean β-sized Class A tally now: 6/9 DECOUPLED, 3/9 TRACKED-THEN-BROKE** (DECOUPLED: T3b, T4b, T9, T11, T13, T14; TRACKED-THEN-BROKE: T1b thin-pair, T12 borderline, T15 below-cost-floor). **Mean-shift remains the dominant coint-failure mode (6/9 = 67%)** but T15 adds a new sub-pattern to TRACKED-THEN-BROKE: edge-tracked-mean-but-below-cost-then-broke. T15 also connects to the §5 / Item 14 negative-result reading — even when β-sizing was correct AND the spread tracked the mean, the in-zone peak was insufficient to clear costs.
+
+## CSV MFE / snapshot anomaly note
+
+CSV reports MFE=+$0.010 at z=2.20 (near entry); snapshot at t=5 shows unrealized_pnl=+$0.102 at z=0.09. CSV is 10× smaller than snapshot peak. Direction is inverted from typical (usually CSV tick-level MFE is *higher* than 1-min snapshot peak). Possible causes: (a) CSV `max_favorable_pnl_usdt` may track a different quantity than snapshot `unrealized_pnl_usdt` (e.g., position_pnl excluding funding/upl difference); (b) accounting layer where MFE is taken from price-level only. The 1-min snapshot stream is authoritative for in-zone classification per prior audit convention; T15 classification rests on snapshot evidence (pnl_at_mean=+$0.102 from t=5 snapshot). Flag for follow-up if this anomaly is structural; not blocking the audit.
+
+## Reconciliation
+
+- position_pnl (gross): −$0.110 | equity_change: −$0.208 | diff (real_costs): −$0.098 | fees $0.10 + slippage $0.04 + unexplained +$0.042 = 1.43× textbook 0.96× model. basis pre_close_equity_delta ✓ | pass_fail: **PASS.** unexplained_pct=43.0% (highest single-trade % in the window, but under 50% warn threshold; absolute small $0.042). No large_unexplained_warning fired.
+
+## E4 HALT — MECHANICAL EXECUTION (per template v1.4 §4 pre-commit)
+
+**Coint-failure rate: 9/15 = 60.0%. AT THE HALT LINE.** Per the pre-commit verbatim:
+
+> "If T14 AND T15 are BOTH coint-failures → 9/15 = 60.0%, AT the halt line… Halt executes mechanically without re-deliberation. No 'but wait, the rate is exactly at the line not above' judgment — the trajectory + level + run-depth together is the signal the calibration was designed to catch."
+
+**Pre-commit conditions met:**
+- T14 was coint-failure (cointegration_lost) ✓
+- T15 is coint-failure (cointegration_watch_timeout) ✓
+- 9/15 = 60.0% — AT halt line ✓
+- 5-deep coint-failure run T11–T15 (probability ~3% at 50% base rate) ✓
+- Trajectory: 37.5 → 44.4 → 50 → 53.8 → 57.1 → **60.0** ✓ (monotonically rising over 6 closed trades)
+
+**MECHANICAL ACTION (no deliberation):** halt the sizing test. **The experiment-level kill-criterion E4 has fired as designed.** Per the E4 row in §4: address universe quality / exit-speed first; coint-failure has no tunable entry-knob (slope refuted, level refuted, mean-shift β-independent).
+
+**The halt does NOT mean the experiment is closed** — it means the *sizing test* is paused pending the structural review. H1 (sizing alignment) was a clear success (5/5 eligible positive, no sign flips, β-sizing 15/15 exact). H2 (cost-clearance) and the universe-fragility question are what the halt addresses, not the sizing question.
+
+## E4 trajectory — full trace
+
+```
+   T6 (E4 evaluable): 5/6 = 83.3%
+   T7-T13 window:    sliding range 37.5 → 53.8
+   T6-T9:  3/4 → 4/6 → 4/7 → 4/8 (= 50%)
+   T7-T11: 4/9 → 5/10 → 5/11 (= 45.5%)
+   T8-T12: 6/11 → 7/12 (= 58.3%)
+   T9-T13: 7/13 = 53.8%
+   T10-T14: 8/14 = 57.1%  ← first time outside historical band [36.8, 55.6]
+   T11-T15: 9/15 = 60.0%  ← AT HALT LINE, mechanical halt fires
+```
+
+5 consecutive coint-failures: **T11 (DECOUPLED) → T12 (TRACKED-THEN-BROKE) → T13 (DECOUPLED) → T14 (DECOUPLED) → T15 (TRACKED-THEN-BROKE).**
+
+## Halt-interpretation pre-load (v1.5 §4) — now ACTIVE; standing read leans Reading 2 (structural)
+
+Per the pre-load committed in v1.5 §4, the question to bring to the structural review is: **TEMPORAL fragility (regime change since T9, eligible-return rate post-halt would recover toward ≈63%) vs STRUCTURAL fragility (universe was always this coint-fragile; T2–T8 cluster was the lucky window, eligible-return rate post-halt would stay ≤ 1 in 6+ trades).**
+
+**Standing read at T15 (directional prior, not verdict — to be tested by post-halt evidence):**
+- Eligibles all clustered T2–T8 (5 in 8 trades = 63%)
+- T9–T15: **0 eligibles in 7 trades** (0%)
+- T15 itself extends the non-eligible stretch and adds to the coint-failure count — does NOT discriminate between Reading 1 and Reading 2 on its own (a coint-failure is consistent with both)
+- The standing prior continues to lean Reading 2 (the eligible stall is too clean to be transient variance; if Reading 1 were correct you'd expect at least one eligible to break through during T9–T15)
+- T15 is also informative in a softer way: the position DID briefly track the mean with positive pnl (+$0.102), suggesting the universe's relationships aren't *gone*, just *too weak to clear costs at $200 notional*. This nudges toward a particular flavor of Reading 2: "universe + notional + cost-stack combination is structurally insufficient," NOT "universe is broken entirely." That sub-distinction connects directly to the §5 negative-result framing.
+
+**Discriminator awaits post-halt evidence** — the read is not yet verdict.
+
+## Cumulative Counter Update (after T15)
+
+```
+trades: 15. $/σ eligible: 5 unchanged (T15 is coint-failure, not eligible)
+sign-flip: 0/5 = 0%; aggregate $/σ +$0.044/σ; H1 still rock-solid (no new eligible data; H1 is a CLEAN SUCCESS on this experiment)
+pnl_at_mean > cost: 2/5 unchanged (T7, T8)
+coint-failure: 9/15 = 60.0% (T1, T3, T4, T9, T11, T12, T13, T14, T15) — **AT E4 HALT LINE; HALT FIRED**
+  trajectory: 75→60→50→37.5→44.4→50→53.8→57.1→**60.0** (last 5 trades all coint-failures)
+clean Class A: 6 DECOUPLED + 3 TRACKED-THEN-BROKE (T15 newest TRACKED-THEN-BROKE; mean-shift = 6/9 = 67% of clean coint-failures)
+β range: [0.378, 1.841] (unchanged); 15/15 exact; 0 fallbacks
+recon FAIL count: 1 (T12 only; T13/T14/T15 PASS — T15 unexplained_pct 43% high but absolute small)
+adverse-normal bucket: 1 (T10 only)
+cumulative PnL: −$4.652 (T15 −$0.208; 6 LOSSES IN A ROW T10−T15 = −$2.780)
+win rate: 1/15 = 6.7%
+trades_remaining_to_20: 5 — but EXPERIMENT-LEVEL HALT supersedes; sizing collection paused pending structural review
+```
+
+## Strategic Read — HALT CONDITIONS MET, STRUCTURAL REVIEW SCOPE LOADED
+
+**Pre-committed halt fired mechanically.** No deliberation, no judgment call, no "but the rate is exactly at the line." The pre-commit was written cold at T13 / template v1.4 with the explicit purpose of removing the in-the-moment temptation; the temptation didn't get a chance to operate because the rule was clearer than the moment. The discipline worked.
+
+**What the structural review must hold (from v1.5 §4 + the prior commitments):**
+
+1. **H1 (sizing) is a CLEAN SUCCESS.** 5/5 eligible positive, 0 sign flips, aggregate +$0.044/σ, β-sizing 15/15 mechanically exact across the full observed β range. The sizing question is *answered*, not paused. This must be carried into the review as a settled finding, not re-litigated.
+
+2. **The halt is about UNIVERSE FRAGILITY, not sizing.** H1's success is preserved; what halt addresses is whether the universe holds β-fit relationships through a 60-min hold often enough to *test* anything further (E2/E3 cannot fire on a population that doesn't accumulate). The eligible stall (5 in T2–T8, 0 in T9–T15) is the headline evidence the review must read.
+
+3. **Mean-shift remains the dominant loss mechanism** (6/9 clean coint-failures DECOUPLED across the full β range), but T15 adds a softer wrinkle (TRACKED-THEN-BROKE below cost): some pairs DO track the mean briefly but the edge at mean is insufficient to clear costs at $200 notional. This connects coint-failure to the §5 negative-result branch — they're related, not separate questions.
+
+4. **Reading 1 vs Reading 2 (per v1.5 §4 halt-interpretation pre-load):** standing prior leans Reading 2 (structural fragility). Discriminator is eligible-return rate AFTER the halt (decided in advance, not to be re-narrated). If post-halt evidence produces eligibles at ≈ T2–T8 rate, Reading 1 is supported; if eligibles remain ≤ 1 in 6+ trades, Reading 2 confirms.
+
+5. **The negative-result bar (§5) is now load-bearing.** With H1 clean and H2 / fork unresolved, the structural review's pre-committed conclusion if cost diagnostic shows structural cost gap → *"the strategy does not have a capturable edge at the current notional and universe."* That conclusion is a finding, not a setback. The temptation to reframe ("the regime was bad," "needs one more patch") is what §5 was written to refuse, and it must be refused.
+
+6. **The circuit-breaker inertness (v1.5 §10)** is now visible against a concrete number: 6 losses in a row at −$2.780, breaker silent throughout. Not a fix request mid-experiment, but the scale-up conversation needs to acknowledge this when (if) it happens.
+
+**Honest read:** the experiment delivered exactly what it was designed to deliver — a sizing test that came back clean, an experiment-level kill-criterion that fired before the test could continue past the point of value, and a halt-interpretation pre-load that frames the post-halt question correctly. The cumulative −$4.652 / 1-win-in-15 record is consistent with the §5 negative-result reading; the alternative (Reading 1, temporal fragility) is on the table but currently the less-supported prior. The structural review will resolve which reading the post-halt evidence supports, and the question it must answer was written cold before T15 fired.
+
+*Audit covers: run_142_20260530_224156 (T15 SOL/LINK coint_watch_timeout TRACKED-THEN-BROKE β=0.6499 mid-range). β-sizing: 15/15 exact. **E4 HALT FIRED MECHANICALLY at 9/15 = 60.0%** per template v1.4 §4 pre-commit; 5 consecutive coint-failures T11–T15. T15 in-zone edge **positive but below cost** ($0.102 < $0.14) — connects coint-failure to §5 negative-result branch. Mean-shift 6/9 = 67% of clean coint-failures (still dominant). RECON: PASS (unexplained $0.042, 43% pct under threshold). H1 / Fork: unchanged (T15 not eligible); H1 = CLEAN SUCCESS. Cumulative −$4.652, win rate 1/15. **Halt-interpretation pre-load (v1.5 §4) now active; standing prior leans Reading 2 (structural fragility); discriminator awaits post-halt eligible-return rate.** Experiment-level halt — sizing collection paused; structural review is now the next action.*

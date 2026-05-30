@@ -131,7 +131,40 @@ The shadow run **cannot measure real taker fills** — that is a live-only truth
 
   **OFFLINE GATE FAILED (2026-05-30) — DO NOT RE-ATTEMPT.** v1.1 specified the gate as offline reproduction of recorded `position_snapshots` from historical klines. Run failed decisively over T5, T6, T8 (57 snapshots): **1/57 within $0.01, median |diff| ≈ $0.105, max $0.23**, systematically negative-biased. Diagnosis (settled — do not re-spec to offline): (a) OKX computes swap-perp unrealized PnL from an indexed **mark price** (smoothed, real-time, used for funding/liquidation), NOT from last-trade OHLC. The `history-candles` endpoint returns last-trade OHLC — a structurally different value; the negative bias matches last-trade closes lagging the mark. (b) Bar-close vs intrabar timing adds residual $0.05–$0.20 leg-level scatter (secondary). **Mark price is a derived real-time value OKX does not retain as a historical candle series — cent-level offline anchoring is structurally impossible from history alone.** Do **not** relax the tolerance either: a threshold coarser than the fork's marginal margins (T6 in-zone max $0.0067, T8 zone-entry-gap $0.032) would defeat the gate's purpose while keeping its name.
 
-  **GATE (Path 1 — LIVE concurrent verification, v1.2):** run a **read-only shadow marking pass alongside live trades** for a validation window, consuming OKX's real-time mark-price feed (the same source the live bot uses for unrealized PnL — public WS `mark-price` channel; no auth, no trade-permissioned credentials, no rate-limit competition with the trading path). Per live tick, compute `virtual_pnl = Σ (leg_capital × (mark/entry − 1) × leg_direction)` for the currently-open trade's β-sized legs, and log it alongside the live monitoring loop's recorded `unrealized_pnl_usdt` with the diff. Apples-to-apples: both sides consume the same mark stream, so any drift beyond tick-timing-jitter (~sub-100ms) indicates a real formula/basis bug.
+  **TERMINAL FINDING (2026-05-30) — Path-1 LIVE GATE ALSO FAILED. SHADOW-SIMULATION APPROACH REDIRECTED.**
+
+  v1.2 specified Path-1 (live concurrent WS mark-price tap). The validator ran during run 140's open trade (BTC/DOGE, β=1.8414) and produced 4 cent-level comparisons before this terminal finding was made: **0/4 within $0.01, median |diff| $0.135, range $0.131–$0.141, structurally consistent (same direction and magnitude as the offline failure).**
+
+  | snap UTC | recorded `upl` | virtual_pnl | abs_diff |
+  |---|---|---|---|
+  | 05:34:37 | −$0.0099 | −$0.142 | $0.132 |
+  | 05:36:43 | +$0.0226 | −$0.118 | $0.141 |
+  | 05:37:47 | +$0.0114 | −$0.126 | $0.138 |
+  | 05:38:51 | +$0.0009 | −$0.130 | $0.131 |
+
+  **Root-cause diagnosis (settled — do not re-attempt either path):**
+  - The bot's `unrealized_pnl_usdt` is OKX's `upl` field from the positions API (`func_trade_management.py:518` reads `upl` / `unrealizedPnl` / `unrealized_pnl` directly; not computed from marks locally). OKX computes `upl` internally from its own `markPx`.
+  - The public WS `mark-price` channel publishes a value that is **NOT** the same as the `markPx` OKX uses for `upl`. To produce recorded `upl=−$0.0099` at the 05:34:37 snapshot, OKX's internal markPx must have been ~73550.78; my WS-received mark was 73507.70 — a consistent ~5.9 bps gap that translates to ~$0.13 on this $200 position.
+  - **Neither the offline route (history-candles, last-trade OHLC) nor the live route (WS `mark-price`) gives the value OKX uses internally for `upl`.** OKX does not publicly expose, to an external observer without trade-permissioned credentials, the markPx it uses for `upl`. This is structural, not engineering.
+
+  **Why all three "paths forward" are off the table:**
+  - **Path A — private positions WS (requires bot's API key):** rejected. Trade-permissioned credential in a sidecar during a freeze breaks the read-only guardrail for a prerequisite to a build whose own value is in question. Upside-down risk/reward.
+  - **Path B — relax the tolerance:** rejected (v1.1, v1.2). The offset is *structural* (~$0.13 vs fork margins of $0.007–$0.032), and consistent — biased, not noisy. A relaxed-tolerance gate would systematically misclassify marginal cases.
+  - **Path C — different anchoring approach:** the foundational hole is **virtual positions don't exist on OKX**, so OKX never computes `upl` for them. There is no authoritative mark for a trade that didn't happen, externally subscribable or otherwise. The shadow-simulation approach has no externally-anchorable x-axis *in principle*, not just in this implementation.
+
+  **REDIRECT — resolve the fork from REAL eligible trades' recorded `position_snapshots`.** The instrument the project has been underusing is exactly what the validator just proved is the only trustworthy x-axis: the bot's own `unrealized_pnl_usdt` for real positions OKX actually marked. Every eligible trade already carries cent-exact `pnl_at_mean` and `max_in_zone_capture` with no anchoring problem because they are real trades. The fork classification (cost-too-high vs edge-too-thin vs SUBSET-VIABLE) is read off the accumulated real-trade `position_snapshots`, at whatever N the 20-trade gate delivers (currently 5 eligible, target ≥8). Smaller N than query-3-via-simulation would have given, but a trustworthy axis beats a large-N untrustworthy one — which is the exact principle that killed Path B.
+
+  **Implications for the rest of this spec:**
+  - **Q-A (universe coint-failure rate at scale):** answered live, not via simulation. Currently 6/12 = 50%, evaluable, in §4 review band. No shadow run needed.
+  - **Q-B (cost-vs-edge fork):** answered from real eligible trades' `position_snapshots` (currently 2/5 cleared at mean). The §6 fork classification, §3.1 category-dependent cost handling, §4 pre-committed outcomes, and §5 negative-result bar **all still apply** — only the N source changes (real trades, not simulated). Acceptance of "fork narrowed but not closed at trade 20" is an honest outcome the §5 negative-result bar already anticipates.
+  - **§7 shadow-harness build items are RETIRED.** The shadow harness is no longer the path. The §2 rider (forward orderbook-spread logging) is also retired in its query-3-supporting role; if cost-axis sharpening becomes useful for the real-trade fork analysis, evaluate then.
+  - **Maker experiment (§8):** still only authorized if Q-B returns COST-TOO-HIGH or SUBSET-VIABLE with cost headroom — gating unchanged. Read Q-B from real trades.
+
+  **Validator's role:** earned its place by establishing this finding before the expensive build started. Bug fixes (run-dir lex-sort; initial-scan-for-open-trade) committed for future use. Validator is stopped after run 140 — no further runs need validation; the finding is structural and one more trade won't change a consistent 5.9 bps offset.
+
+  **Original v1.2 Path-1 specification below preserved for the evolution record:**
+
+  **GATE (Path 1 — LIVE concurrent verification, v1.2) [SUPERSEDED by terminal finding above]:** run a **read-only shadow marking pass alongside live trades** for a validation window, consuming OKX's real-time mark-price feed (the same source the live bot uses for unrealized PnL — public WS `mark-price` channel; no auth, no trade-permissioned credentials, no rate-limit competition with the trading path). Per live tick, compute `virtual_pnl = Σ (leg_capital × (mark/entry − 1) × leg_direction)` for the currently-open trade's β-sized legs, and log it alongside the live monitoring loop's recorded `unrealized_pnl_usdt` with the diff. Apples-to-apples: both sides consume the same mark stream, so any drift beyond tick-timing-jitter (~sub-100ms) indicates a real formula/basis bug.
 
   - **Pass criterion: ≥ 99% of compared ticks within $0.01, over a validation window of ≥ 3 live trades' full snapshot series.** Validation typically covers ~30–90 ticks across the observed hold-length range (1–30 min). The ≤1% out-of-tolerance bucket must be **randomly distributed**, not clustered — clustering at trade open/close, by side, or by pair indicates a formula bug and the gate fails regardless of the 99% bulk. If met → x-axis anchored, full query-3 build can be authorized (separately). If not met → diagnose and STOP; the build is held until the marking basis is fixed.
   - **Threshold rationale.** The fork's classification turns on cleared-vs-not-cleared margins as small as $0.007 (T6) and $0.032 (T8). The gate must be at least an order of magnitude tighter than the marginal-case discrimination it must support — hence `$0.01`. Same-source consumption SHOULD yield exact match in principle; 99% (vs 100%) absorbs trivial sub-100ms timing jitter without hiding systematic source/formula mismatch. ≥3 trades' worth of ticks is the minimum to span the hold-length variance (T7 1.1 min vs T8 9.6 min vs T5 30 min).
@@ -142,6 +175,8 @@ The shadow run **cannot measure real taker fills** — that is a live-only truth
 
 ## 6. What this feeds / decision wiring
 
+> **§6 RE-WIRING (2026-05-30, post terminal finding):** the shadow-simulation approach is retired; the fork is resolved from real eligible trades' recorded `position_snapshots`. The decision wiring below was written for the shadow build; the directions remain correct, only the data source changes (real trades instead of simulated shadow entries). Q-A's universe-rate is now read live (currently 6/12=50%, evaluable, in review band); Q-B's fork is read off accumulated real-trade `pnl_at_mean` / `max_in_zone_capture` at the 20-trade gate / ≥8 eligible.
+
 - **§4 E4:** Q-A resolves the universe-rate question at scale — potentially settling whether E4 would fire on a *true-rate* basis before the live counter reaches 10 closes.
 - **§6 Branch selection:** Q-B resolves the cost-too-high vs edge-too-thin fork → picks the Branch-2 sub-lever (cost experiment) OR routes to the §5 negative-result bar OR identifies a viable subset.
 - **§7 cost diagnostic:** superseded for fork-resolution by Q-B's joint distribution (since §7-precise is data-blocked); the §2 forward-spread-logging rider revives §7-precise *later* only if Q-B is cost-band-sensitive.
@@ -151,18 +186,30 @@ The shadow run **cannot measure real taker fills** — that is a live-only truth
 
 ## 7. Action items
 
-**Operator:**
-- [ ] **PREREQUISITE — authorize the §5 Path-1 marking-fidelity gate run** (read-only sidecar, live concurrent; bounded — no harness components). Pass/fail report required before the build authorization below.
-- [ ] Authorize the query-3 shadow build (engineering cost) and the run. **[GO/NO-GO — this is the build gate; held until §5 Path-1 gate PASSES.]**
-- [ ] Confirm 3b shadow over 3a replay (or override).
-- [ ] Decide whether to add the §2 forward orderbook-spread-at-entry logging rider to live (cheap, logging-only, frozen-safe; sharpens the cost model for future trades). Opportunistic.
+> **§7 RETIRED (2026-05-30) for the shadow-build path.** Per the §5 terminal finding, the shadow-simulation approach is redirected: the fork is resolved from real eligible trades' `position_snapshots`. Action items below are preserved for the evolution record but are NO LONGER ACTIVE TASKS.
 
-**Code assistant (if §5 Path-1 gate authorized — runs FIRST, before any harness work):**
-- [ ] Implement the §5 Path-1 read-only sidecar: WS subscription to OKX `mark-price` for the currently-held instruments + per-tick `virtual_pnl` computation + diff log against the live `position_snapshots.csv` rows. NO writes to bot state; NO REST calls on the bot's trade credentials; NO harness components. **If implementation surfaces a need to build harness components, STOP and report** (same guardrail that correctly fired on the offline gate).
-- [ ] Run the sidecar concurrent with the next ≥3 live trades; emit the per-tick comparison log and the pass/fail report against the §5 criterion. If PASS → x-axis anchored; flag for operator to authorize the full build. If FAIL → diagnose and STOP.
+**Operator: NO ACTIVE QUERY-3 BUILD DECISION (the build is redirected, not pending authorization).** The §6 fork classification still applies; it is now read off real-trade `position_snapshots` at whatever N the 20-trade gate delivers. No shadow harness will be built.
 
-**Code assistant (if build authorized — only after §5 Path-1 PASSES):**
-- [ ] Build the shadow harness: stub the order-placement boundary (§2), verify the process cannot place a live order (§5 stub integrity).
+**Code assistant: NO QUERY-3 BUILD WORK.** Validator's role is complete (terminal finding established). Bug fixes (`tools/fidelity_validator/`) retained for future use. Validator process stopped after run 140.
+
+**Strategist:** at the 20-trade gate (or ≥8 eligible, whichever later, per §4 v1.1), read the fork classification off real trades' `position_snapshots` directly. The §6 branches and the §5 negative-result bar apply unchanged.
+
+---
+
+### Original §7 action items [SUPERSEDED 2026-05-30 — preserved for the evolution record]
+
+**Operator (SUPERSEDED):**
+- [x] ~~PREREQUISITE — authorize the §5 Path-1 marking-fidelity gate run~~ (authorized; gate ran and **terminally failed** — see §5 TERMINAL FINDING).
+- [ ] ~~Authorize the query-3 shadow build~~ (REDIRECTED — no shadow build).
+- [ ] ~~Confirm 3b shadow over 3a replay~~ (REDIRECTED).
+- [ ] ~~Decide §2 rider~~ (RETIRED for query-3 support; re-evaluate if cost-axis sharpening becomes useful for real-trade analysis).
+
+**Code assistant (SUPERSEDED):**
+- [x] ~~Implement the §5 Path-1 read-only sidecar~~ (DONE; terminal finding established).
+- [x] ~~Run the sidecar concurrent with ≥3 live trades~~ (DONE on run 140; 0/4 within $0.01; structural offset confirmed).
+- [ ] ~~Build the shadow harness~~ (CANCELED).
+- [ ] ~~Wire instrumentation, calibrate cost model, run to N~~ (CANCELED).
+- [ ] ~~(rider) forward spread-at-entry logging~~ (RETIRED for query-3; re-evaluate later if useful).
 - [ ] Wire the §3 per-entry instrumentation, including the in-zone-capture fields (`pnl_at_mean`, `pnl_at_zone_entry`, `max_in_zone_capture`, `mfe`/`z_at_mfe`) and `est_real_cost` from the §3.1 category model.
 - [ ] Calibrate the §3.1 cost model from the 19 live trades' `real_cost` (premise-check data).
 - [ ] Run to a **pre-set N of Q-B-eligible entries** (NOT total shadow entries — eligible, since coint-failures and |Δz|<0.5 entries don't enter Q-B). **Target owner: code assistant proposes, operator confirms.** Suggested basis: enough eligible entries that the pure-major subset (the resolvable one per §3.1) alone has ≥100 points for a tight CI on the fraction-clearing-cost — likely several hundred *total* eligible given the ~2/3 coint-failure exclusion and the pure-major share of the universe. Set it from the observed eligible-yield rate after a short pilot run rather than guessing up front.
@@ -173,4 +220,12 @@ The shadow run **cannot measure real taker fills** — that is a live-only truth
 
 ---
 
-*Query-3 output spec v1.2. Diagnostics-only (shadow; no live order). No frozen variable changed; live collection unaffected. **v1.2 revision (2026-05-30):** the §5 marking-fidelity gate is re-specified to **Path 1 — LIVE concurrent verification** via read-only mark-price WS tap + per-tick comparison logger against the live `position_snapshots.csv`. The v1.1 OFFLINE gate FAILED decisively (1/57 within $0.01; root cause: OKX uses indexed mark price for swap-perp unrealized PnL, not last-trade OHLC — structurally absent from historical kline data; do not re-attempt offline; do not relax tolerance). Pass criterion: ≥99% of ticks within $0.01 over ≥3 live trades' full snapshot series, with the residual randomly distributed (not clustered). §7 reorganized: §5 Path-1 gate is now an explicit PREREQUISITE for query-3 build authorization, runs as a bounded read-only sidecar (no harness components). The same stop-and-report guardrail that fired on the offline gate applies if implementation surfaces a need for harness components. v1.1 refinements retained (§3.1 category-dependent cost resolving power; §4 classification on pure-major subset; FIL/ICP thin-alt; N-target owner/pilot basis; premise-check correction). Inputs: per-run audit runs 125–136 (T1–T9); analysis_spec_pnl_vs_z_decoupling_v1; structural_review_exp_beta_aware_sizing_v1_template_v1 v1.3; premise-check; offline-gate failure report 2026-05-30.*
+*Query-3 output spec v1.3. **REDIRECTED — shadow-simulation approach RETIRED; fork resolved from real eligible trades' `position_snapshots`.** No live order ever placed. No frozen variable changed; live collection unaffected.*
+
+***v1.3 terminal finding (2026-05-30, post run-140 Path-1 validator run):** the §5 marking-fidelity gate failed in both forms — offline (kline-based, 1/57 within $0.01) AND live concurrent (WS mark-price tap, 0/4 within $0.01, structural ~$0.13 offset, same direction and magnitude class as offline). Diagnosis settled: the bot's `unrealized_pnl_usdt` is OKX's `upl` field from the positions API, computed from OKX's internal `markPx`. The public WS `mark-price` channel publishes a value that is NOT the same as OKX's internal markPx used for `upl`. Neither external route (history klines, public WS mark) gives the value needed. The shadow-simulation approach is structurally not externally anchorable — **virtual positions don't exist on OKX, so OKX never computes `upl` for them**; there is no authoritative mark for a trade that didn't happen.*
+
+***Redirect (institutional memory — DO NOT RE-ATTEMPT the shadow-simulation build):** the instrument the project has been underusing is exactly what the validator proved is the only trustworthy x-axis — the bot's own `unrealized_pnl_usdt` for real positions. The fork (Q-B: cost-too-high vs edge-too-thin vs SUBSET-VIABLE) is read off accumulated real eligible trades' recorded `position_snapshots` at the 20-trade gate / ≥8 eligible. Q-A's universe-rate is read live (already evaluable at 6/12=50%, in §4 review band). §3.1 category-dependent cost handling, §4 pre-committed outcomes, §5 negative-result bar, and §6 fork classification ALL still apply — only the N source changes (real trades, not shadow simulation). Accepting "fork narrowed but not closed at trade 20" is an honest outcome the §5 negative bar already anticipates. §7 shadow-build action items are RETIRED. The maker experiment (§8) gating is unchanged but reads Q-B from real trades.*
+
+***Validator's role:** earned its place by establishing this finding before the expensive build started. Saved query 3 from being built on an x-axis whose primary marginal-case discrimination would have been dominated by mark-source noise. Bug fixes (run-dir lex-sort, initial-scan-for-open-trade) retained in `tools/fidelity_validator/` for future use. Validator stopped after run 140.*
+
+*Prior version history: v1.0 (initial), v1.1 (cost-axis category-dependent resolving power; §4 pure-major classification; FIL/ICP thin-alt; N-target owner/pilot basis; premise-check correction), v1.2 (Path-1 re-spec after offline gate failure), v1.3 (terminal finding; redirect to real-trade analysis). Inputs: per-run audit runs 125–140; analysis_spec_pnl_vs_z_decoupling_v1; structural_review_exp_beta_aware_sizing_v1_template_v1 v1.3; offline-gate failure report 2026-05-30; live Path-1 validator run on T13 (BTC/DOGE).*

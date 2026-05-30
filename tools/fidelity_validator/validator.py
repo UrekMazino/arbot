@@ -116,11 +116,55 @@ def find_snapshot_csv(run_dir):
 
 # ---------------------------------------------------------------- tasks
 
+def _initial_scan_for_open_trade(log_path):
+    """At startup, scan the log from beginning to find the most-recent OPEN trade
+    (a complete BETA_SIZING + Placed long + Placed short trio not followed by
+    a STRATEGY_TRADE_CLOSE or RUN_END). Returns the trade dict or None.
+    """
+    pending = {}
+    last_open_trade = None
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = BETA_SIZING_RE.search(line)
+            if m:
+                pending = {
+                    "beta": float(m.group(1)), "gross": float(m.group(2)),
+                    "capital_long": float(m.group(3)), "capital_short": float(m.group(4)),
+                    "side": m.group(5),
+                }
+                continue
+            m = PLACED_LONG_RE.search(line)
+            if m:
+                pending["long_inst"] = m.group(1); pending["long_entry"] = float(m.group(2))
+                continue
+            m = PLACED_SHORT_RE.search(line)
+            if m:
+                pending["short_inst"] = m.group(1); pending["short_entry"] = float(m.group(2))
+                required = {"long_inst","long_entry","short_inst","short_entry","capital_long","capital_short"}
+                if required.issubset(pending.keys()):
+                    last_open_trade = dict(pending)
+                    pending = {}
+                continue
+            if TRADE_CLOSE_RE.search(line) or RUN_END_RE.search(line):
+                last_open_trade = None  # trade closed; current state has no open trade
+                pending = {}
+    return last_open_trade
+
+
 async def tail_log(state, log_path, stop):
-    """Tail bot log, parse entry info into state.current_trade."""
+    """Initial backward scan for any currently-open trade, then tail from EOF."""
+    initial = _initial_scan_for_open_trade(log_path)
+    if initial:
+        async with state.lock:
+            state.current_trade = initial
+        print(f"[validator] initial scan found OPEN trade: "
+              f"{initial['long_inst']}(L) {initial['short_inst']}(S) "
+              f"L_cap={initial['capital_long']:.2f} S_cap={initial['capital_short']:.2f}")
+    else:
+        print("[validator] initial scan: no open trade found in log so far")
     pending = {}
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        f.seek(0, 2)  # EOF
+        f.seek(0, 2)  # EOF (tail from here for new lines)
         while not stop.is_set():
             line = f.readline()
             if not line:

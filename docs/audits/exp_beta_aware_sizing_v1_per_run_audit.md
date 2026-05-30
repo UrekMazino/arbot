@@ -1,5 +1,5 @@
 # Per-Run Audit — exp_beta_aware_sizing_v1
-## Runs 125–136 (T1–T9) — 2026-05-28 → 2026-05-30
+## Runs 125–139 (T1–T12) — 2026-05-28 → 2026-05-30
 
 ---
 
@@ -1146,3 +1146,157 @@ So E4 is approaching evaluability with the picture in the favorable-but-not-reso
 **Other observations:** β-sizing remains flawless (9/9). H1 unchanged. Fork unchanged (T9 not in $/σ population). The DECOUPLED signature on clean β-sized coint-failures now at 3/4 — strengthens the mean-shift mechanism's empirical support without graduating it from "leading surviving hypothesis by elimination" (per Q2 framing, still requires Q3 for universe-rate / dominance).
 
 *Audit covers: run_136_20260530_042557 (T9 AVAX/CRV, coint_watch_timeout, β-sized DECOUPLED). β-sizing: 9/9 exact. Coint-failure 4/9=44.4%, one trade from E4 evaluability. Mean-shift mechanism: 3/4 clean DECOUPLED. RISK_OFF shadow entry flagged for structural-review deferred items. H1 / Fork: unchanged (T9 not eligible).*
+
+---
+---
+
+# Runs 137–139 (2026-05-30) — T10 + T11 + T12  ← E4 NOW EVALUABLE (review band, not halt) + a drawdown stretch
+
+**Headlines:** Three losses back-to-back: −$0.405, −$0.563, −$0.845 = **−$1.813 in 3 trades** (single-trade losses 2nd and 3rd-largest in the experiment after T1 JUP/YGG −$0.962). **E4 is now evaluable** at 12 closed: **coint-failure 6/12 = 50% — in the 45–60% review band, NOT halt** per the calibration note. **T12 = first reconciliation FAIL in the β-sizing window** (unexplained −$0.196, ARB/OP RISK_OFF entry). **T10 is a new shape: "normal" exit with MFE<0** (z diverged in 35s) — neither Class A nor Class B; first adverse-normal exit in the experiment. **T11 used the same pair as T10 (AVAX/ETC) 35 min after T10 lost** — pair re-selection observation. β-sizing remains flawless (12/12 exact, 0 fallbacks).
+
+## β-Sizing — 3 trades, all exact
+
+| Trade | Run | Pair | β | gross | long cap | short cap | side | fallback |
+|---|---|---|---|---|---|---|---|---|
+| T10 | run_137 | AVAX/ETC | 0.4902 | 200.00 | 134.21 (AVAX) | 65.79 (ETC) | negative_z | no |
+| T11 | run_138 | AVAX/ETC | 0.4571 | 200.00 | 62.74 (ETC) | 137.26 (AVAX) | positive_z | no |
+| T12 | run_139 | ARB/OP | 0.6553 | 200.00 | 79.18 (OP) | 120.82 (ARB) | positive_z | no |
+
+**β-sizing now 12/12 mechanically exact, 0 fallbacks.** T11 β=0.457 = 2nd-lowest β observed (after T3b 0.378). T10 β=0.490 = 3rd-lowest. β<1.0: 10/12; materially non-unity: 9/12.
+
+## T10 — AVAX/ETC (run 137): NEW SHAPE — "normal" exit with MFE<0 (adverse-fast)
+
+| Field | T10 |
+|---|---|
+| Side / entry_z → exit_z | long_neg_short_pos / **−2.077 → −3.729** (z DIVERGED further from 0) |
+| Δz (abs) | 1.65 |
+| Exit / hold | normal / **0.59 min (35 seconds)** |
+| MFE / z_at_MFE | **−$0.138** (never positive) / −2.597 |
+| MAE / z_at_MAE | −$0.257 / **−3.729 (the exit)** — exited AT max adverse |
+| Snapshot count | **1** (0:35s into hold) |
+| gross position_pnl | −$0.249 |
+| real_costs | $0.156 (1.1× model; unexplained −$0.016, near zero) |
+| Net PnL | **−$0.405** |
+| **Classification** | **NEITHER A NOR B** — adverse-normal exit (MFE<0 fails Rule v1.2 (b); not coint-failure so not in Class A) |
+
+**The shape:** entered at z=−2.08 expecting reversion up; z moved AGAINST it to −3.73 in 35 seconds, position closed "normal" at MAE. **First adverse-fast exit in the experiment** (no prior eligible/coint-failure trade has had MFE<0 — every prior trade had at least transient positive PnL). The "normal" exit label is the coarse trade_closes column; the actual mechanism may be a stop-tier (max_break_risk, hard-exit) firing on the rapid adverse move — worth checking in exit_decision_summary if this shape recurs. Goes to **neither the $/σ table nor the coint-failure tracker**; recorded as a new bucket (`adverse-normal`, n=1).
+
+## T11 — AVAX/ETC (run 138, **SAME PAIR as T10**): coint-failure DECOUPLED
+
+| Field | T11 |
+|---|---|
+| Side / entry_z → exit_z | long_pos_short_neg (long ETC, short AVAX) / +2.023 → +1.399 (partial revert, didn't reach zone) |
+| Δz (abs) | 0.624 (just above the |Δz|≥0.5 Class-A precondition) |
+| Exit / hold | **cointegration_lost** / 10.3 min |
+| MFE / z_at_MFE | **−$0.091** (never positive) / +1.706 |
+| MAE | −$0.511 |
+| Snapshot count | 10 (all NEGATIVE PnL: −0.11 → −0.34) |
+| **pnl_at_mean (z≈0)** | **−$0.34** (at z=+1.40 exit; never reached zone) |
+| gross position_pnl | −$0.441 |
+| real_costs | $0.122 (textbook; unexplained +$0.018) |
+| Net PnL | **−$0.563** |
+| **Classification A** | **DECOUPLED** — z reverted favorably (2.02 → 1.40, partial); pnl_at_mean −$0.34 ≤ 0; never tracked. β-sized → clean evidence for mean-shift mechanism |
+
+**Pair re-selection observation (NEW for deferred items):** T11 entered AVAX/ETC at +2.02 only **~35 minutes after T10 exited the same pair at −$0.405 loss** (T10 exit 00:36, T11 entry 01:10). The pair-discovery pipeline re-selected an unstable pair within the cooldown-or-less window. The opposite side (T10 long-neg, T11 long-pos) doesn't sanitize the underlying instability. **Worth flagging:** a recently-failed-pair cooldown or memory mechanism could prevent this; goes to structural-review deferred items alongside the regime-detection items.
+
+## T12 — ARB/OP (run 139): coint-failure TRACKED-THEN-BROKE + RISK_OFF entry + RECON FAIL
+
+| Field | T12 |
+|---|---|
+| Side / entry_z → exit_z | long_pos_short_neg (long OP, short ARB) / +2.349 → +1.448 |
+| Δz (abs) | 0.901 |
+| Exit / hold | **cointegration_lost** / 14.5 min |
+| **Entry regime** | **RISK_OFF** (shadow router did not block — 2nd occurrence after T9) |
+| MFE / z_at_MFE | +$0.078 / −0.530 (brief overshoot through 0 to the negative side) |
+| MAE | −$0.744 |
+| Snapshot count | 14 |
+| **pnl_at_mean (z≈0)** | **+$0.011** (at z=+0.889, t=4 min) — barely positive; trade briefly straddled 0 with marginal PnL |
+| gross position_pnl | −$0.509 |
+| real_costs | **$0.336 (2.4× model)** — elevated |
+| **unexplained** | **−$0.196** (below the −$0.15 threshold) |
+| pass_fail | **FAIL** (large_unexplained_warning=True, large_delta_warning=True) |
+| Net PnL | **−$0.845** |
+| **Classification A** | **TRACKED-THEN-BROKE** (pnl_at_mean +$0.011 > 0, borderline). Position briefly tracked through the mean (MFE +$0.078 at z=−0.53), then z came back to +2.37 and the coint relationship broke. |
+
+**T12 is structurally important — three flags in one trade:**
+1. **2nd RISK_OFF-entry case** (after T9), shadow router didn't block, ended in coint-failure. Strengthens the high-vol-regime-entry → coint-failure-risk vector (now **2/2** RISK_OFF entries → coint-failures in the β-sizing window).
+2. **First reconciliation FAIL in the β-sizing experiment window** — unexplained −$0.196 (vs −$0.15 threshold). ARB/OP are mid-tier majors but the RISK_OFF execution environment may have widened spreads/funding effects. Real costs 2.4× model.
+3. **The RISK_OFF cost penalty** ($0.336 vs textbook ~$0.14) — if this generalizes, it's evidence that the cost-too-high reading has real headroom on RISK_OFF entries specifically. Connects to the §3.1 cost-axis discussion: the RISK_OFF subset may have a different cost distribution from RANGE entries. **Worth tagging shadow-entries by entry-regime in query 3 instrumentation** (when authorized).
+
+## Classification A update (β-sized coint-failures only — clean)
+
+| Trade | Run | Pair | Class | pnl_at_mean |
+|---|---|---|---|---|
+| T1b | r125 | JUP/YGG | TRACKED (thin-pair cost case) | +$0.102 |
+| T3b | r129 | BNB/LINK | **DECOUPLED** | −$0.036 |
+| T4b | r130 | DOGE/AAVE | **DECOUPLED** | −$0.007 |
+| T9 | r136 | AVAX/CRV | **DECOUPLED** | −$0.015 |
+| **T11** | **r138** | **AVAX/ETC** | **DECOUPLED** | **−$0.34** |
+| **T12** | **r139** | **ARB/OP** | **TRACKED-THEN-BROKE (borderline)** | **+$0.011** |
+
+**4/6 clean β-sized coint-failures DECOUPLED** (up from 3/4); mean-shift signature continues to be the dominant pattern, now on a larger N. Refuted-lever guardrail intact: T11/T12 entry slopes both benign (T11 −0.00039, T12 −0.00082, far below the 0.020 threshold) — coint-failures continue to be unpredictable from entry-time coint metrics.
+
+## Section — E4 Evaluation (NOW EVALUABLE, 12 closed)
+
+```
+coint-failure rate (window): 6/12 = 50.0% (T1, T3, T4, T9, T11, T12)
+trajectory: 75 → 60 → 50 → 37.5 → 44.4 → 50 (oscillating, not monotonic)
+prior-window baselines for comparison:
+  exp_guard050 (19 trades): 36.8%
+  exp_coint_stability (10 trades): 40.0%
+  raw 9-trade pre-history: 55.6%
+current 50% is ELEVATED vs the most recent baselines (36.8%, 40%) but WITHIN the historical band [36.8, 55.6]
+```
+
+**Pre-committed action per E4 calibration (template v1.1 §4):**
+- 50% is in the **45–60% REVIEW BAND**, NOT the >60% HALT line.
+- The calibration note specifically anticipated this case: *"the 45–60% band is elevated-but-plausibly-baseline → review, do not halt"* — exactly to avoid false halts on small-window variance near the baseline.
+- Trajectory is oscillating (75→60→50→37.5→44.4→50), not breaking out upward. Within the historical band.
+- **E4 is NOT firing.** Pre-committed action: **flag for structural-review, continue collection.**
+
+**Structural-review flag (carried forward):** coint-failure rate stabilized in the 40–50% band over T1–T12; consistent with the universe's baseline coint-fragility, not a deterioration. The mean-shift mechanism (now 4/6 clean DECOUPLED) is the most testable hypothesis to address it, but query 3 remains the instrument to characterize the rate at scale.
+
+## Section — RISK_OFF Entry Vector (n=2 cases now: T9, T12)
+
+Both RISK_OFF entries in the β-sizing window led to coint-failures:
+- **T9** AVAX/CRV: entered DURING RISK_OFF (regime started ~6.5 min pre-entry, flipped back mid-hold), coint timed out. Costs textbook ($0.113).
+- **T12** ARB/OP: entered DURING RISK_OFF, coint broke at 14.5 min. **Costs 2.4× model** ($0.336, recon FAIL).
+
+**Strengthened hypothesis (still n=2):** entry-during-RISK_OFF correlates with coint-failure AND possibly elevated execution cost. This survives the refuted-lever guardrail (regime ≠ entry-time coint metric); the regime router already computes the signal in SHADOW mode; activating it would be cheap to test. **Flagged for structural-review deferred items** alongside the T3 imminent-flip case. Two distinct sub-cases of the same broader pattern; should be folded into one combined deferred item.
+
+## Section — Pair Re-Selection Observation (T10/T11 same pair, ~35 min apart)
+
+T11 entered AVAX/ETC at +2.02 only 35 min after T10 exited the same pair at −$0.405. The opposite side doesn't sanitize the underlying instability — and indeed T11 also lost (−$0.563, coint-failure). **New deferred item for structural-review:** a recently-failed-pair cooldown / blacklist-with-decay mechanism. Currently no such cooldown — once a trade closes, the pair is immediately re-eligible. This is an entry-side lever that survives the refuted-lever guardrail (it's a recent-failure memory, not a coint metric).
+
+## Cumulative Counter Update (after T12)
+
+```
+trades_since_experiment_start: 12 (T1–T12)
+$/σ eligible: 5 (T2, T5, T6, T7, T8) — UNCHANGED. T10 fails MFE>0; T11, T12 are coint-failures.
+sign-flip: 0/5 = 0%; aggregate pooled +$0.044/σ (unchanged); H1 STILL ROCK-SOLID
+pnl_at_mean > cost: 2/5 unchanged (T7, T8); fork unchanged
+coint-failure: 6/12 = 50% (T1, T3, T4, T9, T11, T12); E4 evaluable, REVIEW BAND, NOT HALT
+adverse-normal exits (new bucket, MFE<0): 1 (T10)
+classification A (β-sized): 4/6 DECOUPLED (T3b, T4b, T9, T11) | 2/6 TRACKED (T1b thin-pair, T12 borderline)
+β: range [0.378, 1.495]; 12/12 exact; 0 fallbacks
+RISK_OFF-entry vector: 2/2 cases → coint-failure (T9, T12)
+recon FAIL (β-sizing window): 1 (T12 ARB/OP, −$0.196 unexplained, 2.4× cost overrun)
+cumulative PnL (window): −$3.685 (T10 −0.405, T11 −0.563, T12 −0.845 = −$1.813 in last 3)
+win rate: 1/12 = 8.3%
+trades_remaining: 8 (to 20); eligible: ≥3 more to the ≥8 gate
+next: run_140+, frozen config
+```
+
+## Strategic Read (held at N — directional, not verdict)
+
+**The fork picture from T7/T8 is intact.** None of T10–T12 entered the $/σ population, so H1 (5/5 sign-positive, +$0.044/σ pooled) and the pair-dependent edge picture (pnl_at_mean>cost 2/5) are unchanged. The fork is still the live question, query 3 is still the instrument.
+
+**Coint-failure mechanism is firming.** Now 4/6 clean β-sized DECOUPLED across the window. Mean-shift remains the leading surviving hypothesis (β-drift ruled out per Q2; entry-time coint metrics refuted; T9/T11/T12 all entered with benign slopes and failed).
+
+**The RISK_OFF entry vector now has weight.** 2/2 RISK_OFF entries → coint-failures, AND T12 carries a 2.4× cost overrun. **This is the first candidate entry-side lever that connects coint-failure to a signal the bot already computes (in shadow).** Cheap to test (activate the regime gate from shadow to live). Still n=2 — candidate hypothesis, not a finding. Goes to structural-review.
+
+**E4 evaluable, not firing.** 50% in review band; pre-committed action is to flag and continue. The trajectory (oscillating in 37.5–75 range) is within the historical baseline; no halt indicated. The pre-commit discipline held — and this is exactly the case the calibration anticipated.
+
+**Drawdown stretch (−$1.813 over 3 trades) reframed:** all 3 losses are explainable mechanistically (T10 adverse-fast normal exit; T11 coint-failure on a re-selected unstable pair; T12 coint-failure on a RISK_OFF entry with elevated costs). None contradict the fork picture from T7/T8. But it's the worst 3-trade stretch in the experiment, and cumulative PnL is now −$3.685 — worth keeping eyes on whether this is mean-reverting noise or a regime shift.
+
+*Audit covers: run_137 (T10 AVAX/ETC adverse-normal), run_138 (T11 AVAX/ETC coint_lost DECOUPLED), run_139 (T12 ARB/OP coint_lost TRACKED-borderline, RISK_OFF entry, RECON FAIL). β-sizing: 12/12 exact. E4 evaluable (6/12=50%, REVIEW band, NOT halt). 4 new structural-review items: RISK_OFF-entry vector (2 cases now), pair-re-selection cooldown (T10/T11 same pair), recon-fail on RISK_OFF entry (T12), adverse-normal exit shape (T10). H1 / Fork: unchanged. Cumulative −$3.685.*

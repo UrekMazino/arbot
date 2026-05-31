@@ -83,10 +83,10 @@ REGIME_STATUS_RE = re.compile(
     r"fallback=(?P<fallback>\d+)"
 )
 PAIR_VALIDATED_RE = re.compile(
-    r"Ticker configuration validated:\s+ticker_1=(?P<t1>\S+),\s+ticker_2=(?P<t2>\S+)"
+    r"Ticker configuration validated:\s+ticker_1=(?P<t1>[A-Z0-9-]+),\s+ticker_2=(?P<t2>[A-Z0-9-]+)"
 )
 PAIR_SWITCH_RE = re.compile(
-    r"Switching from (?P<src>\S+) to (?P<dst>\S+)"
+    r"Switching from (?P<src>[A-Z0-9/-]+) to (?P<dst>[A-Z0-9/-]+)"
 )
 
 

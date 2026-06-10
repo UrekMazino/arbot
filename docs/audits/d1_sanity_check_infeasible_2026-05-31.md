@@ -64,4 +64,54 @@ This goes to the deferred-items list as a standing constraint, alongside the ref
 
 ---
 
-*D1 §1.3 sanity check artifact, 2026-05-31. Original gate: INFEASIBLE as specified (0/15 both stages). Meta-finding: internal basis unreconstructable from public sources — three diagnostics converge; standing constraint. Re-spec ratified: differenced-quantity gate, ≤$0.03 @ $200 on ≥13/15 trades, one-re-spec-only bind. Tools: `d1_kline_fetcher.py`, `d1_metadata_builder.py`, `d1_sanity_check.py` (+ v2 gate to follow). Kline cache and tooling remain reusable assets regardless of the re-spec outcome.*
+---
+
+## §1.3-bis RE-SPECCED GATE RESULT (2026-05-31, same day): **INFEASIBLE-INSTRUMENT — DEFINITIVE**
+
+The re-specced differenced-quantity gate ran (`tools/observation_mode/d1_sanity_check_v2.py`) and **failed: 3/15 trades pass (need ≥13).** Per the one-re-spec-only bind, this result is final. The D1 unified continuation pre-test **CLOSES on INFEASIBLE-INSTRUMENT.**
+
+### Pre-flight verification (implementation note c)
+
+Timestamp hard-verification passed 15/15 — metadata UTC timestamps match `trade_closes.csv` to 0.0s on every trade. Window extraction was not corrupted.
+
+### Implementation-bug correction (recorded for the audit trail; NOT a gate change)
+
+The first v2 run failed its own gross-plausibility guard on 7/15 trades: the `Entry preview` log line's `qty` is denominated in **OKX contracts** with per-instrument multipliers (ctVal — e.g. BNB 0.01, ARB 10), so `qty × price = capital` does not hold universally. Fix: effective coin quantity = **logged BETA_SIZING leg capital ÷ preview price** (the §5 fidelity-validator formula; capitals verified exact-to-the-cent 15/15 in the experiment). The gate, tolerance, and pass criterion were never touched. Consistency check confirming the fix didn't move goalposts: T5 mean error 0.0578 → 0.0578, T15 0.0319 → 0.0320 across the two runs (identical where the extraction was already correct).
+
+### Per-trade results (gate: mean |Δkline − Δlogged| ≤ $0.03 over matched 5–15 min intervals)
+
+| Trade | Status | mean_err | max_err | n_intervals |
+|---|---|---:|---:|---:|
+| T1 | FAIL | $0.2424 | $0.7348 | 36 |
+| T2 | NO-EVALUABLE-INTERVALS (4.4-min hold < 5-min interval floor) | — | — | 0 |
+| T3 | **PASS** | $0.0187 | $0.0457 | 21 |
+| T4 | FAIL | $0.0310 | $0.0859 | 21 |
+| T5 | FAIL | $0.0578 | $0.1840 | 195 |
+| T6 | FAIL | $0.0452 | $0.1659 | 95 |
+| T7 | INSUFFICIENT-INTERVALS (1 snapshot) | — | — | 0 |
+| T8 | FAIL | $0.0603 | $0.1272 | 10 |
+| T9 | FAIL | $0.0620 | $0.1819 | 155 |
+| T10 | INSUFFICIENT-INTERVALS (1 snapshot) | — | — | 0 |
+| T11 | FAIL | $0.0406 | $0.0924 | 15 |
+| T12 | FAIL | $0.0964 | $0.3031 | 45 |
+| T13 | **PASS** | $0.0229 | $0.0820 | 275 |
+| T14 | **PASS** | $0.0274 | $0.1013 | 285 |
+| T15 | FAIL | $0.0320 | $0.0771 | 105 |
+
+**3/15 pass.** Per-interval data: `tools/observation_mode/output/d1_sanity_check_v2_per_interval.csv` (regenerable).
+
+### What the failure establishes (the meta-finding deepens)
+
+The re-spec's premise — that the basis offset ε is *stable over short horizons* and therefore cancels in differences — is **falsified at the $0.03 tolerance.** Mean differenced errors run $0.03–$0.24 at $200 notional (1.5–12 bps per 5–15 min window). The offset between kline closes and the bot's internal mark is not a constant that differencing removes; it **wobbles within windows** at the same magnitude as the quantities the pre-test needed to measure (edges ~$0.10–$0.30, cost band ±$0.06). The instrument noise would have been indistinguishable from the signal.
+
+The standing meta-finding strengthens from "levels are unreconstructable" to: **neither levels nor short-horizon differences of the bot's internal-basis quantities are reproducible from public klines at decision-relevant tolerances.** Four data points now: query-3 offline (1/57), query-3 live WS (0/28), D1 levels (0/15), D1 differences (3/15).
+
+### Consequence (per the bind, verbatim consequence executed)
+
+- The D1 unified continuation pre-test **closes on INFEASIBLE-INSTRUMENT** — distinct from DEAD: nothing about the continuation hypothesis was tested; the instrument beneath the test failed validation. No second re-spec.
+- The kline cache (18 instruments × the experiment window), fetcher, metadata builder, and both gate tools remain as **reusable assets**.
+- **The pivot decision returns to the operator** with "the premise couldn't be cheaply tested" as its honest status. Per the strategist's pre-statement: *a direction whose premise resists even offline testing is a direction you'd be entering blind* — this weighs toward D3 (longer timescale) or stop, since testing D1's premise now requires either live observation infrastructure (a B1-v2-style forward collector recording the bot's own basis in real time) or paid/recorded orderbook-mid history, neither of which is a $0 offline analysis.
+
+---
+
+*D1 §1.3 sanity check artifact, 2026-05-31. Original gate: INFEASIBLE as specified (0/15 both stages). Re-specced gate (one re-spec, bound): INFEASIBLE-INSTRUMENT — DEFINITIVE (3/15, need ≥13). Meta-finding (strengthened): neither levels nor short-horizon differences of internal-basis quantities are reproducible from public klines at decision-relevant tolerances — four converging data points. D1 pre-test CLOSED. Tools: `d1_kline_fetcher.py`, `d1_metadata_builder.py`, `d1_sanity_check.py`, `d1_sanity_check_v2.py`. Kline cache and tooling remain reusable assets.*
